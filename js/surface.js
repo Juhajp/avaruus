@@ -39,10 +39,16 @@ function updateDaylight(){
   // rusko vain ilmakehällisillä, auringon ollessa horisontin tuntumassa
   const tw = d.twilight ? Math.max(0, 1 - Math.abs(elev) / 0.35) * sstep(-0.22, -0.04, elev) : 0;
 
-  if (d.cfg.sun) d.dl.position.copy(_sunDir);
+  if (d.cfg.sun) {
+    // valo ja varjokamera seuraavat pelaajaa
+    d.dl.position.copy(camera.position).addScaledVector(_sunDir, 800);
+    d.dl.target.position.copy(camera.position);
+    d.dl.target.updateMatrixWorld();
+  }
   d.dl.intensity = d.baseInt * (d.cfg.sun ? dayF : 0.2 + 0.8 * dayF);
   if (d.twilight) d.dl.color.copy(_c1.set(0xffffff).lerp(d.twilight, tw * 0.85));
   if (d.hemi) d.hemi.intensity = d.baseHemi * (0.22 + 0.78 * dayF);
+  if (d.bldgMat) d.bldgMat.emissiveIntensity = (1 - dayF) * 1.2;   // ikkunat syttyvät yöksi
 
   // taivas ja sumu tummuvat yöksi, rusko värjää horisontin tuntumassa
   _c1.copy(d.skyNight).lerp(d.skyDay, dayF);
@@ -106,34 +112,50 @@ function vnoiseP(x, y, P){
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
 
-// harmaasävyinen pintadetaljitekstuuri (toistuu saumattomasti, jaetaan kaikille planeetoille)
-let _detailTex = null;
-function getDetailTexture(){
-  if (_detailTex) return _detailTex;
+// planeettakohtainen värillinen pintadetaljitekstuuri (toistuu saumattomasti).
+// Keskikirkkaus ~1.0, jotta se moduloi vertex-värejä tummentamatta kokonaisuutta;
+// sävyläiskät, rakeisuus ja kivispekkelit tuovat lähietäisyyden yksityiskohdat.
+// Sama tekstuuri toimii bump-karttana (punakanava).
+const _texCache = {};
+function getDetailTexture(name, cfg){
+  if (_texCache[name]) return _texCache[name];
   const S2 = 512;
+  const seed = name.length * 7.13;
   const cv = document.createElement('canvas');
   cv.width = cv.height = S2;
   const ctx = cv.getContext('2d');
   const img = ctx.createImageData(S2, S2);
+  // sävysuunta: ground→ground2-suhde kertoo planeetan luontevan värivaihtelun
+  const cA = new THREE.Color(cfg.ground), cB = new THREE.Color(cfg.ground2);
+  const tr = cB.r / Math.max(0.04, cA.r), tg = cB.g / Math.max(0.04, cA.g), tb = cB.b / Math.max(0.04, cA.b);
   for (let y = 0; y < S2; y++) {
     for (let x = 0; x < S2; x++) {
+      // perusrakeisuus (4 oktaavia)
       let v = 0, amp = 0.5, per = 8;
-      for (let o = 0; o < 4; o++) { v += amp * vnoiseP(x * per / S2, y * per / S2, per); per *= 2; amp *= 0.5; }
-      let g = 0.62 + 0.40 * (v / 0.9375);
+      for (let o = 0; o < 4; o++) { v += amp * vnoiseP(x * per / S2 + seed, y * per / S2, per); per *= 2; amp *= 0.5; }
+      let g = 0.66 + 0.42 * (v / 0.9375);
+      // isommat sävyläiskät: taitetaan kohti ground2:n suhteellista sävyä
+      const patch = vnoiseP(x * 5 / S2 + seed + 3, y * 5 / S2 + 9, 5) * 0.8
+                  + vnoiseP(x * 13 / S2 + seed + 7, y * 13 / S2 + 2, 13) * 0.2;
+      const pm = sstep(0.38, 0.72, patch) * 0.55;
+      let r = g * (1 + (tr - 1) * pm), gr = g * (1 + (tg - 1) * pm), b = g * (1 + (tb - 1) * pm);
+      // kivispekkelit
       const sp = hash2(x * 3 + 17, y * 3 + 29);
-      if (sp > 0.986) g *= 0.55;        // tummia pieniä kiviä
-      else if (sp < 0.012) g *= 1.22;   // vaaleita jyviä
-      const b = Math.min(255, (g * 255) | 0);
+      if (sp > 0.986) { r *= 0.5; gr *= 0.5; b *= 0.5; }
+      else if (sp < 0.012) { r *= 1.25; gr *= 1.25; b *= 1.25; }
       const i = (y * S2 + x) * 4;
-      img.data[i] = b; img.data[i + 1] = b; img.data[i + 2] = b; img.data[i + 3] = 255;
+      // lineaariavaruudessa (ei SRGB-dekoodausta): arvot toimivat suorina kertoimina
+      img.data[i]     = Math.min(255, (r * 235) | 0);
+      img.data[i + 1] = Math.min(255, (gr * 235) | 0);
+      img.data[i + 2] = Math.min(255, (b * 235) | 0);
+      img.data[i + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(56, 56);
   t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  _detailTex = t;
+  _texCache[name] = t;
   return t;
 }
 
@@ -179,7 +201,7 @@ export const SURFACE_CONFIGS = {
     skyNight: 0x060a13, twilight: 0xff8a50, nightStars: true,
     sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.9 },
     hemi: [0x9ec8ee, 0x4a5a35, 0.6],
-    features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true },
+    features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true, roads: true, towns: true },
   },
   Mars: {
     title: 'MARS — PINTA',
@@ -201,6 +223,54 @@ export const SURFACE_CONFIGS = {
     },
   },
 };
+
+// rakennusten julkisivu (betoni + ikkunaruudukko) ja yöikkunoiden emissiokartta
+let _bldgTex = null;
+function getBuildingTextures(){
+  if (_bldgTex) return _bldgTex;
+  const W2 = 128, H2 = 256;
+  const fc = document.createElement('canvas'); fc.width = W2; fc.height = H2;
+  const ec = document.createElement('canvas'); ec.width = W2; ec.height = H2;
+  const f = fc.getContext('2d'), e = ec.getContext('2d');
+  f.fillStyle = '#918e87';
+  f.fillRect(0, 0, W2, H2);
+  for (let i = 0; i < 260; i++) {   // betonin sävyvaihtelu
+    const g = 110 + hash2(i, 1) * 60 | 0;
+    f.fillStyle = `rgba(${g},${g},${g},0.14)`;
+    f.fillRect(hash2(i, 2) * W2 | 0, hash2(i, 3) * H2 | 0, 6 + hash2(i, 4) * 28, 5 + hash2(i, 5) * 18);
+  }
+  e.fillStyle = '#000';
+  e.fillRect(0, 0, W2, H2);
+  for (let r = 0; r < 10; r++) {
+    for (let c = 0; c < 4; c++) {
+      const wx = 8 + c * 30, wy = 10 + r * 24;
+      f.fillStyle = '#1b2530';
+      f.fillRect(wx, wy, 18, 14);
+      if (hash2(c * 7 + 1, r * 13 + 2) < 0.55) {   // osa ikkunoista palaa öisin
+        e.fillStyle = '#ffd9a0';
+        e.fillRect(wx, wy, 18, 14);
+      }
+    }
+  }
+  const facade = new THREE.CanvasTexture(fc);
+  facade.colorSpace = THREE.SRGBColorSpace;
+  const windows = new THREE.CanvasTexture(ec);
+  windows.colorSpace = THREE.SRGBColorSpace;
+  _bldgTex = { facade, windows };
+  return _bldgTex;
+}
+
+/* ---- tieverkko ja kaupungit (Maa) ----
+   Tiet kulkevat ROAD_SP-välisessä ruudukossa; osa risteyksistä on kaupunkeja.
+   Maasto tasoittuu teiden ja kaupunkien kohdalla, laatat värjäävät tiet
+   asfaltiksi ja rakennukset sijoittuvat kortteleihin risteyksen ympärille. */
+const ROAD_SP = 900;
+function townAt(ix, iz){ return hash2(ix * 3.7 + 11.3, iz * 5.1 + 7.7) < 0.4; }
+function roadDist(x, z){
+  const mx = ((x % ROAD_SP) + ROAD_SP) % ROAD_SP;
+  const mz = ((z % ROAD_SP) + ROAD_SP) % ROAD_SP;
+  return Math.min(Math.min(mx, ROAD_SP - mx), Math.min(mz, ROAD_SP - mz));
+}
 
 function makeCraters(n, seed){
   const list = [];
@@ -228,13 +298,13 @@ const _vp = new THREE.Vector3();
 const _m4s = new THREE.Matrix4(), _rqs = new THREE.Quaternion(),
       _res = new THREE.Euler(), _rss = new THREE.Vector3();
 
-function initTerrain(sc, cfg){
-  const detail = getDetailTexture();
+function initTerrain(sc, cfg, name){
+  const detail = getDetailTexture(name, cfg);
   terrain = {
     sc, cfg,
     mat: new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 1, metalness: 0,
-      map: detail, bumpMap: detail, bumpScale: 0.6,
+      map: detail, bumpMap: detail, bumpScale: 0.85,
     }),
     cA: new THREE.Color(cfg.ground),
     cB: new THREE.Color(cfg.ground2),
@@ -242,9 +312,11 @@ function initTerrain(sc, cfg){
     pool: [],
     queue: [],
     ctx: null, ctz: null,
+    roads: !!(cfg.features && cfg.features.roads),
     H: new Float32Array((TILE_SEGS + 3) * (TILE_SEGS + 3)),   // korkeusnäytteet +1 reunamarginaalilla
   };
 }
+const _cAsphalt = new THREE.Color(0x232326);
 
 function fillTile(mesh, tx, tz){
   const t = terrain;
@@ -273,6 +345,10 @@ function fillTile(mesh, tx, tz){
     // korkeammat kohdat vaaleampia, painanteet tummempia
     const shade = (0.72 + 0.55 * ((h / hs) * 0.5 + 0.5)) * 1.16;
     _cc.copy(t.cA).lerp(t.cB, tt).multiplyScalar(shade);
+    if (t.roads) {
+      const a = 1 - sstep(6.5, 11, roadDist(wx, wz));
+      if (a > 0) _cc.lerp(_cAsphalt, a * 0.88);
+    }
     col.setXYZ(v, _cc.r, _cc.g, _cc.b);
     uv.setXY(v, wx / 2600, wz / 2600);   // detaljitekstuuri maailmakoordinaateissa — jatkuva laattojen yli
   }
@@ -291,6 +367,8 @@ function buildQueuedTile(){
     g.rotateX(-Math.PI / 2);
     g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3));
     mesh = new THREE.Mesh(g, t.mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
   }
   if (!mesh.parent) t.sc.add(mesh);
   mesh.visible = true;
@@ -399,22 +477,49 @@ function buildSurfaceScene(name){
     }
     if (F.scarp) h += sstep(0.50, 0.53, vnoise2(x * 0.00045 + 7.3, z * 0.00045 + 2.2)) * 9;
     if (F.dunes) h += 0.45 * Math.sin(x * 0.055 + fbm2(x * 0.0025 + 1, z * 0.0025 + 1, 2) * 7);
+    if (F.roads) {
+      // maasto tasoittuu teiden ja kaupunkien kohdalla suuriin muotoihin
+      const mR = 1 - sstep(9, 19, roadDist(x, z));
+      const ix = Math.round(x / ROAD_SP), iz = Math.round(z / ROAD_SP);
+      const dTown = townAt(ix, iz) ? Math.hypot(x - ix * ROAD_SP, z - iz * ROAD_SP) : 1e9;
+      const mT = 1 - sstep(140, 210, dTown);
+      const m = Math.max(mR, mT);
+      if (m > 0) {
+        const hL = (fbm2(x * freq, z * freq, 2) - 0.5) * 2 * hs;
+        h = h * (1 - 0.9 * m) + hL * 0.9 * m;
+      }
+    }
     return h;
   };
 
   // ääretön maasto: laattagridi kameran ympärillä
-  initTerrain(sc, cfg);
+  initTerrain(sc, cfg, name);
+
+  // piilota sirote-instanssi (tien/kaupungin alle jäävät)
+  const hideInstance = (m4, rq, rs) => {
+    rq.identity(); rs.set(0, 0, 0);
+    m4.compose(_vp.set(0, -2000, 0), rq, rs);
+  };
+  const inTownArea = (x, z) => {
+    if (!F.roads) return false;
+    if (roadDist(x, z) < 14) return true;
+    const ix = Math.round(x / ROAD_SP), iz = Math.round(z / ROAD_SP);
+    return townAt(ix, iz) && Math.hypot(x - ix * ROAD_SP, z - iz * ROAD_SP) < 220;
+  };
 
   // kivet: tasainen jakauma toistuvassa solussa
-  addScatter(sc, new THREE.DodecahedronGeometry(1, 0),
+  const rocks = addScatter(sc, new THREE.DodecahedronGeometry(1, 0),
     new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
     600, 2200, (i, x, z, m4, rq, re, rs) => {
+      if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
       const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
       re.set(hash2(i, 4) * 3.14, hash2(i, 5) * 6.28, hash2(i, 6) * 3.14);
       rq.setFromEuler(re);
       rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
       m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
     });
+  rocks.castShadow = true;
+  rocks.receiveShadow = true;
 
   // pikkukivet lähimaisemaan: pieni solu pitää ne aina kameran lähellä
   addScatter(sc, new THREE.IcosahedronGeometry(0.22, 0),
@@ -433,16 +538,52 @@ function buildSurfaceScene(name){
     const trees = addScatter(sc, new THREE.ConeGeometry(1, 3.2, 7),
       new THREE.MeshStandardMaterial({ roughness: 1 }),
       TREE_N, 2200, (i, x, z, m4, rq, re, rs) => {
+        if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
         const s = 1.2 + Math.pow(hash2(i, 23), 2) * 2.8;
         rq.identity();
         rs.set(s, s, s);
         m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 1.5, z), rq, rs);
       });
+    trees.castShadow = true;
+    trees.receiveShadow = true;
     const tc = new THREE.Color();
     for (let i = 0; i < TREE_N; i++) {
       tc.setHSL(0.30 + hash2(i, 24) * 0.06, 0.45, 0.16 + hash2(i, 25) * 0.10);
       trees.setColorAt(i, tc);
     }
+  }
+
+  // rakennukset: kaupungit teiden risteyksissä (Maa)
+  let bldgMat = null;
+  if (F.towns) {
+    const { facade, windows } = getBuildingTextures();
+    bldgMat = new THREE.MeshStandardMaterial({
+      map: facade, roughness: 0.9, metalness: 0,
+      emissive: 0xffc488, emissiveMap: windows, emissiveIntensity: 0,
+    });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x3b3b3e, roughness: 1 });
+    const buildings = addScatter(sc, new THREE.BoxGeometry(1, 1, 1),
+      [bldgMat, bldgMat, roofMat, roofMat, bldgMat, bldgMat],
+      500, 2400, (i, x, z, m4, rq, re, rs) => {
+        const ix = Math.round(x / ROAD_SP), iz = Math.round(z / ROAD_SP);
+        if (!townAt(ix, iz) || hash2(ix * 7.7 + i, iz * 3.3 + 1) > 0.8) {
+          hideInstance(m4, rq, rs);
+          return;
+        }
+        // korttelipaikka: 16–140 yks risteyksestä, ei tielinjojen päälle
+        const h1 = hash2(ix * 31.7 + i * 1.3, iz * 17.9 + 5);
+        const h2 = hash2(ix * 13.1 + i * 2.7, iz * 41.3 + 9);
+        const wx = ix * ROAD_SP + (h1 < 0.5 ? -1 : 1) * (16 + ((h1 * 7.31) % 1) * 124);
+        const wz = iz * ROAD_SP + (h2 < 0.5 ? -1 : 1) * (16 + ((h2 * 5.17) % 1) * 124);
+        const bw = 7 + hash2(i * 3.1, ix + iz) * 12;
+        const bd = 7 + hash2(i * 5.3, ix - iz + 99) * 12;
+        const bh = 6 + Math.pow(hash2(i * 7.7, ix * 2 + iz), 2) * 42;
+        rq.identity();
+        rs.set(bw, bh, bd);
+        m4.compose(_vp.set(wx, surfHeightFn(wx, wz) + bh / 2 - 0.6, wz), rq, rs);
+      });
+    buildings.castShadow = true;
+    buildings.receiveShadow = true;
   }
 
   // rakenna aloitusalue valmiiksi (laatat + sirote origon ympärille)
@@ -458,7 +599,18 @@ function buildSurfaceScene(name){
   const lightDef = cfg.sun ?? cfg.dirLight;
   const dl = new THREE.DirectionalLight(cfg.sun ? 0xffffff : cfg.dirLight.color, lightDef.intensity);
   if (cfg.dirLight) dl.position.copy(new THREE.Vector3(...cfg.dirLight.dir).normalize());
+  if (cfg.sun) {
+    // varjot: kartta seuraa pelaajaa (paikat päivitetään updateDaylightissa)
+    dl.castShadow = true;
+    dl.shadow.mapSize.set(2048, 2048);
+    dl.shadow.camera.left = -300; dl.shadow.camera.right = 300;
+    dl.shadow.camera.top = 300; dl.shadow.camera.bottom = -300;
+    dl.shadow.camera.near = 100; dl.shadow.camera.far = 1700;
+    dl.shadow.bias = -0.0004;
+    dl.shadow.normalBias = 0.8;
+  }
   sc.add(dl);
+  sc.add(dl.target);
 
   // aurinkokiekko (jos näkyvissä) — paikka päivittyy radan mukana
   let disc = null;
@@ -489,7 +641,7 @@ function buildSurfaceScene(name){
   }
 
   daylight = {
-    sc, cfg, dl, hemi, disc, starsMat,
+    sc, cfg, dl, hemi, disc, starsMat, bldgMat,
     baseInt: lightDef.intensity,
     baseHemi: cfg.hemi ? cfg.hemi[2] : 0,
     skyDay: new THREE.Color(cfg.sky),
