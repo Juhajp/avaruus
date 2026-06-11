@@ -182,9 +182,6 @@ function makeEarthMaterial(){
       vec3 V = normalize(cameraPosition - vWP);
       float ndl = dot(N, S);
       float diff = pow(clamp(ndl, 0.0, 1.0), 1.1);
-      // auringon kiilto merellä
-      vec3 H = normalize(S + V);
-      float spec = pow(clamp(dot(N, H), 0.0, 1.0), 90.0) * (1.0 - land) * 0.9;
       // kaupunkien valot yöpuolella
       float city = smoothstep(0.52, 0.78, fbm(p * 9.0)) * land * smoothstep(0.75, 0.35, lat);
       float night = smoothstep(0.03, -0.18, ndl);
@@ -192,7 +189,7 @@ function makeEarthMaterial(){
       // sininen reunakajo päiväpuolella
       float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.5);
       vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.5;
-      vec3 lit = col * (diff * 1.08 + 0.012) + spec * diff + lights + atmo;
+      vec3 lit = col * (diff * 1.08 + 0.012) + lights + atmo;
       gl_FragColor = vec4(lit, 1.0);
       #include <logdepthbuf_fragment>
     }`,
@@ -477,38 +474,32 @@ function makeTexturedMaterial(map){
   }));
 }
 
-function makeTexturedEarthMaterial(day, night, specMask){
+function makeTexturedEarthMaterial(day, night){
   const u = baseUniforms();
   u.uMap = { value: day };
   u.uNight = { value: night };
-  u.uSpecMap = { value: specMask };
   return registerMat(new THREE.ShaderMaterial({
     uniforms: u,
     vertexShader: PLANET_VERT,
     fragmentShader: FRAG_HEAD + /* glsl */`
     uniform sampler2D uMap;
     uniform sampler2D uNight;
-    uniform sampler2D uSpecMap;
     varying vec2 vUv;
     void main(){
       vec3 day = texture2D(uMap, vUv).rgb;
       vec3 night = texture2D(uNight, vUv).rgb;
-      float water = texture2D(uSpecMap, vUv).r;
       vec3 N = normalize(vN);
       vec3 S = sunDirAt(vWP);
       vec3 V = normalize(cameraPosition - vWP);
       float ndl = dot(N, S);
       float diff = pow(clamp(ndl, 0.0, 1.0), 1.1);
-      // auringon kiilto merellä
-      vec3 H = normalize(S + V);
-      float spec = pow(clamp(dot(N, H), 0.0, 1.0), 80.0) * water;
       // kaupunkien valot yöpuolella
       float nightSide = smoothstep(0.05, -0.18, ndl);
       vec3 lights = night * vec3(1.0, 0.88, 0.65) * nightSide * 1.1;
       // sininen reunakajo päiväpuolella
       float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.5);
       vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.5;
-      vec3 lit = day * (diff * 1.15 + 0.01) + spec * diff * 0.7 + lights + atmo;
+      vec3 lit = day * (diff * 1.15 + 0.01) + lights + atmo;
       gl_FragColor = vec4(lit, 1.0);
       #include <logdepthbuf_fragment>
     }`,
@@ -521,10 +512,9 @@ for (const b of bodies) {
     Promise.all([
       loadTex(TEX_EARTH + 'earth_atmos_2048.jpg'),
       loadTex(TEX_EARTH + 'earth_lights_2048.png'),
-      loadTex(TEX_EARTH + 'earth_specular_2048.jpg'),
-    ]).then(([d, n, s]) => {
+    ]).then(([d, n]) => {
       const old = b.mesh.material;
-      b.mesh.material = makeTexturedEarthMaterial(d, n, s);
+      b.mesh.material = makeTexturedEarthMaterial(d, n);
       old.dispose();
     }).catch(() => {});
   } else if (PLANET_TEXTURES[b.def.name]) {

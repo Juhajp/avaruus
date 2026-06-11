@@ -4,7 +4,7 @@
    plasmahehkun ja ravistelee kameraa. Runkolämmön täyttyessä alus tuhoutuu ja peli
    palaa aloitusnäkymään Maan luo. Merkuriuksella (ei atmoa) törmäyssuoja toimii ennallaan. */
 import * as THREE from 'three';
-import { camera } from './core.js';
+import { camera, C_KMS } from './core.js';
 import { bodies, placeNearBody } from './bodies.js';
 import { NOISE_GLSL, registerMat } from './shaders.js';
 import { S } from './state.js';
@@ -18,6 +18,7 @@ const HEAT_RATE = 2.0;     // tasaisen kitkakuumennuksen kertymä
 const HEAT_Q0 = 0.03;      // kynnys, jonka alle jäävä kuumennus ei kerrytä lämpöä
 const COOL_RATE = 0.2;     // jäähtyminen ohuessa ilmassa / avaruudessa
 const SOAK_COOL = 0.03;    // hidas hehkunta tiheässä ilmakehässä — lämpö ei katoa pätsissä istuen
+const IMPACT_MAX = 0.015;  // suurin nopeus (osuus c:stä), jolla pintakosketus ei tuhoa alusta
 export const LANDING_MAX_EFF = 0.02;   // suurin nopeus (osuus c:stä), jolla G-laskeutuminen onnistuu
 
 /* ---- plasmakuori (kameran lapsi, kuten warp) ---- */
@@ -98,14 +99,13 @@ deathOverlay.addEventListener('click', () => {
   destroyed = false;
 });
 
-function destroy(name){
+function destroy(reason){
   destroyed = true;
   heat = 0;
   S.targetFrac = 0; S.speedFrac = 0;
   plasmaGroup.visible = false;
   heatRow.style.display = 'none';
-  document.getElementById('deathReason').textContent =
-    `Kitkakuumennus ylitti rungon sietokyvyn (${name}).`;
+  document.getElementById('deathReason').textContent = reason;
   // valkoinen välähdys, joka häipyy tuhoutumisruudun päältä
   flash.style.transition = 'none';
   flash.style.opacity = '1';
@@ -118,6 +118,21 @@ function destroy(name){
 
 export function updateReentry(dt){
   if (destroyed) return;
+
+  // törmäystuho: kiinteään pintaan vauhdilla, kaasujättiläisen syvyyksiin tai Aurinkoon.
+  // Törmäyssuoja (flight.js) pitää kameran r×1,15:ssä vauhtia nollaamatta,
+  // joten pintakosketus kovassa vauhdissa tunnistetaan etäisyydestä + nopeudesta.
+  for (const b of bodies) {
+    const d = camera.position.distanceTo(b.group.position);
+    if (b.def.type === 'sun') {
+      if (d < b.def.r * 1.2) { destroy('Alus höyrystyi Auringon koronassa.'); return; }
+    } else if (d < b.def.r * 1.16 && S.effFrac > IMPACT_MAX) {
+      destroy(b.def.type === 'gas'
+        ? `Paine murskasi aluksen syvällä kohteen ${b.def.name} pilvikerroksissa.`
+        : `Alus törmäsi pintaan ${Math.round(S.effFrac * C_KMS).toLocaleString('fi-FI')} km/s vauhdissa (${b.def.name}).`);
+      return;
+    }
+  }
 
   // lähimmän ilmakehällisen kappaleen tiheys kamerakorkeudella
   let density = 0, inBody = null;
@@ -152,7 +167,10 @@ export function updateReentry(dt){
   heat += dt * HEAT_RATE * Math.max(0, q - HEAT_Q0);
   if (q < HEAT_Q0) heat -= dt * (density < 0.05 ? COOL_RATE : SOAK_COOL);
   heat = Math.max(0, heat);
-  if (heat >= 1) { destroy(inBody ? inBody.def.name : '?'); return; }
+  if (heat >= 1) {
+    destroy(`Kitkakuumennus ylitti rungon sietokyvyn (${inBody ? inBody.def.name : '?'}).`);
+    return;
+  }
 
   // tärinä: dynaamisen paineen tahdissa, kuumana rajumpi
   if (q > 0.002) {
