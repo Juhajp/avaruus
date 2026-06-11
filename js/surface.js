@@ -213,6 +213,148 @@ function makeCraters(n, seed){
   return list;
 }
 
+/* ---- ääretön maasto: laattagridi kameran ympärillä ----
+   Korkeusfunktio on globaali ja proseduraalinen — vain mesh on rajallinen.
+   Maasto generoidaan TILE-kokoisina laattoina TILE_GRID×TILE_GRID-ruudukkoon
+   kameran ympärille; liikuttaessa vapautuneet laatat kierrätetään uusiin
+   kohtiin (enintään yksi laatanrakennus per ruutu — ei nykäyksiä).
+   Normaalit lasketaan korkeusnäytteistä naapureineen, joten laattasaumat
+   eivät erotu valaistuksessa. */
+const TILE = 600, TILE_SEGS = 48, TILE_GRID = 5;   // kate 3000×3000, ~115k kolmiota
+let terrain = null;
+const _vn = new THREE.Vector3();
+const _cc = new THREE.Color();
+const _vp = new THREE.Vector3();
+const _m4s = new THREE.Matrix4(), _rqs = new THREE.Quaternion(),
+      _res = new THREE.Euler(), _rss = new THREE.Vector3();
+
+function initTerrain(sc, cfg){
+  const detail = getDetailTexture();
+  terrain = {
+    sc, cfg,
+    mat: new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 1, metalness: 0,
+      map: detail, bumpMap: detail, bumpScale: 0.6,
+    }),
+    cA: new THREE.Color(cfg.ground),
+    cB: new THREE.Color(cfg.ground2),
+    tiles: new Map(),
+    pool: [],
+    queue: [],
+    ctx: null, ctz: null,
+    H: new Float32Array((TILE_SEGS + 3) * (TILE_SEGS + 3)),   // korkeusnäytteet +1 reunamarginaalilla
+  };
+}
+
+function fillTile(mesh, tx, tz){
+  const t = terrain;
+  const g = mesh.geometry;
+  const pos = g.attributes.position, col = g.attributes.color,
+        uv = g.attributes.uv, nor = g.attributes.normal;
+  const n = TILE_SEGS + 1, step = TILE / TILE_SEGS, W = n + 2;
+  const ox = tx * TILE, oz = tz * TILE;
+  const x0 = ox - TILE / 2, z0 = oz - TILE / 2;
+  const H = t.H;
+  for (let j = -1; j <= n; j++)
+    for (let i = -1; i <= n; i++)
+      H[(j + 1) * W + (i + 1)] = surfHeightFn(x0 + i * step, z0 + j * step);
+  const hs = t.cfg.hScale;
+  for (let v = 0; v < pos.count; v++) {
+    const i = Math.round((pos.getX(v) + TILE / 2) / step);
+    const j = Math.round((pos.getZ(v) + TILE / 2) / step);
+    const h = H[(j + 1) * W + (i + 1)];
+    pos.setY(v, h);
+    // normaali naapurikorkeuksista — yhtenevä laattasaumojen yli
+    _vn.set(H[(j + 1) * W + i] - H[(j + 1) * W + (i + 2)], 2 * step,
+            H[j * W + (i + 1)] - H[(j + 2) * W + (i + 1)]).normalize();
+    nor.setXYZ(v, _vn.x, _vn.y, _vn.z);
+    const wx = x0 + i * step, wz = z0 + j * step;
+    const tt = Math.min(1, Math.max(0, fbm2(wx * 0.011 + 7, wz * 0.011 + 7, 3)));
+    // korkeammat kohdat vaaleampia, painanteet tummempia
+    const shade = (0.72 + 0.55 * ((h / hs) * 0.5 + 0.5)) * 1.16;
+    _cc.copy(t.cA).lerp(t.cB, tt).multiplyScalar(shade);
+    col.setXYZ(v, _cc.r, _cc.g, _cc.b);
+    uv.setXY(v, wx / 2600, wz / 2600);   // detaljitekstuuri maailmakoordinaateissa — jatkuva laattojen yli
+  }
+  pos.needsUpdate = col.needsUpdate = uv.needsUpdate = nor.needsUpdate = true;
+  g.computeBoundingSphere();
+  mesh.position.set(ox, 0, oz);
+}
+
+function buildQueuedTile(){
+  const t = terrain;
+  const key = t.queue.shift();
+  if (!key || t.tiles.has(key)) return;
+  let mesh = t.pool.pop();
+  if (!mesh) {
+    const g = new THREE.PlaneGeometry(TILE, TILE, TILE_SEGS, TILE_SEGS);
+    g.rotateX(-Math.PI / 2);
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3));
+    mesh = new THREE.Mesh(g, t.mat);
+  }
+  if (!mesh.parent) t.sc.add(mesh);
+  mesh.visible = true;
+  const [tx, tz] = key.split(',').map(Number);
+  fillTile(mesh, tx, tz);
+  t.tiles.set(key, mesh);
+}
+
+function updateTerrain(ax, az, buildAll = false){
+  const t = terrain;
+  const ctx = Math.round(ax / TILE), ctz = Math.round(az / TILE);
+  if (ctx !== t.ctx || ctz !== t.ctz) {
+    t.ctx = ctx; t.ctz = ctz;
+    const R = (TILE_GRID - 1) / 2;
+    const want = new Set();
+    for (let dz = -R; dz <= R; dz++)
+      for (let dx = -R; dx <= R; dx++) want.add((ctx + dx) + ',' + (ctz + dz));
+    for (const [k, mesh] of t.tiles) {
+      if (!want.has(k)) { t.tiles.delete(k); mesh.visible = false; t.pool.push(mesh); }
+    }
+    t.queue = [...want].filter(k => !t.tiles.has(k));
+  }
+  if (buildAll) { while (t.queue.length) buildQueuedTile(); }
+  else if (t.queue.length) buildQueuedTile();
+}
+
+/* ---- kameraa seuraava sirote (kivet, pikkukivet, puut) ----
+   Kukin instanssi sijaitsee jaksollisen W×W-solun kopioista siinä, joka on
+   lähinnä kameraa; solun vaihtuessa paikka ja korkeus lasketaan uudelleen. */
+let scatters = [];
+
+function addScatter(sc, geo, mat, count, W, place){
+  const mesh = new THREE.InstancedMesh(geo, mat, count);
+  mesh.frustumCulled = false;   // instanssit hajallaan — perusgeometrian mukainen kullaus veisi ne piiloon
+  const sct = {
+    mesh, count, W, place,
+    bx: new Float32Array(count), bz: new Float32Array(count),
+    kx: new Float64Array(count).fill(NaN), kz: new Float64Array(count).fill(NaN),
+  };
+  for (let i = 0; i < count; i++) {
+    sct.bx[i] = (hash2(i, 91) - 0.5) * W;
+    sct.bz[i] = (hash2(i, 92) - 0.5) * W;
+  }
+  scatters.push(sct);
+  sc.add(mesh);
+  return mesh;
+}
+
+function updateScatter(ax, az){
+  for (const s of scatters) {
+    let dirty = false;
+    for (let i = 0; i < s.count; i++) {
+      const kx = Math.round((ax - s.bx[i]) / s.W);
+      const kz = Math.round((az - s.bz[i]) / s.W);
+      if (kx === s.kx[i] && kz === s.kz[i]) continue;
+      s.kx[i] = kx; s.kz[i] = kz;
+      s.place(i, s.bx[i] + kx * s.W, s.bz[i] + kz * s.W, _m4s, _rqs, _res, _rss);
+      s.mesh.setMatrixAt(i, _m4s);
+      dirty = true;
+    }
+    if (dirty) s.mesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
 function buildSurfaceScene(name){
   const cfg = SURFACE_CONFIGS[name];
   const sc = new THREE.Scene();
@@ -222,6 +364,10 @@ function buildSurfaceScene(name){
   const freq = cfg.freq, hs = cfg.hScale;
   const F = cfg.features || {};
   const craters = F.craters ? makeCraters(F.craters, name.length * 13) : null;
+  // paikkasidonnaiset piirteet (kraatterit, tulivuoret) toistuvat tällä jaksolla —
+  // kohina on luonnostaan ääretöntä; piirteet mahtuvat jakson sisään ilman saumaa
+  const FEAT_P = 4200;
+  const wrapF = (v) => (((v + FEAT_P / 2) % FEAT_P + FEAT_P) % FEAT_P) - FEAT_P / 2;
   surfHeightFn = (x, z) => {
     let h = (fbm2(x * freq, z * freq, 5) - 0.5) * 2 * hs
           + (fbm2(x * freq * 6 + 9, z * freq * 6 + 9, 3) - 0.5) * hs * 0.22;
@@ -235,8 +381,9 @@ function buildSurfaceScene(name){
       const msk = 1 - sstep(0, F.canyon.width, d);
       if (msk > 0) h -= msk * msk * F.canyon.depth;
     }
+    const xf = wrapF(x), zf = wrapF(z);
     if (F.volcanoes) for (const v of F.volcanoes) {
-      const d = Math.hypot(x - v.x, z - v.z) / v.R;
+      const d = Math.hypot(xf - v.x, zf - v.z) / v.R;
       if (d < 1) {
         let vh = Math.pow(1 - d, 1.6) * v.H;
         if (d < 0.14) vh -= (1 - d / 0.14) * v.H * 0.25;   // kaldera
@@ -244,7 +391,7 @@ function buildSurfaceScene(name){
       }
     }
     if (craters) for (const c of craters) {
-      const d = Math.hypot(x - c.x, z - c.z) / c.r;
+      const d = Math.hypot(xf - c.x, zf - c.z) / c.r;
       if (d < 1.7) {
         h += -Math.max(0, 1 - d * d) * c.depth
            + Math.exp(-((d - 1.05) * (d - 1.05)) / 0.02) * c.depth * 0.4;
@@ -255,96 +402,52 @@ function buildSurfaceScene(name){
     return h;
   };
 
-  // maasto
-  const g = new THREE.PlaneGeometry(2600, 2600, 250, 250);
-  g.rotateX(-Math.PI / 2);
-  const pos = g.attributes.position;
-  const cA = new THREE.Color(cfg.ground), cB = new THREE.Color(cfg.ground2);
-  const colors = new Float32Array(pos.count * 3);
-  const cc = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i);
-    const h = surfHeightFn(x, z);
-    pos.setY(i, h);
-    const t = Math.min(1, Math.max(0, fbm2(x * 0.011 + 7, z * 0.011 + 7, 3)));
-    // korkeammat kohdat vaaleampia, painanteet tummempia
-    const shade = (0.72 + 0.55 * ((h / hs) * 0.5 + 0.5)) * 1.16;
-    cc.copy(cA).lerp(cB, t).multiplyScalar(shade);
-    colors[i * 3] = cc.r; colors[i * 3 + 1] = cc.g; colors[i * 3 + 2] = cc.b;
-  }
-  g.computeVertexNormals();
-  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  const detail = getDetailTexture();
-  sc.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 1, metalness: 0,
-    map: detail, bumpMap: detail, bumpScale: 0.6,
-  })));
+  // ääretön maasto: laattagridi kameran ympärillä
+  initTerrain(sc, cfg);
 
-  // kivet
-  const ROCK_N = 600;
-  const rocks = new THREE.InstancedMesh(
-    new THREE.DodecahedronGeometry(1, 0),
+  // kivet: tasainen jakauma toistuvassa solussa
+  addScatter(sc, new THREE.DodecahedronGeometry(1, 0),
     new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
-    ROCK_N
-  );
-  const m4 = new THREE.Matrix4(), rq = new THREE.Quaternion(), re = new THREE.Euler(), rs = new THREE.Vector3();
-  for (let i = 0; i < ROCK_N; i++) {
-    // tiheämmin lähelle pelaajaa (mutta ei laskeutumispisteeseen), harvemmin kauas
-    const r = 30 + Math.pow(hash2(i, 1), 1.6) * 1100;
-    const a = hash2(i, 2) * Math.PI * 2;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
-    re.set(hash2(i, 4) * 3.14, hash2(i, 5) * 6.28, hash2(i, 6) * 3.14);
-    rq.setFromEuler(re);
-    rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
-    m4.compose(new THREE.Vector3(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
-    rocks.setMatrixAt(i, m4);
-  }
-  sc.add(rocks);
+    600, 2200, (i, x, z, m4, rq, re, rs) => {
+      const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
+      re.set(hash2(i, 4) * 3.14, hash2(i, 5) * 6.28, hash2(i, 6) * 3.14);
+      rq.setFromEuler(re);
+      rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
+      m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
+    });
 
-  // pikkukivet lähimaisemaan
-  const PEB_N = 1300;
-  const pebbles = new THREE.InstancedMesh(
-    new THREE.IcosahedronGeometry(0.22, 0),
+  // pikkukivet lähimaisemaan: pieni solu pitää ne aina kameran lähellä
+  addScatter(sc, new THREE.IcosahedronGeometry(0.22, 0),
     new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
-    PEB_N
-  );
-  for (let i = 0; i < PEB_N; i++) {
-    const r = 3 + Math.pow(hash2(i, 11), 1.8) * 420;
-    const a = hash2(i, 12) * Math.PI * 2;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const s = 0.4 + hash2(i, 13) * 1.5;
-    re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
-    rq.setFromEuler(re);
-    rs.set(s, s * 0.7, s);
-    m4.compose(new THREE.Vector3(x, surfHeightFn(x, z) + 0.05, z), rq, rs);
-    pebbles.setMatrixAt(i, m4);
-  }
-  sc.add(pebbles);
+    1300, 480, (i, x, z, m4, rq, re, rs) => {
+      const s = 0.4 + hash2(i, 13) * 1.5;
+      re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
+      rq.setFromEuler(re);
+      rs.set(s, s * 0.7, s);
+      m4.compose(_vp.set(x, surfHeightFn(x, z) + 0.05, z), rq, rs);
+    });
 
   // puut (Maa)
   if (F.trees) {
     const TREE_N = 420;
-    const trees = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(1, 3.2, 7),
+    const trees = addScatter(sc, new THREE.ConeGeometry(1, 3.2, 7),
       new THREE.MeshStandardMaterial({ roughness: 1 }),
-      TREE_N
-    );
+      TREE_N, 2200, (i, x, z, m4, rq, re, rs) => {
+        const s = 1.2 + Math.pow(hash2(i, 23), 2) * 2.8;
+        rq.identity();
+        rs.set(s, s, s);
+        m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 1.5, z), rq, rs);
+      });
     const tc = new THREE.Color();
     for (let i = 0; i < TREE_N; i++) {
-      const r = 25 + Math.pow(hash2(i, 21), 1.4) * 1050;
-      const a = hash2(i, 22) * Math.PI * 2;
-      const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      const s = 1.2 + Math.pow(hash2(i, 23), 2) * 2.8;
-      rq.identity();
-      rs.set(s, s, s);
-      m4.compose(new THREE.Vector3(x, surfHeightFn(x, z) + s * 1.5, z), rq, rs);
-      trees.setMatrixAt(i, m4);
       tc.setHSL(0.30 + hash2(i, 24) * 0.06, 0.45, 0.16 + hash2(i, 25) * 0.10);
       trees.setColorAt(i, tc);
     }
-    sc.add(trees);
   }
+
+  // rakenna aloitusalue valmiiksi (laatat + sirote origon ympärille)
+  updateTerrain(0, 0, true);
+  updateScatter(0, 0);
 
   // valaistus — auringon suunta ja voimakkuus ajetaan updateDaylightissa
   let hemi = null;
@@ -453,6 +556,8 @@ function leaveSurfaceScene(){
   surfaceScene = null;
   daylight = null;
   surfaceBody = null;
+  terrain = null;
+  scatters = [];
 }
 
 function enterSurface(b){
@@ -491,9 +596,9 @@ export function updateSurface(dt){
     const inv = 1 / Math.hypot(mx, mz);
     surfX += (Math.cos(S.yaw) * mx + Math.sin(S.yaw) * mz) * inv * sp * dt;
     surfZ += (-Math.sin(S.yaw) * mx + Math.cos(S.yaw) * mz) * inv * sp * dt;
-    surfX = Math.max(-1100, Math.min(1100, surfX));
-    surfZ = Math.max(-1100, Math.min(1100, surfZ));
   }
+  updateTerrain(surfX, surfZ);
+  updateScatter(surfX, surfZ);
 
   // kävelyheilunta: askelpomppu, sivuttaishuojunta ja kevyt kallistus
   bobAmp += ((moving ? (running ? 1.4 : 1.0) : 0) - bobAmp) * (1 - Math.exp(-dt * 8));
@@ -568,8 +673,8 @@ export function updateDescent(dt){
   camera.rotation.set(S.pitch, S.yaw, 0, 'YXZ');
   camera.getWorldDirection(_fwd);
   descentPos.addScaledVector(_fwd, descentV * dt);
-  descentPos.x = Math.max(-1100, Math.min(1100, descentPos.x));
-  descentPos.z = Math.max(-1100, Math.min(1100, descentPos.z));
+  updateTerrain(descentPos.x, descentPos.z);
+  updateScatter(descentPos.x, descentPos.z);
 
   const ground = surfHeightFn(descentPos.x, descentPos.z);
   const alt = descentPos.y - ground;
