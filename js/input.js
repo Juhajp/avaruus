@@ -1,7 +1,7 @@
 /* ---------------- Ohjaus: hiiri, näppäimet, UI-napit ---------------- */
 import { renderer } from './core.js';
 import { bodies, orbitLines, placeNearBody } from './bodies.js';
-import { teleportToOrbit, tryBeamDown, exitSurface } from './surface.js';
+import { teleportToOrbit, tryBeamDown, exitSurface, abortDescent } from './surface.js';
 import { S, clamp01 } from './state.js';
 
 let started = false;
@@ -80,7 +80,7 @@ addEventListener('keydown', (e) => {
     if (e.code === 'KeyG') tryBeamDown();
     if (/^Digit[0-8]$/.test(e.code)) setTarget(parseInt(e.code.slice(5), 10));
   } else {
-    if (e.code === 'KeyB') exitSurface();
+    if (e.code === 'KeyB') S.mode === 'descent' ? abortDescent() : exitSurface();
   }
 });
 addEventListener('keyup', (e) => { S.keys[e.code] = false; });

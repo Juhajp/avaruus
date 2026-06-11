@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { AU, renderer, scene, camera, renderPass } from './core.js';
 import { bodies, placeNearBody } from './bodies.js';
 import { resetWarp } from './warp.js';
-import { LANDING_MAX_EFF } from './reentry.js';
+import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
 import { S } from './state.js';
 
 export const ROCKY = new Set(['Merkurius', 'Venus', 'Maa', 'Mars']);
@@ -421,34 +421,25 @@ export function tryBeamDown(){
   enterSurface(b);
 }
 
-function enterSurface(b){
-  S.mode = 'surface';
+// yhteinen alustus pintamoodille ja matalalennolle
+function enterSurfaceScene(b, mode){
+  S.mode = mode;
   surfaceBody = b;
   surfaceScene = buildSurfaceScene(b.def.name);
   renderPass.scene = surfaceScene;
   surfaceScene.add(camera);   // kameran maailmamatriisi päivittyy vain renderöitävän scenen osana
   resetWarp();
-  surfX = 0; surfZ = 0;
-  // vuorokausi alkaa aamupäivästä; aurinko selän taakse laskeutuessa,
-  // jotta maisema näkyy valaistuna
+  hideReentryFx();
   dayT0 = S.simTime;
   dayPhase0 = 0.55;
-  sunDirAt(dayPhase0, _sunDir);
-  S.yaw = Math.atan2(_sunDir.x, _sunDir.z);
-  S.pitch = 0; S.roll = 0;
-  updateDaylight();
-  camera.fov = 65; camera.updateProjectionMatrix();
   S.targetFrac = 0; S.speedFrac = 0;
   bridgeWasOn = document.body.classList.contains('bridge');
   document.body.classList.remove('bridge');
   document.body.classList.add('surface');
-  const cfg = SURFACE_CONFIGS[b.def.name];
-  document.getElementById('surfTitle').textContent = cfg.title;
-  document.getElementById('surfInfo').textContent = cfg.info;
 }
 
-export function exitSurface(){
-  if (S.mode !== 'surface') return;
+// yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
+function leaveSurfaceScene(){
   S.mode = 'space';
   renderPass.scene = scene;
   scene.add(camera);          // kamera takaisin avaruusscenen jäseneksi
@@ -461,8 +452,29 @@ export function exitSurface(){
   });
   surfaceScene = null;
   daylight = null;
-  placeNearBody(bodies.indexOf(surfaceBody), 6);
   surfaceBody = null;
+}
+
+function enterSurface(b){
+  enterSurfaceScene(b, 'surface');
+  surfX = 0; surfZ = 0;
+  // vuorokausi alkaa aamupäivästä; aurinko selän taakse laskeutuessa,
+  // jotta maisema näkyy valaistuna
+  sunDirAt(dayPhase0, _sunDir);
+  S.yaw = Math.atan2(_sunDir.x, _sunDir.z);
+  S.pitch = 0; S.roll = 0;
+  updateDaylight();
+  camera.fov = 65; camera.updateProjectionMatrix();
+  const cfg = SURFACE_CONFIGS[b.def.name];
+  document.getElementById('surfTitle').textContent = cfg.title;
+  document.getElementById('surfInfo').textContent = cfg.info;
+}
+
+export function exitSurface(){
+  if (S.mode !== 'surface') return;
+  const idx = bodies.indexOf(surfaceBody);
+  leaveSurfaceScene();
+  placeNearBody(idx, 6);
 }
 
 export function updateSurface(dt){
@@ -499,6 +511,96 @@ export function updateSurface(dt){
   );
 }
 
+/* ---- matalalento: hidas lähestyminen vie pintalentoon ----
+   Kun alus laskeutuu avaruudessa kiviplaneetan pintarajan (r×1,18) alle
+   alle törmäysnopeuden (IMPACT_MAX — kovempaa tulevat tuhoutuvat reentryssä),
+   näkymä vaihtuu planeetan proseduraaliseen pintamaailmaan ja lento jatkuu
+   maaston yllä: hiiri ohjaa, W/S säätää vauhtia. Kosketus maastoon kovaa →
+   tuho; alle SOFT_V → pehmeä lasku kävelymoodiin; ylös DESCENT_CEIL:n
+   yläpuolelle (tai B) → takaisin avaruuteen. */
+const DESCENT_TRIGGER = 1.18;   // × säde
+const DESCENT_CEIL = 900;       // paluu avaruuteen tämän korkeuden yläpuolella
+const SOFT_V = 55;              // pehmeän kosketuksen yläraja (m/s)
+let descentV = 0;
+const descentPos = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+
+export function checkDescentEntry(){
+  if (S.mode !== 'space' || S.effFrac > IMPACT_MAX) return;
+  for (const b of bodies) {
+    if (!ROCKY.has(b.def.name)) continue;
+    if (camera.position.distanceTo(b.group.position) < b.def.r * DESCENT_TRIGGER) {
+      enterDescent(b);
+      return;
+    }
+  }
+}
+
+function enterDescent(b){
+  // sisääntulovauhti skaalataan lähestymisnopeudesta (60–300 m/s)
+  const v = 60 + (S.effFrac / IMPACT_MAX) * 240;
+  enterSurfaceScene(b, 'descent');
+  descentV = v;
+  descentPos.set(0, 650, 0);
+  S.pitch = Math.min(S.pitch, -0.25);   // sisään aina laskevassa liu'ussa
+  S.roll = 0;
+  camera.fov = 65; camera.updateProjectionMatrix();
+  updateDaylight();
+  document.getElementById('surfTitle').textContent =
+    `${b.def.name.toUpperCase()} — MATALALENTO`;
+}
+
+export function abortDescent(){
+  if (S.mode !== 'descent') return;
+  const idx = bodies.indexOf(surfaceBody);
+  leaveSurfaceScene();
+  placeNearBody(idx, 1.5);
+}
+
+export function updateDescent(dt){
+  updateDaylight();
+  // W/S säätää vauhtia
+  if (S.keys.KeyW || S.keys.ArrowUp)   descentV += 200 * dt;
+  if (S.keys.KeyS || S.keys.ArrowDown) descentV -= 200 * dt;
+  descentV = Math.max(35, Math.min(450, descentV));
+
+  // alus lentää katseen suuntaan
+  camera.rotation.set(S.pitch, S.yaw, 0, 'YXZ');
+  camera.getWorldDirection(_fwd);
+  descentPos.addScaledVector(_fwd, descentV * dt);
+  descentPos.x = Math.max(-1100, Math.min(1100, descentPos.x));
+  descentPos.z = Math.max(-1100, Math.min(1100, descentPos.z));
+
+  const ground = surfHeightFn(descentPos.x, descentPos.z);
+  const alt = descentPos.y - ground;
+
+  // ylös avaruuteen
+  if (descentPos.y > DESCENT_CEIL) { abortDescent(); return; }
+
+  // kosketus maastoon: kovaa = tuho, hiljaa = pehmeä lasku kävelymoodiin
+  if (alt <= 2.6) {
+    if (descentV > SOFT_V) {
+      const name = surfaceBody.def.name;
+      const v = Math.round(descentV);
+      leaveSurfaceScene();
+      destroyShip(`Alus törmäsi pintaan ${v} m/s vauhdissa (${name}).`);
+      return;
+    }
+    S.mode = 'surface';
+    surfX = descentPos.x; surfZ = descentPos.z;
+    bobPhase = 0; bobAmp = 0;
+    const cfg = SURFACE_CONFIGS[surfaceBody.def.name];
+    document.getElementById('surfTitle').textContent = cfg.title;
+    document.getElementById('surfInfo').textContent = cfg.info;
+    return;
+  }
+
+  camera.position.copy(descentPos);
+  document.getElementById('surfInfo').textContent =
+    `korkeus ${Math.round(alt)} m · vauhti ${Math.round(descentV)} m/s — hiiri ohjaa · ` +
+    `W/S = vauhti · kosketus alle ${SOFT_V} m/s = lasku · ylös tai B = takaisin avaruuteen`;
+}
+
 // debug-koukkua (__sim.surf) varten; setDayPhase: 0 = auringonnousu,
 // π/2 = keskipäivä, π = auringonlasku, 3π/2 = keskiyö
 export function surfDebug(){
@@ -506,5 +608,7 @@ export function surfDebug(){
     scene: surfaceScene, h: surfHeightFn, x: surfX, z: surfZ,
     dayPhase: daylight ? sunPhase() % (Math.PI * 2) : null,
     setDayPhase(p){ dayPhase0 = p; dayT0 = S.simTime; updateDaylight(); },
+    descentPos, descentV: () => descentV,
+    setDescentV(v){ descentV = v; },
   };
 }

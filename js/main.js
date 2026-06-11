@@ -5,7 +5,7 @@ import { shaderMats } from './shaders.js';
 import { bodies, placeNearBody, updateBodies } from './bodies.js';
 import { updateWarp } from './warp.js';
 import { updateReentry, reentryDebug } from './reentry.js';
-import { updateSurface, tryBeamDown, exitSurface, surfDebug } from './surface.js';
+import { updateSurface, updateDescent, checkDescentEntry, tryBeamDown, exitSurface, surfDebug } from './surface.js';
 import { updateFlight } from './flight.js';
 import { updateSpaceHUD } from './hud.js';
 import { setTarget } from './input.js';
@@ -24,11 +24,13 @@ function animate(){
     S.simTime += dt;
     updateBodies(dt);
     if (S.mode === 'surface') updateSurface(dt);
+    else if (S.mode === 'descent') updateDescent(dt);
   }
 
   if (!S.paused && S.mode === 'space') {
     updateFlight(dt);
     updateReentry(dt);
+    checkDescentEntry();
     updateWarp(dt);
   }
 

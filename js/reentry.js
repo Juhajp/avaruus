@@ -18,7 +18,7 @@ const HEAT_RATE = 2.0;     // tasaisen kitkakuumennuksen kertymä
 const HEAT_Q0 = 0.03;      // kynnys, jonka alle jäävä kuumennus ei kerrytä lämpöä
 const COOL_RATE = 0.2;     // jäähtyminen ohuessa ilmassa / avaruudessa
 const SOAK_COOL = 0.03;    // hidas hehkunta tiheässä ilmakehässä — lämpö ei katoa pätsissä istuen
-const IMPACT_MAX = 0.015;  // suurin nopeus (osuus c:stä), jolla pintakosketus ei tuhoa alusta
+export const IMPACT_MAX = 0.015;       // suurin nopeus (osuus c:stä), jolla pintakosketus ei tuhoa alusta
 export const LANDING_MAX_EFF = 0.02;   // suurin nopeus (osuus c:stä), jolla G-laskeutuminen onnistuu
 
 /* ---- plasmakuori (kameran lapsi, kuten warp) ---- */
@@ -99,7 +99,13 @@ deathOverlay.addEventListener('click', () => {
   destroyed = false;
 });
 
-function destroy(reason){
+// sammuta plasma ja lämpörivi näkymänvaihdoissa (pintamoodi, matalalento)
+export function hideReentryFx(){
+  plasmaGroup.visible = false;
+  heatRow.style.display = 'none';
+}
+
+export function destroyShip(reason){
   destroyed = true;
   heat = 0;
   S.targetFrac = 0; S.speedFrac = 0;
@@ -125,9 +131,9 @@ export function updateReentry(dt){
   for (const b of bodies) {
     const d = camera.position.distanceTo(b.group.position);
     if (b.def.type === 'sun') {
-      if (d < b.def.r * 1.2) { destroy('Alus höyrystyi Auringon koronassa.'); return; }
+      if (d < b.def.r * 1.2) { destroyShip('Alus höyrystyi Auringon koronassa.'); return; }
     } else if (d < b.def.r * 1.16 && S.effFrac > IMPACT_MAX) {
-      destroy(b.def.type === 'gas'
+      destroyShip(b.def.type === 'gas'
         ? `Paine murskasi aluksen syvällä kohteen ${b.def.name} pilvikerroksissa.`
         : `Alus törmäsi pintaan ${Math.round(S.effFrac * C_KMS).toLocaleString('fi-FI')} km/s vauhdissa (${b.def.name}).`);
       return;
@@ -168,7 +174,7 @@ export function updateReentry(dt){
   if (q < HEAT_Q0) heat -= dt * (density < 0.05 ? COOL_RATE : SOAK_COOL);
   heat = Math.max(0, heat);
   if (heat >= 1) {
-    destroy(`Kitkakuumennus ylitti rungon sietokyvyn (${inBody ? inBody.def.name : '?'}).`);
+    destroyShip(`Kitkakuumennus ylitti rungon sietokyvyn (${inBody ? inBody.def.name : '?'}).`);
     return;
   }
 

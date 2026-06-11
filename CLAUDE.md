@@ -32,11 +32,12 @@ Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen
 - Ilmakehään syöksyminen (kappaleet joilla `atmo`; ei Merkurius): vyöhyke r×1,15–r×3,0, tiheys ∝ syvyys³. Ilmanvastus jarruttaa, kitkalämpö q = tiheys × (effFrac/0,1)² sytyttää plasmakuoren (kameran lapsi, `depthTest:false` — muuten planeetta peittää sen!) ja ravistelee kameraa. Runkolämpö kertyy pääosin **jarrutusenergiasta** (∝ v·dv, `BRAKE_HEAT`) — pelkkä hetkellinen q ei riitä, koska jarrutus romahduttaa sen ennen täyttymistä; jäähtyminen kunnolla vain ohuessa ilmassa (tiheässä vain hidas `SOAK_COOL`). 100 % → alus tuhoutuu (`#deathOverlay`, klikkaus palauttaa Maan luo). Entry yli ~5 % c kuolettaa, alle selviää rajusti jarruttaen (lämpö jää hehkumaan), ≤1,5 % c liitää vapaasti. **Törmäystuho** (kaikki kappaleet, myös ilmakehättömät): pintakosketus (r×1,16) yli 1,5 % c:llä (`IMPACT_MAX`) tuhoaa aluksen; kaasujättiläisillä syynä paine, Auringon lähellä (r×1,2) höyrystyminen nopeudesta riippumatta. Laskeutuminen (G) vaatii ≤2 % c (`LANDING_MAX_EFF`). Debug: `__sim.reentry()`
 - Kiertoradalle teleporttaus (T) vain kantamalla: max(0,5 AU, 30 r) — merkkivalo kohdepaneelissa
 
-## Tilat (mode-muuttuja: 'space' | 'surface')
+## Tilat (mode-muuttuja: 'space' | 'surface' | 'descent')
 
 - **space**: FPV-lento, komentosilta-overlay (SVG, V kytkee), warp-efekti
+- **descent** (matalalento): kun alus laskeutuu avaruudessa kiviplaneetan pintarajan (r×1,18) alle alle törmäysnopeuden, näkymä vaihtuu planeetan pintamaailmaan ~650 m korkeuteen ja lento jatkuu maaston yllä (hiiri ohjaa, W/S = vauhti 35–450 m/s). Kosketus yli 55 m/s → törmäystuho; alle → pehmeä lasku kävelymoodiin; nousu yli 900 m tai B → takaisin avaruuteen (r×1,5). Sama proseduraalinen scene kuin pintamoodissa — ei pikselöitynyttä planeettapalloa lähietäisyydellä
 - **surface**: kiviplaneetat (Merkurius, Venus, Maa, Mars; `ROCKY`-setti). Erillinen proseduraalinen maailma per planeetta (`SURFACE_CONFIGS`): fbm-maasto + todistetut piirteet (Mars: kanjoni/tulivuori/kraatterit/dyynit; Merkurius: kraatterit/jyrkänne; Venus: tulivuoret/repeämä; Maa: vuoret/puut), detaljitekstuuri + bump, kävelyheilunta (bobPhase/bobAmp). Komentosilta ja avaruus-HUD piilossa (`body.surface` CSS)
-- Siirtymät: `enterSurface()` / `exitSurface()` — **TÄRKEÄÄ**: kamera on lisättävä renderöitävään sceneen (`surfaceScene.add(camera)` / `scene.add(camera)`), muuten Three.js ei päivitä kameran maailmamatriisia (kamera on avaruusscenen lapsi warp-efektin takia) ja näkymä jäätyy
+- Siirtymät: `enterSurfaceScene()` / `leaveSurfaceScene()` (yhteiset pinta- ja matalalentomoodille) — **TÄRKEÄÄ**: kamera on lisättävä renderöitävään sceneen (`surfaceScene.add(camera)` / `scene.add(camera)`), muuten Three.js ei päivitä kameran maailmamatriisia (kamera on avaruusscenen lapsi warp-efektin takia) ja näkymä jäätyy
 
 ## Näppäimet
 
