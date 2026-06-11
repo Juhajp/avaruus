@@ -159,6 +159,34 @@
     display:none; font-size:14px; letter-spacing:4px; color:#ffd27f;
   }
   #hint { bottom:16px; left:16px; font-size:11px; color:var(--hud-dim); }
+
+  /* ---- ilmakehään syöksyminen ---- */
+  #heatRow { color:#ffb37a; }
+  #heatBarWrap { margin-top:4px; height:5px; background:rgba(255,150,80,0.15); border-radius:3px; overflow:hidden; }
+  #heatBar { height:100%; width:0%; background:linear-gradient(90deg,#ffae42,#ff5a1f,#fff); }
+  #flash {
+    position:fixed; inset:0; z-index:70; background:#fff;
+    opacity:0; pointer-events:none; transition:opacity 1.4s ease;
+  }
+  #deathOverlay {
+    position:fixed; inset:0; z-index:60;
+    display:none; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at center, rgba(40,4,2,0.78), rgba(8,0,0,0.94));
+    cursor:pointer;
+  }
+  #deathCard {
+    color:#ffb4a0;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    background:rgba(24,4,2,0.7);
+    border:1px solid rgba(255,120,80,0.45);
+    border-radius:14px;
+    padding:28px 38px;
+    max-width:520px;
+    text-align:center;
+    text-shadow:0 0 8px rgba(255,90,40,0.5);
+  }
+  #deathCard h1 { margin:0 0 10px 0; font-size:22px; letter-spacing:3px; color:#ff8866; }
+  #deathCard .go { margin-top:18px; font-size:13px; color:#fff; animation:blink 1.4s infinite; }
 </style>
 </head>
 <body class="bridge">
@@ -327,6 +355,9 @@
   <div id="speedBarWrap"><div id="speedBar"></div></div>
   <input id="speedSlider" type="range" min="0" max="0.99" step="0.001" value="0">
   <div class="row" id="frameDrag" style="display:none; color:#aef7c1;"></div>
+  <div class="row" id="heatRow" style="display:none">⚠ kitkakuumennus · runkolämpö <span id="heatPct">0</span> %
+    <div id="heatBarWrap"><div id="heatBar"></div></div>
+  </div>
 </div>
 
 <div id="targetPanel" class="panel">
@@ -352,6 +383,15 @@
 <div id="hint" class="panel">Esc vapauttaa hiiren · klikkaa palataksesi ohjaukseen · H = ohje</div>
 <div id="crosshair"></div>
 <div id="labels"></div>
+
+<div id="flash"></div>
+<div id="deathOverlay">
+  <div id="deathCard">
+    <h1>ALUS TUHOUTUI</h1>
+    <p id="deathReason"></p>
+    <div class="go">Klikkaa aloittaaksesi uudelleen</div>
+  </div>
+</div>
 
 <div id="startOverlay">
   <div id="startCard">

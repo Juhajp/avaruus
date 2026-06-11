@@ -4,6 +4,7 @@ import { camera, composer, renderer, renderPass, scene } from './core.js';
 import { shaderMats } from './shaders.js';
 import { bodies, placeNearBody, updateBodies } from './bodies.js';
 import { updateWarp } from './warp.js';
+import { updateReentry, reentryDebug } from './reentry.js';
 import { updateSurface, tryBeamDown, exitSurface, surfDebug } from './surface.js';
 import { updateFlight } from './flight.js';
 import { updateSpaceHUD } from './hud.js';
@@ -27,6 +28,7 @@ function animate(){
 
   if (!S.paused && S.mode === 'space') {
     updateFlight(dt);
+    updateReentry(dt);
     updateWarp(dt);
   }
 
@@ -50,8 +52,9 @@ window.__sim = {
   goto(idx, distMult = 3.5){ placeNearBody(idx, distMult); },
   setSpeed(f){ S.targetFrac = clamp01(f); S.speedFrac = S.targetFrac; },
   state(){ return { simTime: S.simTime, speedFrac: S.speedFrac, mode: S.mode, pos: camera.position.toArray() }; },
-  beam(i){ setTarget(i); placeNearBody(i, 6); tryBeamDown(); },
+  beam(i){ S.targetFrac = 0; S.speedFrac = 0; setTarget(i); placeNearBody(i, 6); tryBeamDown(); },
   beamUp(){ exitSurface(); },
   surf(){ return surfDebug(); },
+  reentry(){ return reentryDebug(); },
   camera, bodies, THREE, renderPass, renderer, scene,
 };

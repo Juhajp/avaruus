@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { AU, renderer, scene, camera, renderPass } from './core.js';
 import { bodies, placeNearBody } from './bodies.js';
 import { resetWarp } from './warp.js';
+import { LANDING_MAX_EFF } from './reentry.js';
 import { S } from './state.js';
 
 export const ROCKY = new Set(['Merkurius', 'Venus', 'Maa', 'Mars']);
@@ -413,6 +414,7 @@ export function teleportToOrbit(){
 
 export function tryBeamDown(){
   if (S.mode !== 'space') return;
+  if (S.effFrac > LANDING_MAX_EFF) return;   // laskeutuminen vain hitaassa vauhdissa
   const b = bodies[S.targetIdx];
   if (!ROCKY.has(b.def.name)) return;
   if (camera.position.distanceTo(b.group.position) > b.def.r * 15) return;

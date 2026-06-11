@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { AU, C, C_KMS, camera } from './core.js';
 import { bodies } from './bodies.js';
 import { ROCKY, orbitRange } from './surface.js';
+import { LANDING_MAX_EFF } from './reentry.js';
 import { S } from './state.js';
 
 const el = (id) => document.getElementById(id);
@@ -59,9 +60,15 @@ export function updateSpaceHUD(){
     inRange ? 'kiertorata: kantamalla' : 'kiertorata: liian kaukana';
   document.getElementById('btnOrbit').disabled = !inRange;
 
-  // laskeutumisnappi näkyviin kiviplaneetan kiertoradalla
+  // laskeutumisnappi näkyviin kiviplaneetan kiertoradalla; vaatii hitaan vauhdin
   const canBeam = ROCKY.has(tgt.def.name) && distCenter < tgt.def.r * 15;
-  document.getElementById('btnBeam').style.display = canBeam ? '' : 'none';
+  const btnBeam = document.getElementById('btnBeam');
+  btnBeam.style.display = canBeam ? '' : 'none';
+  if (canBeam) {
+    const tooFast = S.effFrac > LANDING_MAX_EFF;
+    btnBeam.disabled = tooFast;
+    btnBeam.textContent = tooFast ? '⇓ hidasta laskeutuaksesi (alle 2 % c)' : '⇓ pinnalle · G';
+  }
 
   // nimilaput
   for (let i = 0; i < bodies.length; i++) {

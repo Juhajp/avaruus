@@ -7,6 +7,7 @@ Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen
 - [js/shaders.js](js/shaders.js) — yhteiset GLSL-palat (NOISE_GLSL, PLANET_VERT, FRAG_HEAD), `registerMat`/`shaderMats` (uTime-päivitys), `baseUniforms`
 - [js/bodies.js](js/bodies.js) — BODIES-data, planeettamateriaalit, tähtitaivas, kappaleiden rakentaminen, NASA-tekstuurien lataus, `bodyPosition`, `placeNearBody`, `updateBodies`
 - [js/warp.js](js/warp.js) — warp-efekti: `updateWarp`, `resetWarp`
+- [js/reentry.js](js/reentry.js) — ilmakehään syöksyminen: kitkajarrutus, plasmakuori, runkolämpö, tuhoutuminen; `updateReentry`, `LANDING_MAX_EFF`
 - [js/surface.js](js/surface.js) — pintamoodi: SURFACE_CONFIGS, maastogeneraattori, `enterSurface`/`exitSurface`/`updateSurface`, `teleportToOrbit`, `tryBeamDown`, `orbitRange`, ROCKY
 - [js/flight.js](js/flight.js) — avaruuslennon fysiikka: `updateFlight` (nopeus, F-kääntö, kehysseuranta, törmäyssuoja)
 - [js/input.js](js/input.js) — hiiri/näppäimet/UI-napit, `setTarget`
@@ -28,6 +29,7 @@ Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen
 - Vuorokaudet: todelliset pyörähdysajat skaalattu 1 h = 10 s → Maan vuorokausi 240 s. Avaruudessa `spinP` (sekunteina, negatiivinen = retrogradinen, Venus); pinnalla aurinko kulkee kaarirataa aurinkovuorokauden jaksolla (`dayLength`; Mars ~247 s, Merkurius/Venus kymmeniä tunteja eli käytännössä paikallaan), valaistus/taivas/rusko/yötähdet ajetaan `updateDaylight`issa. Laskeutuminen alkaa aina aamupäivästä; testaus: `__sim.surf().setDayPhase(p)` (0 = nousu, π/2 = keskipäivä, π = lasku, 3π/2 = keskiyö)
 - Nopeussäätö 0–0,99c; **kehysseuranta**: alle 15 planeetansäteen etäisyydellä kamera kulkee planeetan radan mukana (täysi paino < 8 r), ja nopeusalue rajautuu 0,01–0,1c ("lähialuetila"). HUD näyttää `⊕ kehysseuranta: <planeetta> NN %`
 - Törmäyssuoja työntää kameran ulos pinnasta (r×1,15) vauhtia nollaamatta (liukuu pintaa pitkin)
+- Ilmakehään syöksyminen (kappaleet joilla `atmo`; ei Merkurius): vyöhyke r×1,15–r×3,0, tiheys ∝ syvyys³. Ilmanvastus jarruttaa, kitkalämpö q = tiheys × (effFrac/0,1)² sytyttää plasmakuoren (kameran lapsi, `depthTest:false` — muuten planeetta peittää sen!) ja ravistelee kameraa. Runkolämpö 100 % → alus tuhoutuu (`#deathOverlay`, klikkaus palauttaa Maan luo). Täysi syöksy kuolettaa, ~5 % c selviää rajusti jarruttaen, ≤2 % c liitää vapaasti. Laskeutuminen (G) vaatii ≤2 % c (`LANDING_MAX_EFF`). Debug: `__sim.reentry()`
 - Kiertoradalle teleporttaus (T) vain kantamalla: max(0,5 AU, 30 r) — merkkivalo kohdepaneelissa
 
 ## Tilat (mode-muuttuja: 'space' | 'surface')
