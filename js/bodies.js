@@ -4,30 +4,32 @@ import { AU, DEG, ORBIT_BASE_PERIOD, renderer, scene, camera } from './core.js';
 import { NOISE_GLSL, PLANET_VERT, FRAG_HEAD, registerMat, baseUniforms } from './shaders.js';
 import { S } from './state.js';
 
+// spinP = todellinen pyörähdysaika skaalattuna: 1 h = 10 s (Maan vuorokausi 240 s).
+// Negatiivinen arvo = retrogradinen pyöriminen (Venus).
 export const BODIES = [
-  { name:'Aurinko',   a:0,      r:120,  type:'sun' },
-  { name:'Merkurius', a:0.387,  r:1.9,  incl:7.0,  tilt:0.03, spinP:140, phase:2.40, type:'rocky',
+  { name:'Aurinko',   a:0,      r:120,  spinP:6091, type:'sun' },
+  { name:'Merkurius', a:0.387,  r:1.9,  incl:7.0,  tilt:0.03, spinP:14076, phase:2.40, type:'rocky',
     opts:{ c1:[0.38,0.36,0.34], c2:[0.62,0.59,0.55], c3:[0.22,0.21,0.20], scale:5.0, rugged:1.0 } },
-  { name:'Venus',     a:0.723,  r:4.75, incl:3.4,  tilt:2.6,  spinP:200, phase:4.40, type:'gas',
+  { name:'Venus',     a:0.723,  r:4.75, incl:3.4,  tilt:2.6,  spinP:-58320, phase:4.40, type:'gas',
     opts:{ c1:[0.93,0.80,0.55], c2:[0.83,0.66,0.40], c3:[0.97,0.91,0.74], bandFreq:1.6, turb:2.6, flow:0.020 },
     atmo:{ color:[1.0,0.85,0.55], intensity:0.55, power:3.2 } },
-  { name:'Maa',       a:1.0,    r:5.0,  incl:0.0,  tilt:23.4, spinP:80,  phase:0.30, type:'earth',
+  { name:'Maa',       a:1.0,    r:5.0,  incl:0.0,  tilt:23.4, spinP:239.3, phase:0.30, type:'earth',
     atmo:{ color:[0.30,0.55,1.0], intensity:0.9, power:3.0 } },
-  { name:'Mars',      a:1.524,  r:2.66, incl:1.85, tilt:25.2, spinP:85,  phase:1.20, type:'rocky',
+  { name:'Mars',      a:1.524,  r:2.66, incl:1.85, tilt:25.2, spinP:246.2, phase:1.20, type:'rocky',
     opts:{ c1:[0.48,0.21,0.10], c2:[0.70,0.37,0.18], c3:[0.26,0.11,0.06], scale:4.0, rugged:0.8, polar:0.86 },
     atmo:{ color:[0.85,0.55,0.38], intensity:0.30, power:3.5 } },
-  { name:'Jupiter',   a:5.203,  r:40,   incl:1.3,  tilt:3.1,  spinP:45,  phase:5.50, type:'gas',
+  { name:'Jupiter',   a:5.203,  r:40,   incl:1.3,  tilt:3.1,  spinP:99.3, phase:5.50, type:'gas',
     opts:{ c1:[0.70,0.55,0.38], c2:[0.93,0.87,0.74], c3:[0.46,0.30,0.18], bandFreq:7.0, turb:2.0, flow:0.015,
            spot:true, spotColor:[0.78,0.32,0.18] },
     atmo:{ color:[0.9,0.8,0.65], intensity:0.25, power:3.5 } },
-  { name:'Saturnus',  a:9.537,  r:34,   incl:2.49, tilt:26.7, spinP:50,  phase:2.80, type:'gas',
+  { name:'Saturnus',  a:9.537,  r:34,   incl:2.49, tilt:26.7, spinP:106.6, phase:2.80, type:'gas',
     opts:{ c1:[0.80,0.69,0.48], c2:[0.95,0.89,0.72], c3:[0.58,0.46,0.29], bandFreq:6.0, turb:1.1, flow:0.010 },
     rings:{ inner:1.25, outer:2.35 },
     atmo:{ color:[0.93,0.85,0.65], intensity:0.22, power:3.5 } },
-  { name:'Uranus',    a:19.19,  r:18,   incl:0.77, tilt:97.8, spinP:65,  phase:4.00, type:'gas',
+  { name:'Uranus',    a:19.19,  r:18,   incl:0.77, tilt:97.8, spinP:172.4, phase:4.00, type:'gas',
     opts:{ c1:[0.55,0.80,0.86], c2:[0.66,0.88,0.92], c3:[0.45,0.72,0.82], bandFreq:3.0, turb:0.35, flow:0.006 },
     atmo:{ color:[0.6,0.9,0.95], intensity:0.30, power:3.5 } },
-  { name:'Neptunus',  a:30.07,  r:17.5, incl:1.77, tilt:28.3, spinP:60,  phase:0.65, type:'gas',
+  { name:'Neptunus',  a:30.07,  r:17.5, incl:1.77, tilt:28.3, spinP:161.1, phase:0.65, type:'gas',
     opts:{ c1:[0.06,0.12,0.52], c2:[0.16,0.30,0.80], c3:[0.03,0.06,0.30], bandFreq:4.0, turb:0.8, flow:0.018 },
     atmo:{ color:[0.35,0.5,1.0], intensity:0.40, power:3.3 } },
 ];

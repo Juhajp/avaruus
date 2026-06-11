@@ -25,6 +25,7 @@ Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen
 
 - 1 AU = 1000 yksikköä; valonnopeus C ≈ 101,2 yks/s — kalibroitu niin, että Maa→Neptunus 0,99c:llä kestää ~5 min (ETA ~4:49)
 - Kiertoajat: Kepler-skaalattu, Maan periodi 360 s (`ORBIT_BASE_PERIOD`)
+- Vuorokaudet: todelliset pyörähdysajat skaalattu 1 h = 10 s → Maan vuorokausi 240 s. Avaruudessa `spinP` (sekunteina, negatiivinen = retrogradinen, Venus); pinnalla aurinko kulkee kaarirataa aurinkovuorokauden jaksolla (`dayLength`; Mars ~247 s, Merkurius/Venus kymmeniä tunteja eli käytännössä paikallaan), valaistus/taivas/rusko/yötähdet ajetaan `updateDaylight`issa. Laskeutuminen alkaa aina aamupäivästä; testaus: `__sim.surf().setDayPhase(p)` (0 = nousu, π/2 = keskipäivä, π = lasku, 3π/2 = keskiyö)
 - Nopeussäätö 0–0,99c; **kehysseuranta**: alle 15 planeetansäteen etäisyydellä kamera kulkee planeetan radan mukana (täysi paino < 8 r), ja nopeusalue rajautuu 0,01–0,1c ("lähialuetila"). HUD näyttää `⊕ kehysseuranta: <planeetta> NN %`
 - Törmäyssuoja työntää kameran ulos pinnasta (r×1,15) vauhtia nollaamatta (liukuu pintaa pitkin)
 - Kiertoradalle teleporttaus (T) vain kantamalla: max(0,5 AU, 30 r) — merkkivalo kohdepaneelissa

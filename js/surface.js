@@ -13,6 +13,64 @@ let surfaceScene = null;
 let surfHeightFn = null;
 let bobPhase = 0, bobAmp = 0;
 
+/* ---- vuorokaudenkierto ----
+   Aurinko kulkee kaarirataa, jonka jakso on planeetan todellinen
+   aurinkovuorokausi skaalattuna: 1 h = 10 s eli Maan vuorokausi 240 s.
+   Valaistus, taivaan/sumun väri, rusko, aurinkokiekko ja yötähdet
+   ajetaan auringon korkeuden mukaan joka ruutu (updateDaylight). */
+let daylight = null;             // renderöitävän pintascenen valaistusviitteet
+let dayPhase0 = 0, dayT0 = 0;    // vaihe ja simTime laskeutumishetkellä
+const _sunDir = new THREE.Vector3();
+const _c1 = new THREE.Color(), _c2 = new THREE.Color(), _c3 = new THREE.Color();
+
+function sunPhase(){
+  return dayPhase0 + ((S.simTime - dayT0) / daylight.cfg.dayLength) * Math.PI * 2;
+}
+// kaarirata: nousu idästä (+x), lasku länteen, lakikorkeus ~66°
+function sunDirAt(p, out){ return out.set(Math.cos(p), Math.sin(p), -0.45).normalize(); }
+
+function updateDaylight(){
+  const d = daylight;
+  if (!d) return;
+  sunDirAt(sunPhase(), _sunDir);
+  const elev = _sunDir.y;
+  const dayF = sstep(-0.12, 0.15, elev);
+  // rusko vain ilmakehällisillä, auringon ollessa horisontin tuntumassa
+  const tw = d.twilight ? Math.max(0, 1 - Math.abs(elev) / 0.35) * sstep(-0.22, -0.04, elev) : 0;
+
+  if (d.cfg.sun) d.dl.position.copy(_sunDir);
+  d.dl.intensity = d.baseInt * (d.cfg.sun ? dayF : 0.2 + 0.8 * dayF);
+  if (d.twilight) d.dl.color.copy(_c1.set(0xffffff).lerp(d.twilight, tw * 0.85));
+  if (d.hemi) d.hemi.intensity = d.baseHemi * (0.22 + 0.78 * dayF);
+
+  // taivas ja sumu tummuvat yöksi, rusko värjää horisontin tuntumassa
+  _c1.copy(d.skyNight).lerp(d.skyDay, dayF);
+  if (d.twilight) _c1.lerp(d.twilight, tw * 0.55);
+  d.sc.background.copy(_c1);
+  if (d.sc.fog) {
+    _c2.copy(d.fogNight).lerp(d.fogDay, dayF);
+    if (d.twilight) _c2.lerp(d.twilight, tw * 0.45);
+    d.sc.fog.color.copy(_c2);
+  }
+
+  // aurinkokiekko seuraa rataa ja värjäytyy ruskossa
+  if (d.disc) {
+    d.disc.visible = elev > -0.06;
+    if (d.disc.visible) {
+      d.disc.position.copy(_sunDir).multiplyScalar(7000);
+      d.disc.lookAt(0, 0, 0);
+      if (d.twilight) {
+        const peak = Math.max(d.discDay.r, d.discDay.g, d.discDay.b);
+        _c3.copy(d.twilight).multiplyScalar(peak * 0.85);
+        d.disc.material.color.copy(_c2.copy(d.discDay).lerp(_c3, tw));
+      }
+    }
+  }
+
+  // ilmakehällisten yötähdet häivytetään sisään pimeällä
+  if (d.starsMat && d.cfg.nightStars) d.starsMat.opacity = 0.7 * (1 - dayF);
+}
+
 // 2D-kohina maastoa varten
 function hash2(x, y){ const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
 function vnoise2(x, y){
@@ -86,7 +144,8 @@ export const SURFACE_CONFIGS = {
     sky: 0x000000, fog: null,
     ground: 0x8a8178, ground2: 0x55504a, rock: 0x6e675f,
     hScale: 26, freq: 0.0045,
-    sun: { color: [4.0, 4.0, 3.9], size: 260, dir: [0.55, 0.5, -0.65], intensity: 2.4 },
+    dayLength: 42230,   // aurinkovuorokausi ~176 vrk → käytännössä paikallaan
+    sun: { color: [4.0, 4.0, 3.9], size: 260, intensity: 2.4 },
     hemi: [0x101010, 0x201d16, 0.3], stars: true,
     // todistetusti: tiheä kraatteröinti ja Rupes-jyrkänteet
     features: { craters: 16, scarp: true },
@@ -97,6 +156,8 @@ export const SURFACE_CONFIGS = {
     sky: 0xc08038, fog: { color: 0xb5762f, near: 8, far: 230 },
     ground: 0x8a6038, ground2: 0x5e3f22, rock: 0x75522e,
     hScale: 10, freq: 0.006, rockFlat: 0.35,
+    dayLength: 28020,   // aurinkovuorokausi ~117 vrk; vain usvan kirkkaus elää
+    skyNight: 0x140a02,
     sun: null,
     dirLight: { color: 0xffb060, intensity: 0.8, dir: [0.3, 0.8, -0.4] },
     hemi: [0xd08a40, 0x4a3014, 0.9],
@@ -113,7 +174,9 @@ export const SURFACE_CONFIGS = {
     sky: 0x7fb8e8, fog: { color: 0xcfe2f5, near: 60, far: 1500 },
     ground: 0x4a7a30, ground2: 0x6a6648, rock: 0x8a8578,
     hScale: 18, freq: 0.004,
-    sun: { color: [3.4, 3.3, 3.0], size: 100, dir: [0.5, 0.6, -0.55], intensity: 1.9 },
+    dayLength: 240,     // 24 h → 4 min
+    skyNight: 0x060a13, twilight: 0xff8a50, nightStars: true,
+    sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.9 },
     hemi: [0x9ec8ee, 0x4a5a35, 0.6],
     features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true },
   },
@@ -123,7 +186,9 @@ export const SURFACE_CONFIGS = {
     sky: 0xc89a6e, fog: { color: 0xc28d5e, near: 40, far: 900 },
     ground: 0xb56f3e, ground2: 0x8a4f28, rock: 0x96603a,
     hScale: 24, freq: 0.005,
-    sun: { color: [2.6, 2.5, 2.3], size: 65, dir: [0.45, 0.5, -0.6], intensity: 1.9 },
+    dayLength: 246.6,   // sol 24,66 h → ~4,1 min
+    skyNight: 0x080605, twilight: 0x8898c8, nightStars: true,   // Marsin rusko on sinertävä
+    sun: { color: [2.6, 2.5, 2.3], size: 65, intensity: 1.9 },
     hemi: [0xc89a6e, 0x5a3520, 0.62],
     // todistetusti: Valles Marineris -kanjonit, Olympus Mons, kraatterit ja dyynit
     features: {
@@ -280,27 +345,30 @@ function buildSurfaceScene(name){
     sc.add(trees);
   }
 
-  // valaistus
-  if (cfg.hemi) sc.add(new THREE.HemisphereLight(cfg.hemi[0], cfg.hemi[1], cfg.hemi[2]));
+  // valaistus — auringon suunta ja voimakkuus ajetaan updateDaylightissa
+  let hemi = null;
+  if (cfg.hemi) {
+    hemi = new THREE.HemisphereLight(cfg.hemi[0], cfg.hemi[1], cfg.hemi[2]);
+    sc.add(hemi);
+  }
   const lightDef = cfg.sun ?? cfg.dirLight;
-  const sd = new THREE.Vector3(...lightDef.dir).normalize();
   const dl = new THREE.DirectionalLight(cfg.sun ? 0xffffff : cfg.dirLight.color, lightDef.intensity);
-  dl.position.copy(sd);
+  if (cfg.dirLight) dl.position.copy(new THREE.Vector3(...cfg.dirLight.dir).normalize());
   sc.add(dl);
 
-  // aurinkokiekko (jos näkyvissä)
+  // aurinkokiekko (jos näkyvissä) — paikka päivittyy radan mukana
+  let disc = null;
   if (cfg.sun) {
-    const disc = new THREE.Mesh(
+    disc = new THREE.Mesh(
       new THREE.CircleGeometry(cfg.sun.size, 48),
       new THREE.MeshBasicMaterial({ color: new THREE.Color(...cfg.sun.color), fog: false })
     );
-    disc.position.copy(sd).multiplyScalar(7000);
-    disc.lookAt(0, 0, 0);
     sc.add(disc);
   }
 
-  // tähtitaivas (ilmakehättömät)
-  if (cfg.stars) {
+  // tähtitaivas: ilmakehättömillä aina, ilmakehällisillä öisin
+  let starsMat = null;
+  if (cfg.stars || cfg.nightStars) {
     const n = 1600, p = new Float32Array(n * 3);
     const sv = new THREE.Vector3();
     for (let i = 0; i < n; i++) {
@@ -310,9 +378,23 @@ function buildSurfaceScene(name){
     }
     const sg = new THREE.BufferGeometry();
     sg.setAttribute('position', new THREE.BufferAttribute(p, 3));
-    sc.add(new THREE.Points(sg, new THREE.PointsMaterial({
-      color: 0xffffff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0.7 })));
+    starsMat = new THREE.PointsMaterial({
+      color: 0xffffff, size: 2, sizeAttenuation: false, transparent: true,
+      opacity: cfg.stars ? 0.7 : 0, fog: false });   // fog söisi tähdet ilmakehällisillä
+    sc.add(new THREE.Points(sg, starsMat));
   }
+
+  daylight = {
+    sc, cfg, dl, hemi, disc, starsMat,
+    baseInt: lightDef.intensity,
+    baseHemi: cfg.hemi ? cfg.hemi[2] : 0,
+    skyDay: new THREE.Color(cfg.sky),
+    skyNight: new THREE.Color(cfg.skyNight ?? cfg.sky),
+    fogDay: cfg.fog ? new THREE.Color(cfg.fog.color) : null,
+    fogNight: cfg.fog ? new THREE.Color(cfg.skyNight ?? cfg.fog.color) : null,
+    twilight: cfg.twilight ? new THREE.Color(cfg.twilight) : null,
+    discDay: disc ? disc.material.color.clone() : null,
+  };
   return sc;
 }
 
@@ -345,11 +427,14 @@ function enterSurface(b){
   surfaceScene.add(camera);   // kameran maailmamatriisi päivittyy vain renderöitävän scenen osana
   resetWarp();
   surfX = 0; surfZ = 0;
-  // aurinko selän taakse laskeutuessa, jotta maisema näkyy valaistuna
-  const cfg0 = SURFACE_CONFIGS[b.def.name];
-  const ld = (cfg0.sun ?? cfg0.dirLight).dir;
-  S.yaw = Math.atan2(ld[0], ld[2]);
+  // vuorokausi alkaa aamupäivästä; aurinko selän taakse laskeutuessa,
+  // jotta maisema näkyy valaistuna
+  dayT0 = S.simTime;
+  dayPhase0 = 0.55;
+  sunDirAt(dayPhase0, _sunDir);
+  S.yaw = Math.atan2(_sunDir.x, _sunDir.z);
   S.pitch = 0; S.roll = 0;
+  updateDaylight();
   camera.fov = 65; camera.updateProjectionMatrix();
   S.targetFrac = 0; S.speedFrac = 0;
   bridgeWasOn = document.body.classList.contains('bridge');
@@ -373,11 +458,13 @@ export function exitSurface(){
     if (o.material) Array.isArray(o.material) ? o.material.forEach(m => m.dispose()) : o.material.dispose();
   });
   surfaceScene = null;
+  daylight = null;
   placeNearBody(bodies.indexOf(surfaceBody), 6);
   surfaceBody = null;
 }
 
 export function updateSurface(dt){
+  updateDaylight();
   const running = S.keys.ShiftLeft || S.keys.ShiftRight;
   const sp = running ? 26 : 9;
   let mx = 0, mz = 0;
@@ -410,7 +497,12 @@ export function updateSurface(dt){
   );
 }
 
-// debug-koukkua (__sim.surf) varten
+// debug-koukkua (__sim.surf) varten; setDayPhase: 0 = auringonnousu,
+// π/2 = keskipäivä, π = auringonlasku, 3π/2 = keskiyö
 export function surfDebug(){
-  return { scene: surfaceScene, h: surfHeightFn, x: surfX, z: surfZ };
+  return {
+    scene: surfaceScene, h: surfHeightFn, x: surfX, z: surfZ,
+    dayPhase: daylight ? sunPhase() % (Math.PI * 2) : null,
+    setDayPhase(p){ dayPhase0 = p; dayT0 = S.simTime; updateDaylight(); },
+  };
 }
