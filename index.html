@@ -1,0 +1,2019 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aurinkokuntasimulaattori</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+
+  :root {
+    --hud: #9fd8ff;
+    --hud-dim: rgba(159,216,255,0.55);
+    --panel-bg: rgba(4,12,24,0.62);
+    --panel-border: rgba(120,200,255,0.28);
+  }
+  .panel {
+    position:absolute;
+    color:var(--hud);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size:12px;
+    background:var(--panel-bg);
+    border:1px solid var(--panel-border);
+    border-radius:10px;
+    padding:10px 14px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    text-shadow:0 0 6px rgba(80,170,255,0.45);
+    user-select:none;
+    z-index:10;
+  }
+  #speedPanel { top:16px; left:16px; min-width:230px; }
+  #targetPanel { top:16px; right:16px; min-width:230px; text-align:right; }
+  .panel h3 { margin:0 0 6px 0; font-size:11px; letter-spacing:2px; color:var(--hud-dim); font-weight:600; }
+  .big { font-size:20px; font-weight:700; letter-spacing:1px; }
+  .row { margin-top:4px; }
+  #speedBarWrap { margin-top:8px; height:8px; background:rgba(120,200,255,0.12); border-radius:4px; overflow:hidden; }
+  #speedBar { height:100%; width:0%; background:linear-gradient(90deg,#1f6fb0,#5fd2ff,#fff); transition:width 0.08s linear; }
+  #speedSlider { width:100%; margin-top:8px; accent-color:#5fd2ff; }
+
+  #bodyBar {
+    bottom:16px; left:50%; transform:translateX(-50%);
+    display:flex; gap:6px; padding:8px 10px;
+  }
+  #bodyBar button {
+    background:rgba(20,50,90,0.45);
+    color:var(--hud);
+    border:1px solid var(--panel-border);
+    border-radius:6px;
+    font-family:inherit; font-size:11px;
+    padding:5px 9px; cursor:pointer;
+  }
+  #bodyBar button:hover { background:rgba(60,130,200,0.45); }
+  #bodyBar button.active { background:rgba(95,210,255,0.85); color:#03101f; font-weight:700; }
+
+  #crosshair {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:26px; height:26px; pointer-events:none; z-index:5; opacity:0.8;
+  }
+  #crosshair::before, #crosshair::after {
+    content:""; position:absolute; background:var(--hud);
+    box-shadow:0 0 6px rgba(120,200,255,0.8);
+  }
+  #crosshair::before { left:50%; top:0; width:1px; height:100%; transform:translateX(-50%); }
+  #crosshair::after { top:50%; left:0; height:1px; width:100%; transform:translateY(-50%); }
+
+  .label {
+    position:absolute;
+    color:var(--hud);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size:11px;
+    transform:translate(-50%, -130%);
+    pointer-events:none;
+    white-space:nowrap;
+    text-shadow:0 0 4px #000, 0 0 8px rgba(80,170,255,0.6);
+    z-index:4;
+  }
+  .label .dot { color:var(--hud-dim); }
+  .label.target { color:#aef7c1; font-weight:700; }
+
+  #startOverlay {
+    position:fixed; inset:0; z-index:50;
+    display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at center, rgba(3,10,22,0.55), rgba(0,0,4,0.88));
+    cursor:pointer;
+  }
+  #startCard {
+    color:var(--hud);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    background:var(--panel-bg);
+    border:1px solid var(--panel-border);
+    border-radius:14px;
+    padding:28px 38px;
+    max-width:560px;
+    text-shadow:0 0 6px rgba(80,170,255,0.45);
+  }
+  #startCard h1 { margin:0 0 4px 0; font-size:22px; letter-spacing:3px; }
+  #startCard h2 { margin:0 0 18px 0; font-size:12px; color:var(--hud-dim); font-weight:400; }
+  #startCard table { font-size:12px; border-collapse:collapse; }
+  #startCard td { padding:3px 14px 3px 0; }
+  #startCard td:first-child { color:#aef7c1; }
+  #startCard .go { margin-top:20px; font-size:14px; color:#fff; animation:blink 1.4s infinite; }
+  @keyframes blink { 50% { opacity:0.35; } }
+
+  /* ---- NCC-1701-D komentosilta ---- */
+  #bridge { position:fixed; inset:0; pointer-events:none; z-index:6; }
+  #bridge svg { width:100%; height:100%; display:block; }
+  body:not(.bridge) #bridge { display:none; }
+  body.bridge #speedPanel {
+    top:auto; bottom:11%; left:4%; min-width:0; max-width:34vw;
+    font-size:11px; padding:8px 10px;
+    background:rgba(6,8,14,0.85); border-color:rgba(255,153,102,0.45);
+  }
+  body.bridge #targetPanel {
+    top:auto; bottom:11%; right:4%; min-width:0; max-width:34vw;
+    font-size:11px; padding:8px 10px;
+    background:rgba(6,8,14,0.85); border-color:rgba(153,153,204,0.55);
+  }
+  body.bridge .panel .big { font-size:15px; }
+  body.bridge #hint {
+    left:50%; bottom:auto; top:8.5%; transform:translateX(-50%);
+    background:transparent; border:none; font-size:10px; opacity:0.75;
+    white-space:nowrap;
+    backdrop-filter:none; -webkit-backdrop-filter:none;
+  }
+  body.bridge #bodyBar { bottom:8px; padding:6px 8px; }
+  body.bridge #bodyBar button { font-size:10px; padding:4px 7px; }
+
+  .tpbtn {
+    background:rgba(20,50,90,0.45);
+    color:var(--hud);
+    border:1px solid var(--panel-border);
+    border-radius:6px;
+    font-family:inherit; font-size:11px;
+    padding:4px 8px; cursor:pointer;
+    pointer-events:auto;
+  }
+  .tpbtn:hover { background:rgba(60,130,200,0.45); }
+  .tpbtn:disabled { opacity:0.35; cursor:default; }
+  .tpbtn:disabled:hover { background:rgba(20,50,90,0.45); }
+
+  .led {
+    display:inline-block; width:9px; height:9px; border-radius:50%;
+    background:#5a3030; margin-right:6px; vertical-align:middle;
+    transition:background 0.2s, box-shadow 0.2s;
+  }
+  .led.on { background:#4dff88; box-shadow:0 0 8px rgba(77,255,136,0.9); }
+
+  /* ---- pintamoodi ---- */
+  #surfacePanel { top:16px; left:16px; display:none; max-width:360px; }
+  #surfacePanel #surfInfo { line-height:1.55; color:var(--hud-dim); }
+  body.surface #surfacePanel { display:block; }
+  body.surface #speedPanel, body.surface #targetPanel, body.surface #bodyBar,
+  body.surface #crosshair, body.surface #hint, body.surface #labels { display:none !important; }
+
+  #pausedTag {
+    top:60px; left:50%; transform:translateX(-50%);
+    display:none; font-size:14px; letter-spacing:4px; color:#ffd27f;
+  }
+  #hint { bottom:16px; left:16px; font-size:11px; color:var(--hud-dim); }
+</style>
+</head>
+<body class="bridge">
+<div id="app"></div>
+
+<div id="bridge" aria-hidden="true">
+  <svg viewBox="0 0 1600 900" preserveAspectRatio="none">
+    <defs>
+      <!-- seinät + päänäytön aukko -->
+      <path id="wallShape" fill-rule="evenodd"
+        d="M0,0H1600V900H0Z
+           M276,80 h1048 a46,46 0 0 1 46,46 v468 a46,46 0 0 1 -46,46 H276
+           a46,46 0 0 1 -46,-46 V126 a46,46 0 0 1 46,-46 Z"/>
+      <path id="floorP" d="M0,900 H1600 V768 Q800,694 0,768 Z"/>
+      <linearGradient id="wallGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#5c5042"/>
+        <stop offset="0.5" stop-color="#3b332a"/>
+        <stop offset="0.85" stop-color="#1c1814"/>
+        <stop offset="1" stop-color="#100d0b"/>
+      </linearGradient>
+      <radialGradient id="spill" cx="0.5" cy="0.4" r="0.62">
+        <stop offset="0" stop-color="rgba(115,165,255,0.30)"/>
+        <stop offset="0.6" stop-color="rgba(95,140,230,0.10)"/>
+        <stop offset="1" stop-color="rgba(0,0,0,0)"/>
+      </radialGradient>
+      <linearGradient id="metalV" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#2e3138"/>
+        <stop offset="0.16" stop-color="#7d838f"/>
+        <stop offset="0.36" stop-color="#23252a"/>
+        <stop offset="0.55" stop-color="#5a5f68"/>
+        <stop offset="0.78" stop-color="#191b1f"/>
+        <stop offset="1" stop-color="#3c4047"/>
+      </linearGradient>
+      <radialGradient id="floorGrad" cx="0.5" cy="1" r="0.95">
+        <stop offset="0" stop-color="#332b21"/>
+        <stop offset="0.55" stop-color="#1b1610"/>
+        <stop offset="1" stop-color="#0a0806"/>
+      </radialGradient>
+      <linearGradient id="topGradL" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#36405c"/>
+        <stop offset="1" stop-color="#141821"/>
+      </linearGradient>
+      <linearGradient id="skirtGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#161a24"/>
+        <stop offset="1" stop-color="#06070b"/>
+      </linearGradient>
+      <linearGradient id="dispGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#0d2238"/>
+        <stop offset="1" stop-color="#051018"/>
+      </linearGradient>
+      <radialGradient id="vig" cx="0.5" cy="0.48" r="0.78">
+        <stop offset="0" stop-color="rgba(0,0,0,0)"/>
+        <stop offset="0.62" stop-color="rgba(0,0,0,0)"/>
+        <stop offset="1" stop-color="rgba(0,0,0,0.55)"/>
+      </radialGradient>
+      <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="3.5" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <filter id="blur4"><feGaussianBlur stdDeviation="4"/></filter>
+      <filter id="blur8"><feGaussianBlur stdDeviation="8"/></filter>
+      <filter id="blur12"><feGaussianBlur stdDeviation="12"/></filter>
+      <filter id="carpetF">
+        <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" result="t"/>
+        <feColorMatrix in="t" type="saturate" values="0" result="g"/>
+        <feComposite in="g" in2="SourceGraphic" operator="in"/>
+      </filter>
+
+    </defs>
+
+    <!-- 1. seinät -->
+    <use href="#wallShape" fill="url(#wallGrad)"/>
+    <!-- seinäsaumat -->
+    <g stroke="rgba(0,0,0,0.45)" stroke-width="3">
+      <path d="M152,66 L98,748"/><path d="M212,72 L172,706"/>
+      <path d="M1448,66 L1502,748"/><path d="M1388,72 L1428,706"/>
+    </g>
+    <g stroke="rgba(255,255,255,0.06)" stroke-width="1.5">
+      <path d="M155,66 L101,748"/><path d="M1451,66 L1505,748"/>
+    </g>
+
+    <!-- 2. katto ja kattovalot -->
+    <path d="M0,0H1600V46Q800,112 0,46Z" fill="#1d1813"/>
+    <path d="M0,46 Q800,112 1600,46" stroke="rgba(255,180,94,0.5)" stroke-width="10" fill="none" filter="url(#blur4)"/>
+    <path d="M0,46 Q800,112 1600,46" stroke="#ffb45e" stroke-width="4" fill="none" opacity="0.85"/>
+    <g fill="#ffe9bb" filter="url(#glow)" opacity="0.55">
+      <circle cx="300" cy="28" r="4"/><circle cx="560" cy="40" r="4"/>
+      <circle cx="1040" cy="40" r="4"/><circle cx="1300" cy="28" r="4"/>
+    </g>
+
+    <!-- 4. näytön valo heijastuu sillalle -->
+    <use href="#wallShape" fill="url(#spill)" style="mix-blend-mode:screen"/>
+
+    <!-- 5. lattia + matto -->
+    <use href="#floorP" fill="url(#floorGrad)"/>
+    <use href="#floorP" filter="url(#carpetF)" opacity="0.13" style="mix-blend-mode:overlay"/>
+
+    <!-- 6. päänäytön kehys -->
+    <rect x="206" y="56" width="1188" height="608" rx="64" fill="none" stroke="rgba(0,0,0,0.5)" stroke-width="34" filter="url(#blur8)"/>
+    <rect x="219" y="69" width="1162" height="582" rx="54" fill="none" stroke="url(#metalV)" stroke-width="28"/>
+    <rect x="233" y="83" width="1134" height="554" rx="44" fill="none" stroke="#06070a" stroke-width="10"/>
+    <rect x="233" y="83" width="1134" height="554" rx="44" fill="none" stroke="rgba(100,170,255,0.38)" stroke-width="3" filter="url(#blur4)"/>
+    <path d="M330,56 H1270" stroke="rgba(220,230,245,0.4)" stroke-width="2.5" stroke-linecap="round"/>
+
+    <!-- 7. kaide (puinen, sylinterivarjostus) -->
+    <path d="M60,852 Q800,714 1540,852" stroke="#000" stroke-width="26" fill="none" stroke-linecap="round" opacity="0.45" filter="url(#blur4)"/>
+    <path d="M60,842 Q800,702 1540,842" stroke="#3f2c1d" stroke-width="22" fill="none" stroke-linecap="round"/>
+    <path d="M60,839 Q800,699 1540,839" stroke="#6e4a2f" stroke-width="13" fill="none" stroke-linecap="round"/>
+    <path d="M60,835 Q800,694 1540,835" stroke="#c89a6a" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.8"/>
+
+    <!-- 8. conn-konsoli (vasen) -->
+    <ellipse cx="390" cy="894" rx="210" ry="16" fill="#000" opacity="0.5" filter="url(#blur12)"/>
+    <polygon points="320,700 560,700 560,812 250,812" fill="url(#topGradL)" stroke="#0a0c10" stroke-width="1"/>
+    <polygon points="250,812 560,812 560,900 215,900" fill="url(#skirtGrad)"/>
+    <path d="M320,700 L250,812 L215,900" stroke="#05060a" stroke-width="8" fill="none"/>
+    <path d="M322,702 L253,812" stroke="#4d5b7a" stroke-width="2" fill="none"/>
+    <path d="M320,700 L560,700" stroke="rgba(110,170,255,0.5)" stroke-width="2.5"/>
+    <path d="M250,812 L560,812" stroke="rgba(140,170,220,0.18)" stroke-width="2"/>
+    <g>
+      <rect x="330" y="722" width="70" height="14" rx="7" fill="#33415c"/>
+      <rect x="408" y="722" width="30" height="14" rx="7" fill="#2b3850"/>
+      <rect x="446" y="722" width="52" height="14" rx="7" fill="#3a4a68"/>
+      <rect x="506" y="722" width="34" height="14" rx="7" fill="#2f3d57"/>
+      <rect x="318" y="744" width="44" height="14" rx="7" fill="#2f3d57"/>
+      <rect x="370" y="744" width="84" height="14" rx="7" fill="#3a4a68"/>
+      <rect x="462" y="744" width="60" height="14" rx="7" fill="#2b3850"/>
+      <circle cx="470" cy="786" r="7" fill="#42536f"/>
+      <circle cx="500" cy="786" r="7" fill="#56698a"/>
+    </g>
+    <rect x="318" y="766" width="120" height="38" rx="6" fill="url(#dispGrad)" stroke="#335577" stroke-width="1.5"/>
+    <polyline points="326,796 344,788 362,792 380,780 398,784 416,776 430,778" fill="none" stroke="#6db5ff" stroke-width="1.5" opacity="0.85"/>
+    <rect x="300" y="846" width="180" height="6" rx="3" fill="#2b4a78" opacity="0.8"/>
+
+    <!-- 9. ops-konsoli (oikea) -->
+    <ellipse cx="1210" cy="894" rx="210" ry="16" fill="#000" opacity="0.5" filter="url(#blur12)"/>
+    <polygon points="1040,700 1280,700 1350,812 1040,812" fill="url(#topGradL)" stroke="#0a0c10" stroke-width="1"/>
+    <polygon points="1040,812 1350,812 1385,900 1040,900" fill="url(#skirtGrad)"/>
+    <path d="M1280,700 L1350,812 L1385,900" stroke="#05060a" stroke-width="8" fill="none"/>
+    <path d="M1278,702 L1347,812" stroke="#4d5b7a" stroke-width="2" fill="none"/>
+    <path d="M1040,700 L1280,700" stroke="rgba(110,170,255,0.5)" stroke-width="2.5"/>
+    <path d="M1040,812 L1350,812" stroke="rgba(140,170,220,0.18)" stroke-width="2"/>
+    <g>
+      <rect x="1200" y="722" width="70" height="14" rx="7" fill="#33415c"/>
+      <rect x="1162" y="722" width="30" height="14" rx="7" fill="#2b3850"/>
+      <rect x="1102" y="722" width="52" height="14" rx="7" fill="#3a4a68"/>
+      <rect x="1060" y="722" width="34" height="14" rx="7" fill="#2f3d57"/>
+      <rect x="1238" y="744" width="44" height="14" rx="7" fill="#2f3d57"/>
+      <rect x="1146" y="744" width="84" height="14" rx="7" fill="#3a4a68"/>
+      <rect x="1078" y="744" width="60" height="14" rx="7" fill="#2b3850"/>
+      <circle cx="1130" cy="786" r="7" fill="#42536f"/>
+      <circle cx="1100" cy="786" r="7" fill="#56698a"/>
+    </g>
+    <rect x="1162" y="766" width="120" height="38" rx="6" fill="url(#dispGrad)" stroke="#335577" stroke-width="1.5"/>
+    <polyline points="1170,792 1188,784 1206,790 1224,778 1242,786 1260,774 1274,780" fill="none" stroke="#6db5ff" stroke-width="1.5" opacity="0.85"/>
+    <rect x="1120" y="846" width="180" height="6" rx="3" fill="#2b4a78" opacity="0.8"/>
+
+    <!-- 10. vinjetointi -->
+    <rect x="0" y="0" width="1600" height="900" fill="url(#vig)"/>
+  </svg>
+</div>
+
+<div id="speedPanel" class="panel">
+  <h3>NOPEUS</h3>
+  <div class="big"><span id="speedPct">0.0</span> % c</div>
+  <div class="row"><span id="speedKms">0</span> km/s &nbsp;·&nbsp; γ = <span id="gamma">1.00</span></div>
+  <div id="speedBarWrap"><div id="speedBar"></div></div>
+  <input id="speedSlider" type="range" min="0" max="0.99" step="0.001" value="0">
+  <div class="row" id="frameDrag" style="display:none; color:#aef7c1;"></div>
+</div>
+
+<div id="targetPanel" class="panel">
+  <h3>KOHDE</h3>
+  <div class="big" id="targetName">—</div>
+  <div class="row">etäisyys: <span id="targetDist">—</span></div>
+  <div class="row">ETA: <span id="targetEta">—</span></div>
+  <div class="row" style="margin-top:6px"><span id="orbitLed" class="led"></span><span id="orbitLedText">kiertorata: liian kaukana</span></div>
+  <div class="row" style="margin-top:6px">
+    <button id="btnOrbit" class="tpbtn" disabled>⇒ kiertoradalle · T</button>
+    <button id="btnBeam" class="tpbtn" style="display:none">⇓ pinnalle · G</button>
+  </div>
+</div>
+
+<div id="surfacePanel" class="panel">
+  <h3 id="surfTitle"></h3>
+  <div class="row" id="surfInfo"></div>
+  <div class="row" style="color:#aef7c1; margin-top:8px;">WASD = liiku · Shift = juokse · B = palaa alukselle</div>
+</div>
+
+<div id="bodyBar" class="panel"></div>
+<div id="pausedTag" class="panel">TAUKO</div>
+<div id="hint" class="panel">Esc vapauttaa hiiren · klikkaa palataksesi ohjaukseen · H = ohje</div>
+<div id="crosshair"></div>
+<div id="labels"></div>
+
+<div id="startOverlay">
+  <div id="startCard">
+    <h1>AURINKOKUNTA</h1>
+    <h2>U.S.S. Enterprise NCC-1701-D · matka Neptunukseen 0.99 c ≈ 5 min</h2>
+    <table>
+      <tr><td>Hiiri</td><td>katselusuunta (hiirilukko, tai vedä nappi pohjassa)</td></tr>
+      <tr><td>W / S &nbsp;tai rulla</td><td>nopeus + / − (Shift = nopeampi säätö)</td></tr>
+      <tr><td>Q / E</td><td>kallistus (roll)</td></tr>
+      <tr><td>X &nbsp;/&nbsp; M</td><td>pysäytä / täysi vauhti (0.99 c)</td></tr>
+      <tr><td>0 – 8</td><td>valitse kohde (0 = Aurinko … 8 = Neptunus)</td></tr>
+      <tr><td>F (pidä)</td><td>käänny kohti kohdetta</td></tr>
+      <tr><td>O</td><td>kiertoradat näkyviin/pois</td></tr>
+      <tr><td>V</td><td>komentosilta näkyviin/pois</td></tr>
+      <tr><td>T</td><td>siirry kiertoradalle (vain kohteen läheisyydessä)</td></tr>
+      <tr><td>G</td><td>laskeudu pinnalle (kiviplaneetan kiertoradalla)</td></tr>
+      <tr><td>B</td><td>palaa pinnalta alukselle</td></tr>
+      <tr><td>Lähialue</td><td>planeetan lähellä nopeus skaalautuu välille 1–10 % c</td></tr>
+      <tr><td>P</td><td>tauko</td></tr>
+    </table>
+    <div class="go" id="bootStatus">Ladataan (Three.js)…</div>
+  </div>
+</div>
+
+<script>
+// Käynnistysdiagnostiikka: jos moduuli kaatuu tai jää lataamatta,
+// virhe näytetään aloitusruudussa eikä sivu jää mykäksi.
+window.__simReady = false;
+window.__bootError = function (msg) {
+  var el = document.getElementById('bootStatus');
+  if (el && !window.__simReady) {
+    el.textContent = 'VIRHE: ' + msg;
+    el.style.color = '#ff9090';
+    el.style.animation = 'none';
+  }
+};
+window.addEventListener('error', function (e) {
+  window.__bootError(e.message || 'skriptin lataus epäonnistui');
+});
+window.addEventListener('unhandledrejection', function (e) {
+  window.__bootError((e.reason && e.reason.message) || String(e.reason));
+});
+setTimeout(function () {
+  var el = document.getElementById('bootStatus');
+  if (!window.__simReady && el && el.textContent.indexOf('VIRHE') !== 0) {
+    window.__bootError('moduulien lataus kesti liian kauan — tarkista verkkoyhteys (Three.js ladataan osoitteesta cdn.jsdelivr.net)');
+  }
+}, 15000);
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/* ============================================================
+   Mittakaava
+   1 AU = 1000 yksikköä. Neptunus ~30.07 AU.
+   c valitaan niin, että 0.99 c -matka Maasta Neptunukseen (~29 AU)
+   kestää noin 5 minuuttia.
+   ============================================================ */
+const AU = 1000;
+const C  = (30.07 * AU) / (0.99 * 300);   // ~101.2 yksikköä/s
+const C_KMS = 299792.458;
+
+const DEG = Math.PI / 180;
+const ORBIT_BASE_PERIOD = 360;            // Maan kiertoaika sekunteina (Kepler: T ∝ a^1.5)
+
+const BODIES = [
+  { name:'Aurinko',   a:0,      r:120,  type:'sun' },
+  { name:'Merkurius', a:0.387,  r:1.9,  incl:7.0,  tilt:0.03, spinP:140, phase:2.40, type:'rocky',
+    opts:{ c1:[0.38,0.36,0.34], c2:[0.62,0.59,0.55], c3:[0.22,0.21,0.20], scale:5.0, rugged:1.0 } },
+  { name:'Venus',     a:0.723,  r:4.75, incl:3.4,  tilt:2.6,  spinP:200, phase:4.40, type:'gas',
+    opts:{ c1:[0.93,0.80,0.55], c2:[0.83,0.66,0.40], c3:[0.97,0.91,0.74], bandFreq:1.6, turb:2.6, flow:0.020 },
+    atmo:{ color:[1.0,0.85,0.55], intensity:0.55, power:3.2 } },
+  { name:'Maa',       a:1.0,    r:5.0,  incl:0.0,  tilt:23.4, spinP:80,  phase:0.30, type:'earth',
+    atmo:{ color:[0.30,0.55,1.0], intensity:0.9, power:3.0 } },
+  { name:'Mars',      a:1.524,  r:2.66, incl:1.85, tilt:25.2, spinP:85,  phase:1.20, type:'rocky',
+    opts:{ c1:[0.48,0.21,0.10], c2:[0.70,0.37,0.18], c3:[0.26,0.11,0.06], scale:4.0, rugged:0.8, polar:0.86 },
+    atmo:{ color:[0.85,0.55,0.38], intensity:0.30, power:3.5 } },
+  { name:'Jupiter',   a:5.203,  r:40,   incl:1.3,  tilt:3.1,  spinP:45,  phase:5.50, type:'gas',
+    opts:{ c1:[0.70,0.55,0.38], c2:[0.93,0.87,0.74], c3:[0.46,0.30,0.18], bandFreq:7.0, turb:2.0, flow:0.015,
+           spot:true, spotColor:[0.78,0.32,0.18] },
+    atmo:{ color:[0.9,0.8,0.65], intensity:0.25, power:3.5 } },
+  { name:'Saturnus',  a:9.537,  r:34,   incl:2.49, tilt:26.7, spinP:50,  phase:2.80, type:'gas',
+    opts:{ c1:[0.80,0.69,0.48], c2:[0.95,0.89,0.72], c3:[0.58,0.46,0.29], bandFreq:6.0, turb:1.1, flow:0.010 },
+    rings:{ inner:1.25, outer:2.35 },
+    atmo:{ color:[0.93,0.85,0.65], intensity:0.22, power:3.5 } },
+  { name:'Uranus',    a:19.19,  r:18,   incl:0.77, tilt:97.8, spinP:65,  phase:4.00, type:'gas',
+    opts:{ c1:[0.55,0.80,0.86], c2:[0.66,0.88,0.92], c3:[0.45,0.72,0.82], bandFreq:3.0, turb:0.35, flow:0.006 },
+    atmo:{ color:[0.6,0.9,0.95], intensity:0.30, power:3.5 } },
+  { name:'Neptunus',  a:30.07,  r:17.5, incl:1.77, tilt:28.3, spinP:60,  phase:0.65, type:'gas',
+    opts:{ c1:[0.06,0.12,0.52], c2:[0.16,0.30,0.80], c3:[0.03,0.06,0.30], bandFreq:4.0, turb:0.8, flow:0.018 },
+    atmo:{ color:[0.35,0.5,1.0], intensity:0.40, power:3.3 } },
+];
+
+/* ---------------- Renderer & scene ---------------- */
+function createRenderer(){
+  // yritä useilla kokoonpanoilla: täysi laatu -> ilman antialiasia -> virransäästö
+  const attempts = [
+    { antialias:true,  logarithmicDepthBuffer:true },
+    { antialias:false, logarithmicDepthBuffer:true },
+    { antialias:false, logarithmicDepthBuffer:true, powerPreference:'low-power' },
+  ];
+  for (const opts of attempts) {
+    try { return new THREE.WebGLRenderer(opts); } catch (err) { /* kokeile seuraavaa */ }
+  }
+  // mikään ei onnistunut — selvitä miksi ja neuvo käyttäjää
+  const has2 = !!document.createElement('canvas').getContext('webgl2');
+  const has1 = !!document.createElement('canvas').getContext('webgl');
+  let msg;
+  if (!has2 && !has1) {
+    msg = 'WebGL on poissa käytöstä selaimessa. Korjaus: avaa chrome://settings/system, kytke '
+        + '"Käytä grafiikkakiihdytystä, jos saatavilla" päälle ja käynnistä Chrome uudelleen. '
+        + 'Tarkista sitten chrome://gpu — WebGL- ja WebGL2-rivien pitäisi olla "Hardware accelerated". '
+        + '(WebGL voi myös olla tilapäisesti estetty GPU-virheen jälkeen — pelkkä Chromen uudelleenkäynnistys voi riittää.)';
+  } else if (!has2) {
+    msg = 'Selain tarjoaa vain WebGL 1:n, mutta simulaattori tarvitsee WebGL 2:n. '
+        + 'Päivitä Chrome uusimpaan versioon ja tarkista chrome://gpu (WebGL2-rivi).';
+  } else {
+    msg = 'WebGL2 on tuettu, mutta kontekstin luonti epäonnistui silti. '
+        + 'Sulje muut raskaat WebGL-välilehdet tai käynnistä Chrome uudelleen.';
+  }
+  window.__bootError(msg);
+  throw new Error('WebGL unavailable');
+}
+const renderer = createRenderer();
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 400000);
+
+const composer = new EffectComposer(renderer);
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.65, 0.5, 1.0);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* ---------------- GLSL: yhteiset palat ---------------- */
+const NOISE_GLSL = /* glsl */`
+vec3 mod289(vec3 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+vec4 mod289(vec4 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+vec4 permute(vec4 x){ return mod289(((x*34.0)+1.0)*x); }
+vec4 taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
+float snoise(vec3 v){
+  const vec2 Cn = vec2(1.0/6.0, 1.0/3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i  = floor(v + dot(v, Cn.yyy));
+  vec3 x0 = v - i + dot(i, Cn.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + Cn.xxx;
+  vec3 x2 = x0 - i2 + Cn.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+        i.z + vec4(0.0, i1.z, i2.z, 1.0))
+      + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+      + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0)*2.0 + 1.0;
+  vec4 s1 = floor(b1)*2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+float fbm(vec3 p){
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 5; i++) {
+    v += a * snoise(p);
+    p = p * 2.03 + vec3(7.7);
+    a *= 0.5;
+  }
+  return v;
+}
+float ridged(vec3 p){
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += a * (1.0 - abs(snoise(p)));
+    p = p * 2.1 + vec3(3.1);
+    a *= 0.5;
+  }
+  return v;
+}
+`;
+
+const PLANET_VERT = /* glsl */`
+#include <common>
+#include <logdepthbuf_pars_vertex>
+varying vec3 vN;
+varying vec3 vWP;
+varying vec3 vOP;
+varying vec2 vUv;
+void main(){
+  vOP = normalize(position);
+  vUv = uv;
+  vN = normalize(mat3(modelMatrix) * normal);
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWP = wp.xyz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+  #include <logdepthbuf_vertex>
+}
+`;
+
+const FRAG_HEAD = /* glsl */`
+#include <common>
+#include <logdepthbuf_pars_fragment>
+varying vec3 vN;
+varying vec3 vWP;
+varying vec3 vOP;
+uniform vec3 uSunPos;
+uniform float uTime;
+` + NOISE_GLSL + /* glsl */`
+vec3 sunDirAt(vec3 wp){ return normalize(uSunPos - wp); }
+`;
+
+const shaderMats = [];   // uTime-päivitystä varten
+function registerMat(m){ shaderMats.push(m); return m; }
+function baseUniforms(){
+  return {
+    uSunPos: { value: new THREE.Vector3(0,0,0) },
+    uTime:   { value: 0 },
+  };
+}
+
+/* ---------------- Aurinko ---------------- */
+function makeSunMaterial(){
+  return registerMat(new THREE.ShaderMaterial({
+    uniforms: baseUniforms(),
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    void main(){
+      vec3 p = vOP * 3.5;
+      float n1 = fbm(p + vec3(uTime*0.05, uTime*0.03, 0.0));
+      float n2 = fbm(p * 2.7 - vec3(0.0, uTime*0.08, uTime*0.04));
+      float gran = ridged(p * 7.0 + vec3(uTime*0.15));
+      float temp = clamp(0.62 + 0.45*n1 + 0.30*n2 - 0.28*gran, 0.0, 1.4);
+      vec3 cool = vec3(0.95, 0.30, 0.03);
+      vec3 hot  = vec3(1.00, 0.93, 0.62);
+      vec3 col = mix(cool, hot, temp);
+      // reunatummuma (limb darkening)
+      vec3 V = normalize(cameraPosition - vWP);
+      float mu = clamp(dot(normalize(vN), V), 0.0, 1.0);
+      float limb = 0.45 + 0.55 * pow(mu, 0.55);
+      gl_FragColor = vec4(col * temp * 3.2 * limb, 1.0);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+/* ---------------- Kiviplaneetat ---------------- */
+function makeRockyMaterial(o){
+  const u = baseUniforms();
+  u.uC1 = { value: new THREE.Vector3(...o.c1) };
+  u.uC2 = { value: new THREE.Vector3(...o.c2) };
+  u.uC3 = { value: new THREE.Vector3(...o.c3) };
+  u.uScale  = { value: o.scale  ?? 4.0 };
+  u.uRugged = { value: o.rugged ?? 0.8 };
+  u.uPolar  = { value: o.polar  ?? 2.0 };  // >1 = ei napalakkeja
+  return registerMat(new THREE.ShaderMaterial({
+    uniforms: u,
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    uniform vec3 uC1; uniform vec3 uC2; uniform vec3 uC3;
+    uniform float uScale; uniform float uRugged; uniform float uPolar;
+    void main(){
+      vec3 p = vOP * uScale + vec3(13.7);
+      float h = fbm(p) * 0.6 + uRugged * 0.4 * ridged(p * 2.0);
+      float h2 = fbm(p * 5.0) * 0.5 + 0.5;
+      vec3 col = mix(uC3, uC1, smoothstep(-0.2, 0.5, h));
+      col = mix(col, uC2, smoothstep(0.45, 0.95, h) * 0.8);
+      col *= 0.85 + 0.3 * h2;
+      // napalakit (Mars)
+      float capEdge = uPolar + 0.06 * fbm(p * 3.0);
+      float cap = smoothstep(capEdge, capEdge + 0.05, abs(vOP.y));
+      col = mix(col, vec3(0.95, 0.96, 1.0), cap);
+      vec3 N = normalize(vN);
+      vec3 S = sunDirAt(vWP);
+      float diff = clamp(dot(N, S), 0.0, 1.0);
+      diff = pow(diff, 1.1);
+      vec3 lit = col * (diff * 1.05 + 0.015);
+      gl_FragColor = vec4(lit, 1.0);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+/* ---------------- Kaasujättiläiset (+ Venus) ---------------- */
+function makeGasMaterial(o){
+  const u = baseUniforms();
+  u.uC1 = { value: new THREE.Vector3(...o.c1) };
+  u.uC2 = { value: new THREE.Vector3(...o.c2) };
+  u.uC3 = { value: new THREE.Vector3(...o.c3) };
+  u.uBandFreq = { value: o.bandFreq ?? 6.0 };
+  u.uTurb     = { value: o.turb ?? 1.0 };
+  u.uFlow     = { value: o.flow ?? 0.01 };
+  u.uSpot     = { value: o.spot ? 1.0 : 0.0 };
+  u.uSpotColor= { value: new THREE.Vector3(...(o.spotColor ?? [0.8,0.3,0.2])) };
+  return registerMat(new THREE.ShaderMaterial({
+    uniforms: u,
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    uniform vec3 uC1; uniform vec3 uC2; uniform vec3 uC3;
+    uniform float uBandFreq; uniform float uTurb; uniform float uFlow;
+    uniform float uSpot; uniform vec3 uSpotColor;
+    void main(){
+      float lat = vOP.y;
+      vec3 fp = vOP * vec3(2.2, 5.0, 2.2) + vec3(uTime * uFlow, 0.0, 0.0);
+      float warp = fbm(fp) * uTurb;
+      float band = lat * uBandFreq + warp * 0.55;
+      float t1 = 0.5 + 0.5 * sin(band * 6.2831);
+      t1 = smoothstep(0.12, 0.88, t1);
+      float t2 = 0.5 + 0.5 * sin(band * 2.3 + 1.7);
+      vec3 col = mix(uC1, uC2, t1);
+      col = mix(col, uC3, t2 * 0.6);
+      float streak = fbm(vOP * vec3(3.0, 14.0, 3.0) + vec3(uTime*uFlow*3.0, 0.0, 0.0));
+      col *= 0.92 + 0.13 * streak;
+      // Suuri punainen pilkku (Jupiter)
+      if (uSpot > 0.5) {
+        float lon = atan(vOP.z, vOP.x);
+        float la  = asin(clamp(vOP.y, -1.0, 1.0));
+        vec2 d = vec2((lon - 0.9) * cos(la) / 0.38, (la + 0.38) / 0.17);
+        float sd = length(d);
+        float spot = smoothstep(1.0, 0.45, sd);
+        float swirl = 0.5 + 0.5 * snoise(vec3(d * 3.0, uTime * 0.05));
+        vec3 sc = mix(uSpotColor, uSpotColor * 1.35, swirl);
+        col = mix(col, sc, spot * 0.9);
+      }
+      vec3 N = normalize(vN);
+      vec3 S = sunDirAt(vWP);
+      float diff = clamp(dot(N, S), 0.0, 1.0);
+      diff = pow(diff, 1.05);
+      vec3 lit = col * (diff * 1.02 + 0.012);
+      gl_FragColor = vec4(lit, 1.0);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+/* ---------------- Maa ---------------- */
+function makeEarthMaterial(){
+  return registerMat(new THREE.ShaderMaterial({
+    uniforms: baseUniforms(),
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    void main(){
+      vec3 p = vOP * 1.6 + vec3(5.2);
+      float cont = fbm(p * 1.5);
+      float det  = fbm(p * 7.0);
+      float land = smoothstep(0.02, 0.10, cont);
+      // meri
+      vec3 deepSea = vec3(0.012, 0.05, 0.16);
+      vec3 shallow = vec3(0.05, 0.22, 0.38);
+      vec3 sea = mix(deepSea, shallow, smoothstep(-0.25, 0.02, cont));
+      // maa
+      float lat = abs(vOP.y);
+      vec3 green  = vec3(0.08, 0.26, 0.07);
+      vec3 forest = vec3(0.05, 0.17, 0.05);
+      vec3 sand   = vec3(0.62, 0.52, 0.30);
+      vec3 rock   = vec3(0.38, 0.32, 0.24);
+      vec3 ground = mix(green, forest, smoothstep(-0.3, 0.4, det));
+      ground = mix(ground, sand, smoothstep(0.35, 0.05, lat) * smoothstep(0.1, 0.45, det));
+      ground = mix(ground, rock, smoothstep(0.30, 0.60, cont));
+      // lumi navoilla ja vuorilla
+      float snowLine = 0.72 + 0.10 * fbm(p * 3.0);
+      float snow = smoothstep(snowLine, snowLine + 0.06, lat) + smoothstep(0.55, 0.7, cont) * 0.6;
+      ground = mix(ground, vec3(0.93, 0.95, 1.0), clamp(snow, 0.0, 1.0));
+      vec3 col = mix(sea, ground, land);
+      vec3 N = normalize(vN);
+      vec3 S = sunDirAt(vWP);
+      vec3 V = normalize(cameraPosition - vWP);
+      float ndl = dot(N, S);
+      float diff = pow(clamp(ndl, 0.0, 1.0), 1.1);
+      // auringon kiilto merellä
+      vec3 H = normalize(S + V);
+      float spec = pow(clamp(dot(N, H), 0.0, 1.0), 90.0) * (1.0 - land) * 0.9;
+      // kaupunkien valot yöpuolella
+      float city = smoothstep(0.52, 0.78, fbm(p * 9.0)) * land * smoothstep(0.75, 0.35, lat);
+      float night = smoothstep(0.03, -0.18, ndl);
+      vec3 lights = vec3(1.0, 0.75, 0.35) * city * night * 0.7;
+      // sininen reunakajo päiväpuolella
+      float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.5);
+      vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.5;
+      vec3 lit = col * (diff * 1.08 + 0.012) + spec * diff + lights + atmo;
+      gl_FragColor = vec4(lit, 1.0);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+/* ---------------- Pilvet (Maa) ---------------- */
+function makeCloudMaterial(){
+  return registerMat(new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: baseUniforms(),
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    void main(){
+      vec3 p = vOP * 3.2 + vec3(uTime * 0.004, 0.0, uTime * 0.002);
+      float n = fbm(p) * 0.6 + 0.4 * fbm(p * 3.1);
+      float a = smoothstep(0.08, 0.55, n);
+      vec3 N = normalize(vN);
+      vec3 S = sunDirAt(vWP);
+      float diff = clamp(dot(N, S), 0.0, 1.0);
+      vec3 col = vec3(1.0) * (diff * 1.25 + 0.01);
+      gl_FragColor = vec4(col, a * 0.85);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+/* ---------------- Ilmakehän kajo ---------------- */
+function makeAtmoMaterial(a){
+  const u = baseUniforms();
+  u.uColor = { value: new THREE.Vector3(...a.color) };
+  u.uIntensity = { value: a.intensity };
+  u.uPower = { value: a.power };
+  return registerMat(new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: u,
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    uniform vec3 uColor; uniform float uIntensity; uniform float uPower;
+    void main(){
+      vec3 N = normalize(vN);
+      vec3 V = normalize(cameraPosition - vWP);
+      vec3 S = sunDirAt(vWP);
+      float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), uPower);
+      float day = clamp(dot(N, S) * 0.7 + 0.35, 0.0, 1.0);
+      gl_FragColor = vec4(uColor * rim * day * uIntensity, rim * day);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+/* ---------------- Saturnuksen renkaat ---------------- */
+function makeRingMaterial(innerR, outerR, planetR){
+  const u = baseUniforms();
+  u.uInner = { value: innerR };
+  u.uOuter = { value: outerR };
+  u.uPlanetR = { value: planetR };
+  return registerMat(new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: u,
+    vertexShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    varying vec3 vWP;
+    varying float vR;
+    varying vec3 vCenter;
+    void main(){
+      vR = length(position.xy);
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWP = wp.xyz;
+      vCenter = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+      #include <logdepthbuf_vertex>
+    }`,
+    fragmentShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_fragment>
+    varying vec3 vWP;
+    varying float vR;
+    varying vec3 vCenter;
+    uniform vec3 uSunPos;
+    uniform float uTime;
+    uniform float uInner; uniform float uOuter; uniform float uPlanetR;
+    ` + NOISE_GLSL + /* glsl */`
+    void main(){
+      float t = clamp((vR - uInner) / (uOuter - uInner), 0.0, 1.0);
+      float bands = 0.55 + 0.45 * snoise(vec3(t * 42.0, 0.0, 0.0));
+      bands *= 0.6 + 0.4 * snoise(vec3(t * 9.0, 3.7, 0.0));
+      bands = clamp(bands, 0.0, 1.0);
+      float alpha = bands;
+      alpha *= smoothstep(0.0, 0.05, t) * smoothstep(1.0, 0.93, t);
+      // Cassinin rako
+      alpha *= 0.15 + 0.85 * smoothstep(0.015, 0.05, abs(t - 0.56));
+      // planeetan varjo renkailla
+      vec3 S = normalize(uSunPos - vWP);
+      vec3 rp = vWP - vCenter;
+      float t0 = dot(-rp, S);
+      float shadow = 1.0;
+      if (t0 > 0.0) {
+        vec3 closest = rp + S * t0;
+        shadow = smoothstep(uPlanetR * 0.95, uPlanetR * 1.12, length(closest));
+      }
+      vec3 base = vec3(0.78, 0.69, 0.54);
+      vec3 col = base * (0.45 + 0.65 * bands);
+      col *= 0.04 + 0.96 * shadow;
+      gl_FragColor = vec4(col, alpha * 0.9);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+/* ---------------- Tähtitaivas ---------------- */
+function makeStars(){
+  const group = new THREE.Group();
+  function starField(count, radius, bandiness, size, brightness){
+    const pos = new Float32Array(count * 3);
+    const col = new Float32Array(count * 3);
+    const c = new THREE.Color();
+    for (let i = 0; i < count; i++) {
+      let v = new THREE.Vector3().randomDirection();
+      if (bandiness > 0) v.y *= (1 - bandiness) + Math.random() * 0.25;
+      v.normalize().multiplyScalar(radius * (0.9 + Math.random() * 0.1));
+      pos.set([v.x, v.y, v.z], i*3);
+      const k = Math.random();
+      if (k < 0.10)      c.setRGB(0.65, 0.75, 1.0);   // sininen
+      else if (k < 0.22) c.setRGB(1.0, 0.80, 0.60);   // oranssi
+      else if (k < 0.30) c.setRGB(1.0, 0.65, 0.55);   // punertava
+      else               c.setRGB(1.0, 1.0, 1.0);
+      const b = brightness * (0.25 + Math.pow(Math.random(), 2.5) * 0.75);
+      col.set([c.r * b, c.g * b, c.b * b], i*3);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const m = new THREE.PointsMaterial({ size, sizeAttenuation:false, vertexColors:true,
+      transparent:true, depthWrite:false });
+    const pts = new THREE.Points(g, m);
+    pts.frustumCulled = false;
+    return pts;
+  }
+  group.add(starField(14000, 150000, 0, 1.6, 0.60));     // tausta
+  const band = starField(9000, 150000, 0.86, 1.4, 0.40); // Linnunrata
+  band.rotation.set(0.45, 0.2, 0.9);
+  group.add(band);
+  group.add(starField(350, 150000, 0, 3.2, 1.4));        // kirkkaat tähdet
+  return group;
+}
+scene.add(makeStars());
+
+/* ---------------- Kappaleiden rakentaminen ---------------- */
+const labelsRoot = document.getElementById('labels');
+const bodies = [];
+const orbitLines = new THREE.Group();
+scene.add(orbitLines);
+
+for (const def of BODIES) {
+  const group = new THREE.Group();
+  const tiltGroup = new THREE.Group();
+  group.add(tiltGroup);
+  if (def.tilt) tiltGroup.rotation.z = def.tilt * DEG;
+
+  let mesh, clouds = null;
+  const segs = def.r > 15 ? [128, 96] : [96, 64];
+
+  if (def.type === 'sun') {
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(def.r, 128, 96), makeSunMaterial());
+    // korona-sprite
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 256;
+    const ctx = cv.getContext('2d');
+    const grad = ctx.createRadialGradient(128,128,0, 128,128,128);
+    grad.addColorStop(0.00, 'rgba(255,240,210,1)');
+    grad.addColorStop(0.18, 'rgba(255,190,90,0.55)');
+    grad.addColorStop(0.45, 'rgba(255,120,30,0.16)');
+    grad.addColorStop(1.00, 'rgba(255,80,10,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,256,256);
+    const tex = new THREE.CanvasTexture(cv);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, blending: THREE.AdditiveBlending, depthWrite:false, transparent:true }));
+    sprite.scale.setScalar(def.r * 7);
+    group.add(sprite);
+  } else if (def.type === 'earth') {
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(def.r, ...segs), makeEarthMaterial());
+    clouds = new THREE.Mesh(new THREE.SphereGeometry(def.r * 1.015, 96, 64), makeCloudMaterial());
+    tiltGroup.add(clouds);
+  } else if (def.type === 'gas') {
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(def.r, ...segs), makeGasMaterial(def.opts));
+  } else {
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(def.r, ...segs), makeRockyMaterial(def.opts));
+  }
+  tiltGroup.add(mesh);
+
+  if (def.atmo) {
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(def.r * 1.055, 96, 64), makeAtmoMaterial(def.atmo));
+    tiltGroup.add(shell);
+  }
+  if (def.rings) {
+    const inner = def.r * def.rings.inner;
+    const outer = def.r * def.rings.outer;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 256, 8),
+      makeRingMaterial(inner, outer, def.r));
+    ring.rotation.x = -Math.PI / 2;
+    tiltGroup.add(ring);
+  }
+
+  // kiertoradan viiva
+  if (def.a > 0) {
+    const pts = [];
+    for (let i = 0; i <= 256; i++) {
+      const a = (i / 256) * Math.PI * 2;
+      pts.push(new THREE.Vector3(Math.cos(a) * def.a * AU, 0, Math.sin(a) * def.a * AU));
+    }
+    const og = new THREE.BufferGeometry().setFromPoints(pts);
+    const line = new THREE.Line(og, new THREE.LineBasicMaterial({
+      color: 0x3a6f9f, transparent: true, opacity: 0.30 }));
+    if (def.incl) line.rotation.x = def.incl * DEG;
+    orbitLines.add(line);
+  }
+
+  // nimilappu
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.innerHTML = `<span class="dot">◦</span> ${def.name}`;
+  labelsRoot.appendChild(label);
+
+  scene.add(group);
+  bodies.push({
+    def, group, mesh, clouds, label,
+    angVel: def.a > 0 ? (2 * Math.PI) / (ORBIT_BASE_PERIOD * Math.pow(def.a, 1.5)) : 0,
+    spinVel: def.spinP ? (2 * Math.PI) / def.spinP : 0.02,
+  });
+}
+
+/* ---------------- NASA-kuvamateriaaliin perustuvat pintakartat ---------------- */
+const TEX_EARTH   = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/textures/planets/';
+const TEX_PLANETS = 'https://cdn.jsdelivr.net/gh/jeromeetienne/threex.planets@master/images/';
+const PLANET_TEXTURES = {
+  Merkurius: TEX_PLANETS + 'mercurymap.jpg',
+  Venus:     TEX_PLANETS + 'venusmap.jpg',
+  Mars:      TEX_PLANETS + 'marsmap1k.jpg',
+  Jupiter:   TEX_PLANETS + 'jupitermap.jpg',
+  Saturnus:  TEX_PLANETS + 'saturnmap.jpg',
+  Uranus:    TEX_PLANETS + 'uranusmap.jpg',
+  Neptunus:  TEX_PLANETS + 'neptunemap.jpg',
+};
+
+const texLoader = new THREE.TextureLoader();
+function loadTex(url){
+  return new Promise((resolve, reject) => {
+    texLoader.load(url, (t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      resolve(t);
+    }, undefined, reject);
+  });
+}
+
+function makeTexturedMaterial(map){
+  const u = baseUniforms();
+  u.uMap = { value: map };
+  return registerMat(new THREE.ShaderMaterial({
+    uniforms: u,
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    uniform sampler2D uMap;
+    varying vec2 vUv;
+    void main(){
+      vec3 col = texture2D(uMap, vUv).rgb;
+      vec3 N = normalize(vN);
+      vec3 S = sunDirAt(vWP);
+      float diff = pow(clamp(dot(N, S), 0.0, 1.0), 1.05);
+      vec3 lit = col * (diff * 1.12 + 0.015);
+      gl_FragColor = vec4(lit, 1.0);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+function makeTexturedEarthMaterial(day, night, specMask){
+  const u = baseUniforms();
+  u.uMap = { value: day };
+  u.uNight = { value: night };
+  u.uSpecMap = { value: specMask };
+  return registerMat(new THREE.ShaderMaterial({
+    uniforms: u,
+    vertexShader: PLANET_VERT,
+    fragmentShader: FRAG_HEAD + /* glsl */`
+    uniform sampler2D uMap;
+    uniform sampler2D uNight;
+    uniform sampler2D uSpecMap;
+    varying vec2 vUv;
+    void main(){
+      vec3 day = texture2D(uMap, vUv).rgb;
+      vec3 night = texture2D(uNight, vUv).rgb;
+      float water = texture2D(uSpecMap, vUv).r;
+      vec3 N = normalize(vN);
+      vec3 S = sunDirAt(vWP);
+      vec3 V = normalize(cameraPosition - vWP);
+      float ndl = dot(N, S);
+      float diff = pow(clamp(ndl, 0.0, 1.0), 1.1);
+      // auringon kiilto merellä
+      vec3 H = normalize(S + V);
+      float spec = pow(clamp(dot(N, H), 0.0, 1.0), 80.0) * water;
+      // kaupunkien valot yöpuolella
+      float nightSide = smoothstep(0.05, -0.18, ndl);
+      vec3 lights = night * vec3(1.0, 0.88, 0.65) * nightSide * 1.1;
+      // sininen reunakajo päiväpuolella
+      float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.5);
+      vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.5;
+      vec3 lit = day * (diff * 1.15 + 0.01) + spec * diff * 0.7 + lights + atmo;
+      gl_FragColor = vec4(lit, 1.0);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+}
+
+// lataa kartat taustalla; epäonnistuessa proseduraalinen pinta jää varalle
+for (const b of bodies) {
+  if (b.def.type === 'earth') {
+    Promise.all([
+      loadTex(TEX_EARTH + 'earth_atmos_2048.jpg'),
+      loadTex(TEX_EARTH + 'earth_lights_2048.png'),
+      loadTex(TEX_EARTH + 'earth_specular_2048.jpg'),
+    ]).then(([d, n, s]) => {
+      const old = b.mesh.material;
+      b.mesh.material = makeTexturedEarthMaterial(d, n, s);
+      old.dispose();
+    }).catch(() => {});
+  } else if (PLANET_TEXTURES[b.def.name]) {
+    loadTex(PLANET_TEXTURES[b.def.name]).then((t) => {
+      const old = b.mesh.material;
+      b.mesh.material = makeTexturedMaterial(t);
+      old.dispose();
+    }).catch(() => {});
+  }
+}
+
+function bodyPosition(b, t, out){
+  if (b.def.a === 0) return out.set(0, 0, 0);
+  const ang = b.def.phase + b.angVel * t;
+  const d = b.def.a * AU;
+  out.set(Math.cos(ang) * d, 0, Math.sin(ang) * d);
+  if (b.def.incl) out.applyAxisAngle(new THREE.Vector3(1,0,0), b.def.incl * DEG);
+  return out;
+}
+
+/* ---------------- Tila & ohjaus ---------------- */
+let simTime = 0;
+let paused = false;
+let dragBody = null, dragWeight = 0;
+let effFrac = 0;   // todellinen nopeus (osuus c:stä) lähialuetila huomioiden
+let yaw = 0, pitch = 0, roll = 0;
+let speedFrac = 0, targetFrac = 0;
+let targetIdx = 8;   // Neptunus oletuskohteena
+const keys = {};
+
+// aloituspaikka: Maan lähellä, katse kohti Maata
+function placeNearBody(idx, distMult = 3.5){
+  const b = bodies[idx];
+  const bp = bodyPosition(b, simTime, new THREE.Vector3());
+  // kamera kappaleen aurinkopuolelle, jotta valaistu puoli näkyy
+  const sunward = bp.lengthSq() > 1 ? bp.clone().normalize().negate() : new THREE.Vector3(1, 0, 0);
+  const off = sunward.multiplyScalar(b.def.r * distMult)
+    .add(new THREE.Vector3(0, b.def.r * 0.7, 0));
+  camera.position.copy(bp).add(off);
+  camera.lookAt(bp);
+  const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+  yaw = e.y; pitch = e.x; roll = 0;
+}
+placeNearBody(3);
+
+let started = false;
+let lockFailed = false;
+let dragging = false;
+let lastMX = 0, lastMY = 0;
+
+function setHint(msg){ document.getElementById('hint').textContent = msg; }
+function onLockFailed(){
+  if (lockFailed) return;
+  lockFailed = true;
+  setHint('Hiirilukko ei käytettävissä — käännä katsetta vetämällä hiirellä (nappi pohjassa)');
+}
+function tryPointerLock(){
+  if (lockFailed) return;
+  try {
+    const p = renderer.domElement.requestPointerLock();
+    if (p && typeof p.catch === 'function') p.catch(onLockFailed);
+  } catch (err) { onLockFailed(); }
+}
+document.addEventListener('pointerlockerror', onLockFailed);
+
+const overlay = document.getElementById('startOverlay');
+overlay.addEventListener('click', () => {
+  overlay.style.display = 'none';
+  if (!started) { started = true; placeNearBody(3); }
+  tryPointerLock();
+});
+
+renderer.domElement.addEventListener('click', () => {
+  if (overlay.style.display === 'none') tryPointerLock();
+});
+
+// varajärjestelmä: katselu hiirellä vetämällä, jos hiirilukkoa ei saada
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (e.button === 0) { dragging = true; lastMX = e.clientX; lastMY = e.clientY; }
+});
+addEventListener('mouseup', () => { dragging = false; });
+addEventListener('blur', () => { dragging = false; });
+
+document.addEventListener('mousemove', (e) => {
+  const locked = document.pointerLockElement === renderer.domElement;
+  let dx, dy;
+  if (locked) {
+    dx = e.movementX; dy = e.movementY;
+  } else if (dragging) {
+    // movementX/Y ei ole luotettava ilman lukkoa kaikissa selaimissa
+    dx = e.clientX - lastMX; dy = e.clientY - lastMY;
+    lastMX = e.clientX; lastMY = e.clientY;
+  } else {
+    return;
+  }
+  yaw   -= dx * 0.0021;
+  pitch -= dy * 0.0021;
+  pitch = Math.max(-1.553, Math.min(1.553, pitch));
+});
+addEventListener('wheel', (e) => {
+  targetFrac = clamp01(targetFrac - Math.sign(e.deltaY) * 0.02);
+}, { passive: true });
+
+function clamp01(v){ return Math.max(0, Math.min(0.99, v)); }
+
+addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (e.code === 'KeyX') targetFrac = 0;
+  if (e.code === 'KeyM') targetFrac = 0.99;
+  if (e.code === 'KeyP') {
+    paused = !paused;
+    document.getElementById('pausedTag').style.display = paused ? 'block' : 'none';
+  }
+  if (e.code === 'KeyO') orbitLines.visible = !orbitLines.visible;
+  if (e.code === 'KeyH') {
+    overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+  }
+  if (mode === 'space') {
+    if (e.code === 'KeyV') document.body.classList.toggle('bridge');
+    if (e.code === 'KeyT') teleportToOrbit();
+    if (e.code === 'KeyG') tryBeamDown();
+    if (/^Digit[0-8]$/.test(e.code)) setTarget(parseInt(e.code.slice(5), 10));
+  } else {
+    if (e.code === 'KeyB') exitSurface();
+  }
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+const slider = document.getElementById('speedSlider');
+slider.addEventListener('input', () => { targetFrac = parseFloat(slider.value); });
+
+/* kohdenapit */
+const bodyBar = document.getElementById('bodyBar');
+const bodyBtns = [];
+bodies.forEach((b, i) => {
+  const btn = document.createElement('button');
+  btn.textContent = `${i} ${b.def.name}`;
+  btn.addEventListener('click', () => setTarget(i));
+  bodyBar.appendChild(btn);
+  bodyBtns.push(btn);
+});
+function setTarget(i){
+  targetIdx = i;
+  bodyBtns.forEach((b, j) => b.classList.toggle('active', j === i));
+}
+setTarget(targetIdx);
+
+/* ---------------- Warp-efekti ---------------- */
+scene.add(camera);   // jotta kameraan kiinnitetyt efektit renderöityvät
+const warpGroup = new THREE.Group();
+warpGroup.visible = false;
+camera.add(warpGroup);
+
+// plasmatunnelin kuori: huojuvat kohinafilamentit värigradientilla
+function makeWarpShellMaterial(phase, speedMul, gain){
+  const m = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uStrength: { value: 0 },
+      uSpeed: { value: 3 },
+      uPhase: { value: phase },
+      uSpeedMul: { value: speedMul },
+      uGain: { value: gain },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.BackSide,
+    vertexShader: /* glsl */`
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec2 vUv;
+      varying float vUp;
+      void main(){
+        vUv = uv;
+        // pystysuuntakomponentti ruutukoordinaateissa (kuori on kameran lapsi):
+        // 1 suoraan ylä-/alapuolella, 0 sivuilla — slit-scan-valotasojen painotus
+        vUp = abs(normalize(position.xy).y);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */`
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      varying vec2 vUv;
+      varying float vUp;
+      uniform float uTime; uniform float uStrength; uniform float uSpeed;
+      uniform float uPhase; uniform float uSpeedMul; uniform float uGain;
+      ` + NOISE_GLSL + /* glsl */`
+      void main(){
+        float t = uTime;
+        float ang = vUv.x * 6.2831853;
+        float z = vUv.y;
+        float sp = uSpeed * uSpeedMul;
+        // jaksolliset ympyräkoordinaatit — ei saumaa UV:n rajalla
+        vec2 cu = vec2(cos(ang), sin(ang));
+        // hyvin loiva huojunta — slit-scan on geometrinen, ei pyörteinen
+        float wob = snoise(vec3(cu * 0.8 + uPhase, z * 2.0 - t * 0.35)) * 0.09;
+        vec2 c2 = vec2(cos(ang + wob), sin(ang + wob));
+        // pitkät valoraidat: tiheä kulmajako, matala z-taajuus → z-suuntaan venyneet juovat
+        float band = 0.5 + 0.5 * snoise(vec3(c2 * 9.0 + uPhase, z * 0.8 - t * sp));
+        band = pow(clamp(band * 1.32, 0.0, 1.0), 7.0);
+        // leveämmät valovirrat samaan suuntaan
+        float flow = 0.5 + 0.5 * snoise(vec3(c2 * 3.2 - uPhase, z * 0.5 - t * sp * 0.6));
+        flow = pow(clamp(flow * 1.15, 0.0, 1.0), 4.0);
+        // valotasokäytävä: kirkkaus keskittyy ylä- ja alapintaan, sivut jäävät hämäriksi
+        float wall = mix(0.18, 1.0, pow(vUp, 2.5));
+        // hitaasti vaeltavat spektrin värivaiheet (cos-paletti); kulkee myös syvyyden mukana
+        float hueT = t * 0.045 + uPhase * 0.12 + z * 0.30
+                   + snoise(vec3(c2 * 0.6, z * 1.2 - t * 0.4)) * 0.10;
+        vec3 base = 0.5 + 0.5 * cos(6.2831853 * (hueT + vec3(0.0, 0.33, 0.67)));
+        base = base * base * 1.25;   // kylläisemmät, syvemmät sävyt
+        vec3 col = base * (band * 1.05 + flow * 0.22) * wall;
+        col += vec3(1.0, 0.98, 0.95) * pow(band, 3.0) * pow(vUp, 3.0) * 0.45;  // valkoiset ytimet valotasoissa
+        // häivytys tunnelin päissä — keskinäkymä jää avoimeksi kohti katoamispistettä
+        float fade = smoothstep(0.02, 0.30, z) * smoothstep(1.0, 0.45, z);
+        col *= fade * uStrength * uGain;
+        gl_FragColor = vec4(col, 1.0);
+        #include <logdepthbuf_fragment>
+      }`,
+  });
+  return registerMat(m);
+}
+
+const warpShellMats = [
+  makeWarpShellMaterial(0.0, 1.0, 0.45),   // sisempi: nopea ja kirkas
+  makeWarpShellMaterial(4.7, 0.55, 0.18),  // ulompi: hidas ja utuinen
+];
+{
+  const giInner = new THREE.CylinderGeometry(10, 50, 420, 72, 32, true);
+  giInner.rotateX(-Math.PI / 2);
+  const inner = new THREE.Mesh(giInner, warpShellMats[0]);
+  inner.position.z = -130;
+  inner.frustumCulled = false;
+  warpGroup.add(inner);
+  const giOuter = new THREE.CylinderGeometry(18, 78, 480, 72, 32, true);
+  giOuter.rotateX(-Math.PI / 2);
+  const outer = new THREE.Mesh(giOuter, warpShellMats[1]);
+  outer.position.z = -140;
+  outer.frustumCulled = false;
+  warpGroup.add(outer);
+}
+
+// tähtijuovat liukuvärillä (kirkas kärki, violetti häntä)
+const WARP_N = 360;
+const warpZ  = new Float32Array(WARP_N);
+const warpXY = new Float32Array(WARP_N * 2);
+const warpPos = new Float32Array(WARP_N * 6);
+const warpCol = new Float32Array(WARP_N * 6);
+for (let i = 0; i < WARP_N; i++) {
+  const a = Math.random() * Math.PI * 2;
+  const r = 5 + Math.random() * 38;
+  warpXY[i * 2]     = Math.cos(a) * r;
+  warpXY[i * 2 + 1] = Math.sin(a) * r;
+  warpZ[i] = -210 + Math.random() * 220;
+  const o = i * 6;
+  // sävy spektrin yli (sama cos-paletti kuin kuorissa) — kärki lähes valkoinen, häntä kylläinen
+  const h = Math.random();
+  const cr = 0.5 + 0.5 * Math.cos(2 * Math.PI * h);
+  const cg = 0.5 + 0.5 * Math.cos(2 * Math.PI * (h + 0.33));
+  const cb = 0.5 + 0.5 * Math.cos(2 * Math.PI * (h + 0.67));
+  warpCol[o]     = 0.65 + cr * 0.35; warpCol[o + 1] = 0.65 + cg * 0.35; warpCol[o + 2] = 0.65 + cb * 0.35;
+  warpCol[o + 3] = cr * 0.60;        warpCol[o + 4] = cg * 0.60;        warpCol[o + 5] = cb * 0.60;
+}
+const warpGeo = new THREE.BufferGeometry();
+warpGeo.setAttribute('position', new THREE.BufferAttribute(warpPos, 3));
+warpGeo.setAttribute('color', new THREE.BufferAttribute(warpCol, 3));
+const warpMat = new THREE.LineBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const warpLines = new THREE.LineSegments(warpGeo, warpMat);
+warpLines.frustumCulled = false;
+warpGroup.add(warpLines);
+
+let warpStrength = 0;
+let prevEffFrac = 0;
+function updateWarp(dt){
+  // voimakkuus skaalautuu kiihtyvyyden mukaan: raju kiihdytys = kirkas efekti,
+  // kevyt kiihdytys = himmeä. Tasaisessa vauhdissa häipyy ~3 sekunnissa.
+  const accelRate = Math.max(0, (effFrac - prevEffFrac) / Math.max(dt, 1e-4));
+  prevEffFrac = effFrac;
+  const accelNorm = Math.min(1, accelRate / 0.9);   // ~0.9/s (M-näppäin) antaa täyden tehon
+  const base = Math.max(0, Math.min(1, (effFrac - 0.10) / 0.20)) * (1 - dragWeight);
+  const target = base * accelNorm;
+  const rate = target > warpStrength ? 5 : 1.2;   // nopea syttyminen, pehmeä häipyminen
+  warpStrength += (target - warpStrength) * (1 - Math.exp(-dt * rate));
+  if (warpStrength < 0.02) { warpGroup.visible = false; return; }
+  warpGroup.visible = true;
+  warpMat.opacity = Math.min(0.85, warpStrength);
+  for (const m of warpShellMats) {
+    m.uniforms.uStrength.value = warpStrength;
+    m.uniforms.uSpeed.value = 2.0 + effFrac * 6.0;
+  }
+  // kiihdytys venyttää juovia
+  const accel = targetFrac > speedFrac + 0.005 ? 1.7 : 1.0;
+  const speedZ = 80 + effFrac * 900;
+  const len = (3 + effFrac * 28) * accel;
+  for (let i = 0; i < WARP_N; i++) {
+    warpZ[i] += speedZ * dt;
+    if (warpZ[i] > 10) warpZ[i] -= 230;
+    const x = warpXY[i * 2], y = warpXY[i * 2 + 1];
+    const o = i * 6;
+    warpPos[o] = x;     warpPos[o + 1] = y; warpPos[o + 2] = warpZ[i];
+    warpPos[o + 3] = x; warpPos[o + 4] = y; warpPos[o + 5] = warpZ[i] - len;
+  }
+  warpGeo.attributes.position.needsUpdate = true;
+}
+
+/* ---------------- Pintamoodi: teleporttaus planeetoille ---------------- */
+const ROCKY = new Set(['Merkurius', 'Venus', 'Maa', 'Mars']);
+let mode = 'space';
+let surfaceBody = null;
+let bridgeWasOn = true;
+let surfX = 0, surfZ = 0;
+let surfaceScene = null;
+let surfHeightFn = null;
+let bobPhase = 0, bobAmp = 0;
+
+// 2D-kohina maastoa varten
+function hash2(x, y){ const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
+function vnoise2(x, y){
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm2(x, y, oct){
+  let val = 0, amp = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) { val += amp * vnoise2(x * f, y * f); f *= 2.07; amp *= 0.5; }
+  return val;
+}
+function ridged2(x, y, oct){
+  let val = 0, amp = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) { val += amp * (1 - Math.abs(vnoise2(x * f, y * f) * 2 - 1)); f *= 2.13; amp *= 0.5; }
+  return val;
+}
+function sstep(a, b, x){
+  x = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return x * x * (3 - 2 * x);
+}
+// jaksollinen arvokohina saumatonta tekstuuria varten
+function vnoiseP(x, y, P){
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const w = (a) => ((a % P) + P) % P;
+  const a = hash2(w(xi), w(yi)), b = hash2(w(xi + 1), w(yi)),
+        c = hash2(w(xi), w(yi + 1)), d = hash2(w(xi + 1), w(yi + 1));
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+// harmaasävyinen pintadetaljitekstuuri (toistuu saumattomasti, jaetaan kaikille planeetoille)
+let _detailTex = null;
+function getDetailTexture(){
+  if (_detailTex) return _detailTex;
+  const S = 512;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(S, S);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      let v = 0, amp = 0.5, per = 8;
+      for (let o = 0; o < 4; o++) { v += amp * vnoiseP(x * per / S, y * per / S, per); per *= 2; amp *= 0.5; }
+      let g = 0.62 + 0.40 * (v / 0.9375);
+      const sp = hash2(x * 3 + 17, y * 3 + 29);
+      if (sp > 0.986) g *= 0.55;        // tummia pieniä kiviä
+      else if (sp < 0.012) g *= 1.22;   // vaaleita jyviä
+      const b = Math.min(255, (g * 255) | 0);
+      const i = (y * S + x) * 4;
+      img.data[i] = b; img.data[i + 1] = b; img.data[i + 2] = b; img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(56, 56);
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  _detailTex = t;
+  return t;
+}
+
+// olosuhteet nykytietämyksen mukaan
+const SURFACE_CONFIGS = {
+  Merkurius: {
+    title: 'MERKURIUS — PINTA',
+    info: 'Ei kaasukehää: taivas on pikimusta keskellä päivääkin ja Aurinko näkyy ~2,5× suurempana kuin Maasta. Pinta +430 °C päivällä, −180 °C yöllä. Kuun pintaa muistuttavaa regoliittia ja kraattereita.',
+    sky: 0x000000, fog: null,
+    ground: 0x8a8178, ground2: 0x55504a, rock: 0x6e675f,
+    hScale: 26, freq: 0.0045,
+    sun: { color: [4.0, 4.0, 3.9], size: 260, dir: [0.55, 0.5, -0.65], intensity: 2.4 },
+    hemi: [0x101010, 0x201d16, 0.3], stars: true,
+    // todistetusti: tiheä kraatteröinti ja Rupes-jyrkänteet
+    features: { craters: 16, scarp: true },
+  },
+  Venus: {
+    title: 'VENUS — PINTA',
+    info: '92 baarin hiilidioksidikehä, +465 °C. Rikkihappopilvet 50 km ylempänä päästävät läpi vain himmeän oranssin hämärän, eikä Aurinkoa erota. Venera-luotainten kuvissa basalttilaattoja — ainoat kuvat Venuksen pinnalta.',
+    sky: 0xc08038, fog: { color: 0xb5762f, near: 8, far: 230 },
+    ground: 0x8a6038, ground2: 0x5e3f22, rock: 0x75522e,
+    hScale: 10, freq: 0.006, rockFlat: 0.35,
+    sun: null,
+    dirLight: { color: 0xffb060, intensity: 0.8, dir: [0.3, 0.8, -0.4] },
+    hemi: [0xd08a40, 0x4a3014, 0.9],
+    // todistetusti: kilpitulivuoria ja repeämälaaksoja, vain vähän kraattereita
+    features: {
+      craters: 3,
+      volcanoes: [{ x: 520, z: -680, R: 480, H: 75 }, { x: -700, z: 300, R: 380, H: 55 }],
+      canyon: { width: 0.035, depth: 20 },
+    },
+  },
+  Maa: {
+    title: 'MAA — PINTA',
+    info: 'Typpi-happikehä, 1 bar, keskilämpötila +15 °C. Ainoa tunnettu planeetta, jonka pinnalla on nestemäistä vettä ja elämää.',
+    sky: 0x7fb8e8, fog: { color: 0xcfe2f5, near: 60, far: 1500 },
+    ground: 0x4a7a30, ground2: 0x6a6648, rock: 0x8a8578,
+    hScale: 18, freq: 0.004,
+    sun: { color: [3.4, 3.3, 3.0], size: 100, dir: [0.5, 0.6, -0.55], intensity: 1.9 },
+    hemi: [0x9ec8ee, 0x4a5a35, 0.6],
+    features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true },
+  },
+  Mars: {
+    title: 'MARS — PINTA',
+    info: 'Ohut 0,006 baarin CO₂-kehä, keskilämpötila −60 °C. Pöly värjää taivaan voinkeltaiseksi ja Aurinko näkyy ⅔-kokoisena, kalpeana kiekkona. Ruosteenpunaista kivikkoa kuten Curiosity-mönkijän kuvissa.',
+    sky: 0xc89a6e, fog: { color: 0xc28d5e, near: 40, far: 900 },
+    ground: 0xb56f3e, ground2: 0x8a4f28, rock: 0x96603a,
+    hScale: 24, freq: 0.005,
+    sun: { color: [2.6, 2.5, 2.3], size: 65, dir: [0.45, 0.5, -0.6], intensity: 1.9 },
+    hemi: [0xc89a6e, 0x5a3520, 0.62],
+    // todistetusti: Valles Marineris -kanjonit, Olympus Mons, kraatterit ja dyynit
+    features: {
+      craters: 7,
+      canyon: { width: 0.05, depth: 45 },
+      mountains: { amp: 40, maskF: 0.0006 },
+      volcanoes: [{ x: -820, z: -720, R: 540, H: 130 }],
+      dunes: true,
+    },
+  },
+};
+
+function makeCraters(n, seed){
+  const list = [];
+  for (let i = 0; i < n; i++) {
+    let x = (hash2(i + seed, 5) - 0.5) * 2100;
+    let z = (hash2(i + seed, 6) - 0.5) * 2100;
+    if (Math.hypot(x, z) < 220) { x += 350; z -= 300; }   // ei laskeutumispisteeseen
+    list.push({ x, z, r: 30 + hash2(i + seed, 7) * 95, depth: 4 + hash2(i + seed, 8) * 9 });
+  }
+  return list;
+}
+
+function buildSurfaceScene(name){
+  const cfg = SURFACE_CONFIGS[name];
+  const sc = new THREE.Scene();
+  sc.background = new THREE.Color(cfg.sky);
+  if (cfg.fog) sc.fog = new THREE.Fog(cfg.fog.color, cfg.fog.near, cfg.fog.far);
+
+  const freq = cfg.freq, hs = cfg.hScale;
+  const F = cfg.features || {};
+  const craters = F.craters ? makeCraters(F.craters, name.length * 13) : null;
+  surfHeightFn = (x, z) => {
+    let h = (fbm2(x * freq, z * freq, 5) - 0.5) * 2 * hs
+          + (fbm2(x * freq * 6 + 9, z * freq * 6 + 9, 3) - 0.5) * hs * 0.22;
+    if (F.mountains) {
+      const m = F.mountains;
+      const mask = Math.pow(Math.max(0, (fbm2(x * m.maskF + 11, z * m.maskF + 4, 2) - 0.5) / 0.5), 2);
+      if (mask > 0.001) h += mask * ridged2(x * 0.0035, z * 0.0035, 4) * m.amp;
+    }
+    if (F.canyon) {
+      const d = Math.abs(vnoise2(x * 0.0006 + 3.7, z * 0.0006 + 9.1) - 0.5);
+      const msk = 1 - sstep(0, F.canyon.width, d);
+      if (msk > 0) h -= msk * msk * F.canyon.depth;
+    }
+    if (F.volcanoes) for (const v of F.volcanoes) {
+      const d = Math.hypot(x - v.x, z - v.z) / v.R;
+      if (d < 1) {
+        let vh = Math.pow(1 - d, 1.6) * v.H;
+        if (d < 0.14) vh -= (1 - d / 0.14) * v.H * 0.25;   // kaldera
+        h += vh;
+      }
+    }
+    if (craters) for (const c of craters) {
+      const d = Math.hypot(x - c.x, z - c.z) / c.r;
+      if (d < 1.7) {
+        h += -Math.max(0, 1 - d * d) * c.depth
+           + Math.exp(-((d - 1.05) * (d - 1.05)) / 0.02) * c.depth * 0.4;
+      }
+    }
+    if (F.scarp) h += sstep(0.50, 0.53, vnoise2(x * 0.00045 + 7.3, z * 0.00045 + 2.2)) * 9;
+    if (F.dunes) h += 0.45 * Math.sin(x * 0.055 + fbm2(x * 0.0025 + 1, z * 0.0025 + 1, 2) * 7);
+    return h;
+  };
+
+  // maasto
+  const g = new THREE.PlaneGeometry(2600, 2600, 250, 250);
+  g.rotateX(-Math.PI / 2);
+  const pos = g.attributes.position;
+  const cA = new THREE.Color(cfg.ground), cB = new THREE.Color(cfg.ground2);
+  const colors = new Float32Array(pos.count * 3);
+  const cc = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = surfHeightFn(x, z);
+    pos.setY(i, h);
+    const t = Math.min(1, Math.max(0, fbm2(x * 0.011 + 7, z * 0.011 + 7, 3)));
+    // korkeammat kohdat vaaleampia, painanteet tummempia
+    const shade = (0.72 + 0.55 * ((h / hs) * 0.5 + 0.5)) * 1.16;
+    cc.copy(cA).lerp(cB, t).multiplyScalar(shade);
+    colors[i * 3] = cc.r; colors[i * 3 + 1] = cc.g; colors[i * 3 + 2] = cc.b;
+  }
+  g.computeVertexNormals();
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const detail = getDetailTexture();
+  sc.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 1, metalness: 0,
+    map: detail, bumpMap: detail, bumpScale: 0.6,
+  })));
+
+  // kivet
+  const ROCK_N = 600;
+  const rocks = new THREE.InstancedMesh(
+    new THREE.DodecahedronGeometry(1, 0),
+    new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
+    ROCK_N
+  );
+  const m4 = new THREE.Matrix4(), rq = new THREE.Quaternion(), re = new THREE.Euler(), rs = new THREE.Vector3();
+  for (let i = 0; i < ROCK_N; i++) {
+    // tiheämmin lähelle pelaajaa (mutta ei laskeutumispisteeseen), harvemmin kauas
+    const r = 30 + Math.pow(hash2(i, 1), 1.6) * 1100;
+    const a = hash2(i, 2) * Math.PI * 2;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
+    re.set(hash2(i, 4) * 3.14, hash2(i, 5) * 6.28, hash2(i, 6) * 3.14);
+    rq.setFromEuler(re);
+    rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
+    m4.compose(new THREE.Vector3(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
+    rocks.setMatrixAt(i, m4);
+  }
+  sc.add(rocks);
+
+  // pikkukivet lähimaisemaan
+  const PEB_N = 1300;
+  const pebbles = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(0.22, 0),
+    new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
+    PEB_N
+  );
+  for (let i = 0; i < PEB_N; i++) {
+    const r = 3 + Math.pow(hash2(i, 11), 1.8) * 420;
+    const a = hash2(i, 12) * Math.PI * 2;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const s = 0.4 + hash2(i, 13) * 1.5;
+    re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
+    rq.setFromEuler(re);
+    rs.set(s, s * 0.7, s);
+    m4.compose(new THREE.Vector3(x, surfHeightFn(x, z) + 0.05, z), rq, rs);
+    pebbles.setMatrixAt(i, m4);
+  }
+  sc.add(pebbles);
+
+  // puut (Maa)
+  if (F.trees) {
+    const TREE_N = 420;
+    const trees = new THREE.InstancedMesh(
+      new THREE.ConeGeometry(1, 3.2, 7),
+      new THREE.MeshStandardMaterial({ roughness: 1 }),
+      TREE_N
+    );
+    const tc = new THREE.Color();
+    for (let i = 0; i < TREE_N; i++) {
+      const r = 25 + Math.pow(hash2(i, 21), 1.4) * 1050;
+      const a = hash2(i, 22) * Math.PI * 2;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      const s = 1.2 + Math.pow(hash2(i, 23), 2) * 2.8;
+      rq.identity();
+      rs.set(s, s, s);
+      m4.compose(new THREE.Vector3(x, surfHeightFn(x, z) + s * 1.5, z), rq, rs);
+      trees.setMatrixAt(i, m4);
+      tc.setHSL(0.30 + hash2(i, 24) * 0.06, 0.45, 0.16 + hash2(i, 25) * 0.10);
+      trees.setColorAt(i, tc);
+    }
+    sc.add(trees);
+  }
+
+  // valaistus
+  if (cfg.hemi) sc.add(new THREE.HemisphereLight(cfg.hemi[0], cfg.hemi[1], cfg.hemi[2]));
+  const lightDef = cfg.sun ?? cfg.dirLight;
+  const sd = new THREE.Vector3(...lightDef.dir).normalize();
+  const dl = new THREE.DirectionalLight(cfg.sun ? 0xffffff : cfg.dirLight.color, lightDef.intensity);
+  dl.position.copy(sd);
+  sc.add(dl);
+
+  // aurinkokiekko (jos näkyvissä)
+  if (cfg.sun) {
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(cfg.sun.size, 48),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(...cfg.sun.color), fog: false })
+    );
+    disc.position.copy(sd).multiplyScalar(7000);
+    disc.lookAt(0, 0, 0);
+    sc.add(disc);
+  }
+
+  // tähtitaivas (ilmakehättömät)
+  if (cfg.stars) {
+    const n = 1600, p = new Float32Array(n * 3);
+    const sv = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      sv.set(hash2(i, 7) - 0.5, Math.abs(hash2(i, 8)) * 0.9 + 0.04, hash2(i, 9) - 0.5)
+        .normalize().multiplyScalar(7500);
+      p[i * 3] = sv.x; p[i * 3 + 1] = sv.y; p[i * 3 + 2] = sv.z;
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    sc.add(new THREE.Points(sg, new THREE.PointsMaterial({
+      color: 0xffffff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0.7 })));
+  }
+  return sc;
+}
+
+// kiertoradalle voi siirtyä vain kohteen läheisyydestä
+function orbitRange(b){ return Math.max(0.5 * AU, b.def.r * 30); }
+function inOrbitRange(i){
+  const b = bodies[i];
+  return camera.position.distanceTo(b.group.position) < orbitRange(b);
+}
+
+function teleportToOrbit(){
+  if (mode !== 'space' || !inOrbitRange(targetIdx)) return;
+  targetFrac = 0; speedFrac = 0;
+  placeNearBody(targetIdx, 6);
+}
+
+function tryBeamDown(){
+  if (mode !== 'space') return;
+  const b = bodies[targetIdx];
+  if (!ROCKY.has(b.def.name)) return;
+  if (camera.position.distanceTo(b.group.position) > b.def.r * 15) return;
+  enterSurface(b);
+}
+
+function enterSurface(b){
+  mode = 'surface';
+  surfaceBody = b;
+  surfaceScene = buildSurfaceScene(b.def.name);
+  renderPass.scene = surfaceScene;
+  surfaceScene.add(camera);   // kameran maailmamatriisi päivittyy vain renderöitävän scenen osana
+  warpGroup.visible = false; warpStrength = 0;
+  surfX = 0; surfZ = 0;
+  // aurinko selän taakse laskeutuessa, jotta maisema näkyy valaistuna
+  const cfg0 = SURFACE_CONFIGS[b.def.name];
+  const ld = (cfg0.sun ?? cfg0.dirLight).dir;
+  yaw = Math.atan2(ld[0], ld[2]);
+  pitch = 0; roll = 0;
+  camera.fov = 65; camera.updateProjectionMatrix();
+  targetFrac = 0; speedFrac = 0;
+  bridgeWasOn = document.body.classList.contains('bridge');
+  document.body.classList.remove('bridge');
+  document.body.classList.add('surface');
+  const cfg = SURFACE_CONFIGS[b.def.name];
+  document.getElementById('surfTitle').textContent = cfg.title;
+  document.getElementById('surfInfo').textContent = cfg.info;
+}
+
+function exitSurface(){
+  if (mode !== 'surface') return;
+  mode = 'space';
+  renderPass.scene = scene;
+  scene.add(camera);          // kamera takaisin avaruusscenen jäseneksi
+  document.body.classList.remove('surface');
+  if (bridgeWasOn) document.body.classList.add('bridge');
+  camera.fov = 60; camera.updateProjectionMatrix();
+  surfaceScene.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) Array.isArray(o.material) ? o.material.forEach(m => m.dispose()) : o.material.dispose();
+  });
+  surfaceScene = null;
+  placeNearBody(bodies.indexOf(surfaceBody), 6);
+  surfaceBody = null;
+}
+
+function updateSurface(dt){
+  const running = keys.ShiftLeft || keys.ShiftRight;
+  const sp = running ? 26 : 9;
+  let mx = 0, mz = 0;
+  if (keys.KeyW || keys.ArrowUp) mz -= 1;
+  if (keys.KeyS || keys.ArrowDown) mz += 1;
+  if (keys.KeyA || keys.ArrowLeft) mx -= 1;
+  if (keys.KeyD || keys.ArrowRight) mx += 1;
+  const moving = (mx || mz) ? 1 : 0;
+  if (moving) {
+    const inv = 1 / Math.hypot(mx, mz);
+    surfX += (Math.cos(yaw) * mx + Math.sin(yaw) * mz) * inv * sp * dt;
+    surfZ += (-Math.sin(yaw) * mx + Math.cos(yaw) * mz) * inv * sp * dt;
+    surfX = Math.max(-1100, Math.min(1100, surfX));
+    surfZ = Math.max(-1100, Math.min(1100, surfZ));
+  }
+
+  // kävelyheilunta: askelpomppu, sivuttaishuojunta ja kevyt kallistus
+  bobAmp += ((moving ? (running ? 1.4 : 1.0) : 0) - bobAmp) * (1 - Math.exp(-dt * 8));
+  if (bobAmp > 0.03) bobPhase += dt * (running ? 11.5 : 8.0);
+  const bobY  = Math.abs(Math.sin(bobPhase)) * 0.20 * bobAmp;   // askel joka puolijaksolla
+  const sway  = Math.sin(bobPhase) * 0.09 * bobAmp;             // vasen-oikea joka toinen askel
+  const tilt  = Math.sin(bobPhase) * 0.016 * bobAmp;
+  const rX = Math.cos(yaw), rZ = -Math.sin(yaw);                // kameran oikea-suunta
+
+  camera.rotation.set(pitch, yaw, tilt, 'YXZ');
+  camera.position.set(
+    surfX + rX * sway,
+    surfHeightFn(surfX, surfZ) + 2.4 + bobY,
+    surfZ + rZ * sway
+  );
+}
+
+document.getElementById('btnOrbit').addEventListener('click', teleportToOrbit);
+document.getElementById('btnBeam').addEventListener('click', tryBeamDown);
+
+/* ---------------- HUD ---------------- */
+const el = (id) => document.getElementById(id);
+const hud = {
+  pct: el('speedPct'), kms: el('speedKms'), gamma: el('gamma'),
+  bar: el('speedBar'),
+  tName: el('targetName'), tDist: el('targetDist'), tEta: el('targetEta'),
+};
+function fmtTime(s){
+  if (!isFinite(s)) return '—';
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+/* ---------------- Pääsilmukka ---------------- */
+const clock = new THREE.Clock();
+const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const UP = new THREE.Vector3(0, 1, 0);
+const _vX = new THREE.Vector3(1, 0, 0);
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (!paused) {
+    simTime += dt;
+    // kappaleiden paikat ja pyöriminen (kaikissa moodeissa)
+    for (const b of bodies) {
+      bodyPosition(b, simTime, b.group.position);
+      b.mesh.rotation.y += b.spinVel * dt;
+      if (b.clouds) b.clouds.rotation.y += b.spinVel * 1.25 * dt;
+    }
+    if (mode === 'surface') updateSurface(dt);
+  }
+
+  if (!paused && mode === 'space') {
+    // nopeuden säätö näppäimillä
+    const rate = (keys.ShiftLeft || keys.ShiftRight) ? 1.2 : 0.30;
+    if (keys.KeyW || keys.ArrowUp)   targetFrac = clamp01(targetFrac + rate * dt);
+    if (keys.KeyS || keys.ArrowDown) targetFrac = clamp01(targetFrac - rate * dt);
+    if (keys.KeyQ) roll += 1.4 * dt;
+    if (keys.KeyE) roll -= 1.4 * dt;
+    speedFrac += (targetFrac - speedFrac) * (1 - Math.exp(-dt * 3.5));
+    if (Math.abs(speedFrac - targetFrac) < 0.0004) speedFrac = targetFrac;
+
+    // käänny kohti kohdetta (F)
+    if (keys.KeyF) {
+      _m.lookAt(camera.position, bodies[targetIdx].group.position, UP);
+      _q.setFromRotationMatrix(_m);
+      camera.quaternion.slerp(_q, 1 - Math.exp(-dt * 4));
+      const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+      yaw = e.y; pitch = e.x; roll = e.z;
+    }
+
+    camera.rotation.set(pitch, yaw, roll, 'YXZ');
+
+    // liike — vyöhykkeen sisällä paikallinen nopeustila: säädin kattaa 0.01–0.1 c
+    const vGlobal = speedFrac;
+    const vLocal = speedFrac > 0.001 ? 0.01 + 0.09 * (speedFrac / 0.99) : 0;
+    effFrac = vGlobal * (1 - dragWeight) + vLocal * dragWeight;
+    const fwd = _v.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    camera.position.addScaledVector(fwd, effFrac * C * dt);
+
+    // kehysseuranta: lähellä planeettaa kamera kulkee sen mukana,
+    // jotta kappaleen vierellä voi leijua sen karkaamatta radallaan
+    dragBody = null; dragWeight = 0;
+    for (const b of bodies) {
+      if (b.def.a === 0) continue;
+      const d = camera.position.distanceTo(b.group.position);
+      const near = b.def.r * 8, far = b.def.r * 15;
+      if (d < far) {
+        const w = d < near ? 1 : 1 - (d - near) / (far - near);
+        const ang = b.def.phase + b.angVel * simTime;
+        const sp = b.def.a * AU * b.angVel;
+        _v2.set(-Math.sin(ang) * sp, 0, Math.cos(ang) * sp);
+        if (b.def.incl) _v2.applyAxisAngle(_vX, b.def.incl * DEG);
+        camera.position.addScaledVector(_v2, w * dt);
+        if (w > dragWeight) { dragWeight = w; dragBody = b; }
+      }
+    }
+
+    // törmäyssuoja: ei planeetan sisään — liu'utaan pintaa pitkin
+    for (const b of bodies) {
+      const minD = b.def.r * 1.15;
+      _v2.subVectors(camera.position, b.group.position);
+      const d = _v2.length();
+      if (d < minD) {
+        camera.position.copy(b.group.position).addScaledVector(_v2.normalize(), minD);
+      }
+    }
+
+    updateWarp(dt);
+  }
+
+  // shaderien uniformit
+  for (const m of shaderMats) m.uniforms.uTime.value = simTime;
+
+  if (mode === 'space') {
+  // FOV kasvaa nopeuden myötä
+  const fov = 60 + 24 * Math.pow(effFrac, 3);
+  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov = fov; camera.updateProjectionMatrix(); }
+
+  // HUD — näytetään todellinen nopeus (lähialuetila huomioiden)
+  hud.pct.textContent = (effFrac * 100).toFixed(effFrac < 0.105 ? 2 : 1);
+  hud.kms.textContent = Math.round(effFrac * C_KMS).toLocaleString('fi-FI');
+  hud.gamma.textContent = (1 / Math.sqrt(1 - effFrac * effFrac)).toFixed(2);
+  hud.bar.style.width = `${(effFrac / 0.99) * 100}%`;
+  const fd = document.getElementById('frameDrag');
+  if (dragBody && dragWeight > 0.01) {
+    fd.style.display = 'block';
+    fd.textContent = `⊕ kehysseuranta: ${dragBody.def.name} ${Math.round(dragWeight * 100)} % · nopeusalue 1–10 % c`;
+  } else {
+    fd.style.display = 'none';
+  }
+  if (Math.abs(parseFloat(slider.value) - targetFrac) > 0.001) slider.value = targetFrac;
+
+  const tgt = bodies[targetIdx];
+  const distU = camera.position.distanceTo(tgt.group.position) - tgt.def.r;
+  const distAU = distU / AU;
+  hud.tName.textContent = tgt.def.name;
+  hud.tDist.textContent = distAU >= 0.01
+    ? `${distAU.toFixed(2)} AU (${Math.round(distAU * 149.6).toLocaleString('fi-FI')} milj. km)`
+    : `${Math.max(0, Math.round(distU * 149600)).toLocaleString('fi-FI')} km`;
+  const v = effFrac * C;
+  hud.tEta.textContent = v > 0.5 ? fmtTime(distU / v) : '—';
+
+  // kiertoradan kantaman merkkivalo + napin tila
+  const distCenter = distU + tgt.def.r;
+  const inRange = distCenter < orbitRange(tgt);
+  document.getElementById('orbitLed').classList.toggle('on', inRange);
+  document.getElementById('orbitLedText').textContent =
+    inRange ? 'kiertorata: kantamalla' : 'kiertorata: liian kaukana';
+  document.getElementById('btnOrbit').disabled = !inRange;
+
+  // laskeutumisnappi näkyviin kiviplaneetan kiertoradalla
+  const canBeam = ROCKY.has(tgt.def.name) && distCenter < tgt.def.r * 15;
+  document.getElementById('btnBeam').style.display = canBeam ? '' : 'none';
+
+  // nimilaput
+  for (let i = 0; i < bodies.length; i++) {
+    const b = bodies[i];
+    _v2.copy(b.group.position).project(camera);
+    const onScreen = _v2.z < 1 && _v2.x > -1.05 && _v2.x < 1.05 && _v2.y > -1.05 && _v2.y < 1.05;
+    const dist = camera.position.distanceTo(b.group.position);
+    if (onScreen && dist > b.def.r * 4) {
+      b.label.style.display = 'block';
+      b.label.style.left = `${(_v2.x * 0.5 + 0.5) * window.innerWidth}px`;
+      b.label.style.top  = `${(-_v2.y * 0.5 + 0.5) * window.innerHeight}px`;
+      b.label.classList.toggle('target', i === targetIdx);
+      const dAU = dist / AU;
+      b.label.innerHTML = `<span class="dot">◦</span> ${b.def.name}` +
+        (i === targetIdx ? ` · ${dAU.toFixed(2)} AU` : '');
+    } else {
+      b.label.style.display = 'none';
+    }
+  }
+  } // mode === 'space'
+
+  composer.render();
+
+  // ensimmäinen ruutu renderöity — vapauta aloitusruutu
+  if (!window.__simReady) {
+    window.__simReady = true;
+    document.getElementById('bootStatus').textContent = '▶ Klikkaa aloittaaksesi';
+  }
+}
+animate();
+
+// testikoukku kehitystä varten
+window.__sim = {
+  goto(idx, distMult = 3.5){ placeNearBody(idx, distMult); },
+  setSpeed(f){ targetFrac = clamp01(f); speedFrac = targetFrac; },
+  state(){ return { simTime, speedFrac, mode, pos: camera.position.toArray() }; },
+  beam(i){ setTarget(i); placeNearBody(i, 6); tryBeamDown(); },
+  beamUp(){ exitSurface(); },
+  surf(){ return { scene: surfaceScene, h: surfHeightFn, x: surfX, z: surfZ }; },
+  camera, bodies, THREE, renderPass, renderer, scene,
+};
+
+addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
