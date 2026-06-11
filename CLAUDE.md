@@ -1,6 +1,17 @@
 # Aurinkokuntasimulaattori
 
-Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen kiviplaneetoille, komentosiltanäkymä. Kaikki koodi on yhdessä tiedostossa: [index.html](index.html) (HTML + CSS + ES-moduuli-JS + GLSL-shaderit template-literaaleina).
+Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen kiviplaneetoille, komentosiltanäkymä. [index.html](index.html) sisältää HTML:n, CSS:n ja käynnistysdiagnostiikan; pelikoodi on natiiveina ES-moduuleina `js/`-hakemistossa (ei build-vaihetta, GLSL-shaderit template-literaaleina):
+
+- [js/state.js](js/state.js) — jaettu muuttuva tila `S`-objektissa (mode, nopeudet, yaw/pitch/roll, keys…) + `clamp01`. Ei importtaa mitään — moduulien yhteinen tila kulkee tämän kautta, ei sirkulaarisia importteja
+- [js/core.js](js/core.js) — mittakaavavakiot (AU, C, DEG…), renderer/scene/camera/composer/renderPass, resize
+- [js/shaders.js](js/shaders.js) — yhteiset GLSL-palat (NOISE_GLSL, PLANET_VERT, FRAG_HEAD), `registerMat`/`shaderMats` (uTime-päivitys), `baseUniforms`
+- [js/bodies.js](js/bodies.js) — BODIES-data, planeettamateriaalit, tähtitaivas, kappaleiden rakentaminen, NASA-tekstuurien lataus, `bodyPosition`, `placeNearBody`, `updateBodies`
+- [js/warp.js](js/warp.js) — warp-efekti: `updateWarp`, `resetWarp`
+- [js/surface.js](js/surface.js) — pintamoodi: SURFACE_CONFIGS, maastogeneraattori, `enterSurface`/`exitSurface`/`updateSurface`, `teleportToOrbit`, `tryBeamDown`, `orbitRange`, ROCKY
+- [js/flight.js](js/flight.js) — avaruuslennon fysiikka: `updateFlight` (nopeus, F-kääntö, kehysseuranta, törmäyssuoja)
+- [js/input.js](js/input.js) — hiiri/näppäimet/UI-napit, `setTarget`
+- [js/hud.js](js/hud.js) — HUD, nimilaput, FOV-skaalaus: `updateSpaceHUD`
+- [js/main.js](js/main.js) — pääsilmukka, `__sim`-testikoukku, käynnistys
 
 ## Käynnistys ja testaus
 
@@ -39,4 +50,5 @@ Hiiri = katselu (pointer lock TAI vetämällä — lukko ei toimi kaikissa ympä
 - Kirkkauden säätö: planeettojen diffuusikertoimet ~1,0–1,1 — isommat arvot puhkipalavat bloomissa
 - Esikatselutyökalun klikkaukset lähettävät rullatapahtumia → nopeus voi muuttua testeissä itsestään; testaa nopeusasiat `__sim.setSpeed()`-koukulla
 - Pintamoodin spawn on origossa — kraatterit yms. generoidaan vähintään ~200 yksikön päähän siitä
-- `GLSL` on JS-template-literaaleissa: varo `</script>`-sekvenssejä ja backtickejä
+- `GLSL` on JS-template-literaaleissa: varo backtickejä ja `${`-sekvenssejä shaderikoodissa
+- Jaettua tilaa (nopeudet, mode, kulmat…) EI saa kopioida paikallisiin muuttujiin moduulin latauksen yhteydessä — lue ja kirjoita aina `S.kenttä` suoraan, muuten tila eriytyy
