@@ -12,10 +12,12 @@ import { S } from './state.js';
 const ATMO_TOP = 3.0;      // ilmakehän yläraja (× säde) — pelillisesti paksu, jotta syöksy kestää hetken
 const ATMO_FLOOR = 1.15;   // törmäyssuojan raja
 const DRAG_K = 2.5;        // ilmanvastuksen voimakkuus
-const HEAT_RATE = 7.0;     // lämmön kertyminen: täysi syöksy tappaa ennen pysähtymistä,
-                           // ~5 % c selviää rajusti jarruttaen, ≤2 % c liitää lämpeämättä
+const BRAKE_HEAT = 6.0;    // jarrutuksessa ilmaan luovutettu liike-energia kuumentaa (∝ v·dv):
+                           // entry yli ~5 % c kuolettaa, alle selviää rajusti jarruttaen
+const HEAT_RATE = 2.0;     // tasaisen kitkakuumennuksen kertymä
 const HEAT_Q0 = 0.03;      // kynnys, jonka alle jäävä kuumennus ei kerrytä lämpöä
-const COOL_RATE = 0.2;     // jäähtyminen ilmakehän ulkopuolella
+const COOL_RATE = 0.2;     // jäähtyminen ohuessa ilmassa / avaruudessa
+const SOAK_COOL = 0.03;    // hidas hehkunta tiheässä ilmakehässä — lämpö ei katoa pätsissä istuen
 export const LANDING_MAX_EFF = 0.02;   // suurin nopeus (osuus c:stä), jolla G-laskeutuminen onnistuu
 
 /* ---- plasmakuori (kameran lapsi, kuten warp) ---- */
@@ -137,12 +139,18 @@ export function updateReentry(dt){
   // ilmanvastus jarruttaa — sitä rajummin mitä syvemmällä ja kovempaa
   if (density > 0) {
     const drag = Math.exp(-dt * DRAG_K * density * (0.25 + speedNorm));
+    const before = S.speedFrac;
     S.speedFrac *= drag;
     S.targetFrac = Math.min(S.targetFrac, S.speedFrac);
+    // jarrutuksessa ilmaan luovutettu liike-energia kuumentaa runkoa (∝ v·dv)
+    // lähialueella effFrac = 0.01 + (0.09/0.99)·speedFrac, normalisoitu 0.1:een
+    const dvNorm = (before - S.speedFrac) * (0.09 / 0.99) / 0.1;
+    heat += BRAKE_HEAT * speedNorm * dvNorm;
   }
 
-  // runkolämpö: kova kuumennus kerryttää, muuten jäähtyy
-  heat += dt * (HEAT_RATE * Math.max(0, q - HEAT_Q0) - (q < HEAT_Q0 ? COOL_RATE : 0));
+  // tasainen kitkakuumennus kerryttää; jäähtyminen kunnolla vasta ohuessa ilmassa
+  heat += dt * HEAT_RATE * Math.max(0, q - HEAT_Q0);
+  if (q < HEAT_Q0) heat -= dt * (density < 0.05 ? COOL_RATE : SOAK_COOL);
   heat = Math.max(0, heat);
   if (heat >= 1) { destroy(inBody ? inBody.def.name : '?'); return; }
 
