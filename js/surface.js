@@ -837,6 +837,7 @@ function leaveSurfaceScene(){
   renderPass.scene = scene;
   scene.add(camera);          // kamera takaisin avaruusscenen jäseneksi
   document.body.classList.remove('surface');
+  document.body.classList.remove('descent');
   if (bridgeWasOn) document.body.classList.add('bridge');
   camera.fov = 60; camera.updateProjectionMatrix();
   surfaceScene.traverse(o => {
@@ -916,16 +917,46 @@ export function updateSurface(dt){
 const DESCENT_TRIGGER = 1.18;   // × säde
 const DESCENT_CEIL = 900;       // paluu avaruuteen tämän korkeuden yläpuolella
 const SOFT_V = 55;              // pehmeän kosketuksen yläraja (m/s)
+const MAX_ROLL_DEG = 2;         // suurin sallittu kallistus kosketuksessa
 let descentV = 0;
+let descRoll = 0;               // kallistus (rad) — tuuli pyörittää, A/D vastaohjaa
+let windPhase = 0;
 const descentPos = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
+const _right = new THREE.Vector3();
+
+// fade to black -siirtymä: pimennys, vaihto, häivytys takaisin
+const fadeEl = document.getElementById('fadeBlack');
+let transitioning = false;
+function fadeSwap(fn){
+  if (transitioning) return;
+  transitioning = true;
+  fadeEl.style.transition = 'opacity 0.3s ease';
+  fadeEl.style.opacity = '1';
+  setTimeout(() => {
+    fn();
+    fadeEl.style.transition = 'opacity 0.9s ease';
+    fadeEl.style.opacity = '0';
+    transitioning = false;
+  }, 330);
+}
+
+// ohjaamon mittarielementit
+const ld = {
+  title: document.getElementById('ldTitle'),
+  alt: document.getElementById('ldAlt'),
+  v: document.getElementById('ldV'),
+  roll: document.getElementById('ldRoll'),
+  horizon: document.getElementById('attHorizon'),
+  pointer: document.getElementById('attPointer'),
+};
 
 export function checkDescentEntry(){
-  if (S.mode !== 'space' || S.effFrac > IMPACT_MAX) return;
+  if (transitioning || S.mode !== 'space' || S.effFrac > IMPACT_MAX) return;
   for (const b of bodies) {
     if (!ROCKY.has(b.def.name)) continue;
     if (camera.position.distanceTo(b.group.position) < b.def.r * DESCENT_TRIGGER) {
-      enterDescent(b);
+      fadeSwap(() => enterDescent(b));
       return;
     }
   }
@@ -935,14 +966,16 @@ function enterDescent(b){
   // sisääntulovauhti skaalataan lähestymisnopeudesta (60–300 m/s)
   const v = 60 + (S.effFrac / IMPACT_MAX) * 240;
   enterSurfaceScene(b, 'descent');
+  document.body.classList.add('descent');
   descentV = v;
   descentPos.set(0, 650, 0);
+  descRoll = (Math.random() - 0.5) * 0.12;   // pieni satunnainen alkukallistus (±3,4°)
+  windPhase = Math.random() * 100;
   S.pitch = Math.min(S.pitch, -0.25);   // sisään aina laskevassa liu'ussa
   S.roll = 0;
   camera.fov = 65; camera.updateProjectionMatrix();
   updateDaylight();
-  document.getElementById('surfTitle').textContent =
-    `${b.def.name.toUpperCase()} — MATALALENTO`;
+  ld.title.textContent = `${b.def.name.toUpperCase()} — MATALALENTO`;
 }
 
 export function abortDescent(){
@@ -953,47 +986,81 @@ export function abortDescent(){
 }
 
 export function updateDescent(dt){
+  if (transitioning) return;   // jäädytä fade-siirtymän ajaksi
   updateDaylight();
   // W/S säätää vauhtia
   if (S.keys.KeyW || S.keys.ArrowUp)   descentV += 200 * dt;
   if (S.keys.KeyS || S.keys.ArrowDown) descentV -= 200 * dt;
   descentV = Math.max(35, Math.min(450, descentV));
 
-  // alus lentää katseen suuntaan
-  camera.rotation.set(S.pitch, S.yaw, 0, 'YXZ');
+  // turbulenssi ja tuuli pyörittävät alusta pituusakselin ympäri;
+  // A/D (tai Q/E) vastaohjaa
+  windPhase += dt;
+  const turb = Math.sin(windPhase * 0.9 + 1.7) * 0.5
+             + Math.sin(windPhase * 2.3) * 0.3
+             + Math.sin(windPhase * 5.1 + 0.6) * 0.2;
+  const gust = Math.sin(windPhase * 0.13) > 0.6 ? Math.sin(windPhase * 7.7) * 0.6 : 0;
+  descRoll += (turb * 0.038 + gust * 0.03) * dt;
+  if (S.keys.KeyA || S.keys.KeyQ || S.keys.ArrowLeft)  descRoll += 0.30 * dt;
+  if (S.keys.KeyD || S.keys.KeyE || S.keys.ArrowRight) descRoll -= 0.30 * dt;
+  descRoll -= descRoll * 0.05 * dt;   // kevyt aerodynaaminen vaimennus
+  descRoll = Math.max(-0.45, Math.min(0.45, descRoll));
+
+  // alus lentää katseen suuntaan; kallistus ja tuuli työntävät sivulle
+  camera.rotation.set(S.pitch, S.yaw, descRoll, 'YXZ');
   camera.getWorldDirection(_fwd);
   descentPos.addScaledVector(_fwd, descentV * dt);
+  _right.set(Math.cos(S.yaw), 0, -Math.sin(S.yaw));
+  descentPos.addScaledVector(_right, (-Math.sin(descRoll) * descentV * 0.5 + turb * 4) * dt);
+  // turbulenssin tärinä
+  camera.rotation.x += (Math.random() - 0.5) * 0.0035 * Math.abs(turb + gust);
+  camera.rotation.z += (Math.random() - 0.5) * 0.0025 * Math.abs(turb + gust);
   updateTerrain(descentPos.x, descentPos.z);
   updateScatter(descentPos.x, descentPos.z);
 
   const ground = surfHeightFn(descentPos.x, descentPos.z);
   const alt = descentPos.y - ground;
+  const rollDeg = descRoll * 180 / Math.PI;
 
   // ylös avaruuteen
   if (descentPos.y > DESCENT_CEIL) { abortDescent(); return; }
 
-  // kosketus maastoon: kovaa = tuho, hiljaa = pehmeä lasku kävelymoodiin
+  // kosketus maastoon: liian kovaa tai vinossa = tuho, muuten pehmeä lasku
   if (alt <= 2.6) {
-    if (descentV > SOFT_V) {
+    if (descentV > SOFT_V || Math.abs(rollDeg) > MAX_ROLL_DEG) {
       const name = surfaceBody.def.name;
-      const v = Math.round(descentV);
+      const reason = descentV > SOFT_V
+        ? `Alus törmäsi pintaan ${Math.round(descentV)} m/s vauhdissa (${name}).`
+        : `Laskuteline petti: kallistus kosketuksessa ${Math.abs(rollDeg).toFixed(1)}° — sallittu ±${MAX_ROLL_DEG}° (${name}).`;
       leaveSurfaceScene();
-      destroyShip(`Alus törmäsi pintaan ${v} m/s vauhdissa (${name}).`);
+      destroyShip(reason);
       return;
     }
-    S.mode = 'surface';
-    surfX = descentPos.x; surfZ = descentPos.z;
-    bobPhase = 0; bobAmp = 0;
-    const cfg = SURFACE_CONFIGS[surfaceBody.def.name];
-    document.getElementById('surfTitle').textContent = cfg.title;
-    document.getElementById('surfInfo').textContent = cfg.info;
+    fadeSwap(() => {
+      S.mode = 'surface';
+      document.body.classList.remove('descent');
+      surfX = descentPos.x; surfZ = descentPos.z;
+      bobPhase = 0; bobAmp = 0;
+      const cfg = SURFACE_CONFIGS[surfaceBody.def.name];
+      document.getElementById('surfTitle').textContent = cfg.title;
+      document.getElementById('surfInfo').textContent = cfg.info;
+    });
     return;
   }
 
   camera.position.copy(descentPos);
-  document.getElementById('surfInfo').textContent =
-    `korkeus ${Math.round(alt)} m · vauhti ${Math.round(descentV)} m/s — hiiri ohjaa · ` +
-    `W/S = vauhti · kosketus alle ${SOFT_V} m/s = lasku · ylös tai B = takaisin avaruuteen`;
+
+  // ohjaamon mittarit: keinohorisontti ja lukemat
+  const pitchDeg = S.pitch * 180 / Math.PI;
+  ld.horizon.setAttribute('transform',
+    `rotate(${(-rollDeg).toFixed(2)}) translate(0 ${(pitchDeg * 1.6).toFixed(1)})`);
+  ld.pointer.setAttribute('transform', `rotate(${rollDeg.toFixed(2)})`);
+  ld.alt.textContent = Math.round(alt);
+  ld.v.textContent = Math.round(descentV);
+  ld.roll.textContent = rollDeg.toFixed(1);
+  const rollOk = Math.abs(rollDeg) <= MAX_ROLL_DEG;
+  ld.roll.style.color = rollOk ? '#4dff88' : '#ff7a5c';
+  ld.v.style.color = descentV <= SOFT_V ? '#4dff88' : '#9fd8ff';
 }
 
 // debug-koukkua (__sim.surf) varten; setDayPhase: 0 = auringonnousu,
@@ -1005,5 +1072,7 @@ export function surfDebug(){
     setDayPhase(p){ dayPhase0 = p; dayT0 = S.simTime; updateDaylight(); },
     descentPos, descentV: () => descentV,
     setDescentV(v){ descentV = v; },
+    roll: () => descRoll,
+    setRoll(r){ descRoll = r; },
   };
 }

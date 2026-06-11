@@ -140,6 +140,34 @@
   .tpbtn:disabled { opacity:0.35; cursor:default; }
   .tpbtn:disabled:hover { background:rgba(20,50,90,0.45); }
 
+  /* ---- laskeutumisaluksen ohjaamo (matalalento) ---- */
+  #lander { position:fixed; inset:0; pointer-events:none; z-index:7; display:none; }
+  body.descent #lander { display:block; }
+  body.descent #surfacePanel { display:none !important; }
+  #lander .frame { width:100%; height:100%; display:block; }
+  #attWrap {
+    position:absolute; left:50%; bottom:1.6%; transform:translateX(-50%);
+    width:175px; height:175px;
+  }
+  #attWrap svg { width:100%; height:100%; }
+  #landerData {
+    position:absolute; left:calc(50% + 105px); bottom:3.6%;
+    color:#9fd8ff; font-family:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size:12px; line-height:1.75;
+    text-shadow:0 0 6px rgba(80,170,255,0.45);
+  }
+  #landerData .val { font-size:16px; font-weight:700; }
+  #ldTitle { color:#ffd27f; letter-spacing:2px; font-size:12px; margin-bottom:2px; }
+  #landerHint {
+    position:absolute; right:calc(50% + 105px); bottom:4.6%;
+    color:rgba(159,216,255,0.75); font-family:ui-monospace, Menlo, Consolas, monospace;
+    font-size:11px; text-align:right; max-width:340px; line-height:1.7;
+  }
+  #fadeBlack {
+    position:fixed; inset:0; background:#000; opacity:0;
+    pointer-events:none; z-index:65; transition:opacity 0.3s ease;
+  }
+
   /* ---- pintamoodi ---- */
   #surfacePanel { top:16px; left:16px; display:none; max-width:360px; }
   #surfacePanel #surfInfo { line-height:1.55; color:var(--hud-dim); }
@@ -341,6 +369,76 @@
   </svg>
 </div>
 
+<div id="lander" aria-hidden="true">
+  <svg class="frame" viewBox="0 0 1600 900" preserveAspectRatio="none">
+    <!-- yläpalkki ja viistot sivupilarit -->
+    <polygon points="0,0 1600,0 1600,64 1080,34 520,34 0,64" fill="#15171b"/>
+    <polygon points="0,0 130,0 64,900 0,900" fill="#101317"/>
+    <polygon points="1600,0 1470,0 1536,900 1600,900" fill="#101317"/>
+    <line x1="130" y1="0" x2="64" y2="900" stroke="#2a2f36" stroke-width="3"/>
+    <line x1="1470" y1="0" x2="1536" y2="900" stroke="#2a2f36" stroke-width="3"/>
+    <line x1="520" y1="34" x2="1080" y2="34" stroke="#2a2f36" stroke-width="2"/>
+    <!-- alakonsoli -->
+    <polygon points="0,900 0,742 250,702 1350,702 1600,742 1600,900" fill="#13151a"/>
+    <line x1="0" y1="742" x2="250" y2="702" stroke="#323844" stroke-width="3"/>
+    <line x1="250" y1="702" x2="1350" y2="702" stroke="#323844" stroke-width="3"/>
+    <line x1="1350" y1="702" x2="1600" y2="742" stroke="#323844" stroke-width="3"/>
+    <!-- varoitusraidat konsolin reunassa -->
+    <g fill="#caa23c" opacity="0.55">
+      <polygon points="300,702 330,702 318,716 288,716"/>
+      <polygon points="360,702 390,702 378,716 348,716"/>
+      <polygon points="1210,702 1240,702 1252,716 1222,716"/>
+      <polygon points="1270,702 1300,702 1312,716 1282,716"/>
+    </g>
+    <text x="800" y="688" text-anchor="middle" fill="#5a6675"
+      font-family="ui-monospace, Menlo, monospace" font-size="15" letter-spacing="4">LK-1 LASKEUTUMISALUS</text>
+  </svg>
+  <div id="attWrap">
+    <svg viewBox="-100 -100 200 200">
+      <defs><clipPath id="attClip"><circle cx="0" cy="0" r="74"/></clipPath></defs>
+      <circle cx="0" cy="0" r="88" fill="#0b0d10" stroke="#39414d" stroke-width="5"/>
+      <g clip-path="url(#attClip)">
+        <g id="attHorizon">
+          <rect x="-170" y="-170" width="340" height="170" fill="#2e5f8e"/>
+          <rect x="-170" y="0" width="340" height="170" fill="#6e4a2c"/>
+          <line x1="-170" y1="0" x2="170" y2="0" stroke="#e8eef4" stroke-width="2"/>
+          <line x1="-34" y1="-26" x2="34" y2="-26" stroke="rgba(232,238,244,0.45)" stroke-width="1.5"/>
+          <line x1="-34" y1="26" x2="34" y2="26" stroke="rgba(232,238,244,0.45)" stroke-width="1.5"/>
+        </g>
+      </g>
+      <!-- kallistusasteikko: vihreä ±2°, merkit ±5/±10/±20 -->
+      <g>
+        <g transform="rotate(-2)"><line x1="0" y1="-74" x2="0" y2="-86" stroke="#4dff88" stroke-width="2.5"/></g>
+        <g transform="rotate(2)"><line x1="0" y1="-74" x2="0" y2="-86" stroke="#4dff88" stroke-width="2.5"/></g>
+        <g transform="rotate(-5)"><line x1="0" y1="-74" x2="0" y2="-82" stroke="#9fb4c8" stroke-width="2"/></g>
+        <g transform="rotate(5)"><line x1="0" y1="-74" x2="0" y2="-82" stroke="#9fb4c8" stroke-width="2"/></g>
+        <g transform="rotate(-10)"><line x1="0" y1="-74" x2="0" y2="-84" stroke="#9fb4c8" stroke-width="2"/></g>
+        <g transform="rotate(10)"><line x1="0" y1="-74" x2="0" y2="-84" stroke="#9fb4c8" stroke-width="2"/></g>
+        <g transform="rotate(-20)"><line x1="0" y1="-74" x2="0" y2="-84" stroke="#9fb4c8" stroke-width="2"/></g>
+        <g transform="rotate(20)"><line x1="0" y1="-74" x2="0" y2="-84" stroke="#9fb4c8" stroke-width="2"/></g>
+        <line x1="0" y1="-88" x2="0" y2="-74" stroke="#ffd27f" stroke-width="1.5" opacity="0.6"/>
+      </g>
+      <g id="attPointer"><polygon points="0,-72 -6,-58 6,-58" fill="#ffd27f"/></g>
+      <!-- kiinteä alus-symboli -->
+      <path d="M -36 0 L -12 0 L 0 9 L 12 0 L 36 0" stroke="#ffd27f" stroke-width="3.5" fill="none"/>
+      <circle cx="0" cy="0" r="3" fill="#ffd27f"/>
+    </svg>
+  </div>
+  <div id="landerData">
+    <div id="ldTitle"></div>
+    <div>KORKEUS <span class="val" id="ldAlt">—</span> m</div>
+    <div>VAUHTI <span class="val" id="ldV">—</span> m/s</div>
+    <div>KALLISTUS <span class="val" id="ldRoll">—</span>°</div>
+  </div>
+  <div id="landerHint">
+    hiiri ohjaa · W/S = vauhti · A/D = kallistuksen vastaohjaus<br>
+    lasku: ≤ 55 m/s ja kallistus ≤ 2° · tuuli pyörittää alusta<br>
+    ylös tai B = takaisin avaruuteen
+  </div>
+</div>
+
+<div id="fadeBlack"></div>
+
 <div id="speedPanel" class="panel">
   <h3>NOPEUS</h3>
   <div class="big"><span id="speedPct">0.0</span> % c</div>
@@ -399,7 +497,7 @@
       <tr><td>O</td><td>kiertoradat näkyviin/pois</td></tr>
       <tr><td>R</td><td>pikasiirtymä valitun kohteen luo</td></tr>
       <tr><td>G</td><td>laskeudu pinnalle (kiviplaneetan kiertoradalla)</td></tr>
-      <tr><td>Matalalento</td><td>hidas lasku pintarajan alle vie pintalentoon — kova kosketus tuhoaa, hidas laskee</td></tr>
+      <tr><td>Matalalento</td><td>hidas lasku pintarajan alle vie laskeutumisalukseen — tuuli pyörittää, vastaohjaa A/D; lasku ≤ 55 m/s ja kallistus ≤ 2°</td></tr>
       <tr><td>B</td><td>palaa pinnalta/matalalennosta alukselle</td></tr>
       <tr><td>Lähialue</td><td>planeetan lähellä nopeus skaalautuu välille 1–10 % c</td></tr>
     </table>
