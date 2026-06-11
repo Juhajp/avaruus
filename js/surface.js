@@ -49,6 +49,12 @@ function updateDaylight(){
   if (d.twilight) d.dl.color.copy(_c1.set(0xffffff).lerp(d.twilight, tw * 0.85));
   if (d.hemi) d.hemi.intensity = d.baseHemi * (0.22 + 0.78 * dayF);
   if (d.bldgMat) d.bldgMat.emissiveIntensity = (1 - dayF) * 1.2;   // ikkunat syttyvät yöksi
+  if (d.cloudMat) {
+    // pilvet tummuvat yöksi ja värjäytyvät ruskossa
+    _c2.setScalar(0.18 + 0.82 * dayF);
+    if (d.twilight) _c2.lerp(d.twilight, tw * 0.6);
+    d.cloudMat.color.copy(_c2);
+  }
 
   // taivas ja sumu tummuvat yöksi, rusko värjää horisontin tuntumassa
   _c1.copy(d.skyNight).lerp(d.skyDay, dayF);
@@ -201,7 +207,8 @@ export const SURFACE_CONFIGS = {
     skyNight: 0x060a13, twilight: 0xff8a50, nightStars: true,
     sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.9 },
     hemi: [0x9ec8ee, 0x4a5a35, 0.6],
-    features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true, roads: true, towns: true },
+    features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true, roads: true, towns: true,
+                rocks: false, clouds: true },
   },
   Mars: {
     title: 'MARS — PINTA',
@@ -260,6 +267,57 @@ function getBuildingTextures(){
   return _bldgTex;
 }
 
+// pehmeä kumpupilvitekstuuri (läpinäkyvä reunoilta)
+let _cloudTex = null;
+function getCloudTexture(){
+  if (_cloudTex) return _cloudTex;
+  const S2 = 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S2;
+  const c = cv.getContext('2d');
+  for (let i = 0; i < 16; i++) {
+    const px = S2 / 2 + (hash2(i, 61) - 0.5) * 150;
+    const py = S2 / 2 + (hash2(i, 62) - 0.5) * 130;
+    const r = 26 + hash2(i, 63) * 60;
+    const g = c.createRadialGradient(px, py, 0, px, py, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.42)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, S2, S2);
+  }
+  const t = new THREE.CanvasTexture(cv);
+  _cloudTex = t;
+  return t;
+}
+
+// asfalttitekstuuri: keskikatkoviiva ja reunaviivat; v toistuu 15 m välein
+let _roadTex = null;
+function getRoadTexture(){
+  if (_roadTex) return _roadTex;
+  const W2 = 128, H2 = 128;
+  const cv = document.createElement('canvas');
+  cv.width = W2; cv.height = H2;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#2a2a2d';
+  c.fillRect(0, 0, W2, H2);
+  for (let i = 0; i < 500; i++) {   // asfaltin rakeisuus
+    const g = 28 + hash2(i, 51) * 36 | 0;
+    c.fillStyle = `rgba(${g},${g},${g + 2},0.5)`;
+    c.fillRect(hash2(i, 52) * W2 | 0, hash2(i, 53) * H2 | 0, 2, 2);
+  }
+  c.fillStyle = '#8e8e8a';            // reunaviivat
+  c.fillRect(6, 0, 4, H2);
+  c.fillRect(W2 - 10, 0, 4, H2);
+  c.fillStyle = '#cdcdc6';            // keskikatkoviiva
+  c.fillRect(W2 / 2 - 3, 10, 6, 46);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  _roadTex = t;
+  return t;
+}
+
 /* ---- tieverkko ja kaupungit (Maa) ----
    Tiet kulkevat ROAD_SP-välisessä ruudukossa; osa risteyksistä on kaupunkeja.
    Maasto tasoittuu teiden ja kaupunkien kohdalla, laatat värjäävät tiet
@@ -313,10 +371,55 @@ function initTerrain(sc, cfg, name){
     queue: [],
     ctx: null, ctz: null,
     roads: !!(cfg.features && cfg.features.roads),
+    roadMat: null,
+    roadPool: { x: [], z: [] },
     H: new Float32Array((TILE_SEGS + 3) * (TILE_SEGS + 3)),   // korkeusnäytteet +1 reunamarginaalilla
   };
+  if (terrain.roads) {
+    terrain.roadMat = new THREE.MeshStandardMaterial({
+      map: getRoadTexture(), roughness: 0.95, metalness: 0,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    });
+  }
 }
 const _cAsphalt = new THREE.Color(0x232326);
+const ROAD_W = 11;   // tiekaistan leveys
+
+/* tiekaistat: laattaan kuuluvat ohuet meshit, jotka myötäilevät maastoa
+   keskilinjan korkeudella (maasto on tasoitettu tien kohdalla) */
+function getRoadStrip(dir){
+  const t = terrain;
+  let m = t.roadPool[dir].pop();
+  if (!m) {
+    const g = dir === 'z'
+      ? new THREE.PlaneGeometry(ROAD_W, TILE, 1, TILE_SEGS)
+      : new THREE.PlaneGeometry(TILE, ROAD_W, TILE_SEGS, 1);
+    g.rotateX(-Math.PI / 2);
+    m = new THREE.Mesh(g, t.roadMat);
+    m.userData.dir = dir;
+    m.receiveShadow = true;
+    t.sc.add(m);
+  }
+  m.visible = true;
+  return m;
+}
+
+function fillRoadStrip(mesh, dir, line, center){
+  const g = mesh.geometry;
+  const pos = g.attributes.position, uv = g.attributes.uv;
+  // x-suuntainen tie kelluu hieman z-suuntaisen yläpuolella risteyksissä
+  const lift = dir === 'z' ? 0.26 : 0.4;
+  for (let v = 0; v < pos.count; v++) {
+    const lx = pos.getX(v), lz = pos.getZ(v);
+    const along = dir === 'z' ? center + lz : center + lx;
+    const across = dir === 'z' ? lx : lz;
+    pos.setY(v, surfHeightFn(dir === 'z' ? line : along, dir === 'z' ? along : line) + lift);
+    uv.setXY(v, across / ROAD_W + 0.5, along / 15);
+  }
+  pos.needsUpdate = uv.needsUpdate = true;
+  g.computeBoundingSphere();
+  mesh.position.set(dir === 'z' ? line : center, 0, dir === 'z' ? center : line);
+}
 
 function fillTile(mesh, tx, tz){
   const t = terrain;
@@ -374,7 +477,22 @@ function buildQueuedTile(){
   mesh.visible = true;
   const [tx, tz] = key.split(',').map(Number);
   fillTile(mesh, tx, tz);
-  t.tiles.set(key, mesh);
+  const entry = { mesh, roads: [] };
+  if (t.roadMat) {
+    // laatan läpi kulkevat tielinjat saavat omat kaistameshinsä
+    const ox = tx * TILE, oz = tz * TILE;
+    for (let k = Math.ceil((ox - TILE / 2) / ROAD_SP); k * ROAD_SP <= ox + TILE / 2; k++) {
+      const m = getRoadStrip('z');
+      fillRoadStrip(m, 'z', k * ROAD_SP, oz);
+      entry.roads.push(m);
+    }
+    for (let k = Math.ceil((oz - TILE / 2) / ROAD_SP); k * ROAD_SP <= oz + TILE / 2; k++) {
+      const m = getRoadStrip('x');
+      fillRoadStrip(m, 'x', k * ROAD_SP, ox);
+      entry.roads.push(m);
+    }
+  }
+  t.tiles.set(key, entry);
 }
 
 function updateTerrain(ax, az, buildAll = false){
@@ -386,8 +504,13 @@ function updateTerrain(ax, az, buildAll = false){
     const want = new Set();
     for (let dz = -R; dz <= R; dz++)
       for (let dx = -R; dx <= R; dx++) want.add((ctx + dx) + ',' + (ctz + dz));
-    for (const [k, mesh] of t.tiles) {
-      if (!want.has(k)) { t.tiles.delete(k); mesh.visible = false; t.pool.push(mesh); }
+    for (const [k, e] of t.tiles) {
+      if (!want.has(k)) {
+        t.tiles.delete(k);
+        e.mesh.visible = false;
+        t.pool.push(e.mesh);
+        for (const r of e.roads) { r.visible = false; t.roadPool[r.userData.dir].push(r); }
+      }
     }
     t.queue = [...want].filter(k => !t.tiles.has(k));
   }
@@ -507,30 +630,34 @@ function buildSurfaceScene(name){
     return townAt(ix, iz) && Math.hypot(x - ix * ROAD_SP, z - iz * ROAD_SP) < 220;
   };
 
-  // kivet: tasainen jakauma toistuvassa solussa
-  const rocks = addScatter(sc, new THREE.DodecahedronGeometry(1, 0),
-    new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
-    600, 2200, (i, x, z, m4, rq, re, rs) => {
-      if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
-      const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
-      re.set(hash2(i, 4) * 3.14, hash2(i, 5) * 6.28, hash2(i, 6) * 3.14);
-      rq.setFromEuler(re);
-      rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
-      m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
-    });
-  rocks.castShadow = true;
-  rocks.receiveShadow = true;
+  // kivet: tasainen jakauma toistuvassa solussa (ei Maassa — nurmella murikat näyttävät vierailta)
+  if (F.rocks !== false) {
+    const rocks = addScatter(sc, new THREE.DodecahedronGeometry(1, 0),
+      new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
+      600, 2200, (i, x, z, m4, rq, re, rs) => {
+        if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
+        const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
+        re.set(hash2(i, 4) * 3.14, hash2(i, 5) * 6.28, hash2(i, 6) * 3.14);
+        rq.setFromEuler(re);
+        rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
+        m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
+      });
+    rocks.castShadow = true;
+    rocks.receiveShadow = true;
+  }
 
   // pikkukivet lähimaisemaan: pieni solu pitää ne aina kameran lähellä
-  addScatter(sc, new THREE.IcosahedronGeometry(0.22, 0),
-    new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
-    1300, 480, (i, x, z, m4, rq, re, rs) => {
-      const s = 0.4 + hash2(i, 13) * 1.5;
-      re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
-      rq.setFromEuler(re);
-      rs.set(s, s * 0.7, s);
-      m4.compose(_vp.set(x, surfHeightFn(x, z) + 0.05, z), rq, rs);
-    });
+  if (F.rocks !== false) {
+    addScatter(sc, new THREE.IcosahedronGeometry(0.22, 0),
+      new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
+      1300, 480, (i, x, z, m4, rq, re, rs) => {
+        const s = 0.4 + hash2(i, 13) * 1.5;
+        re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
+        rq.setFromEuler(re);
+        rs.set(s, s * 0.7, s);
+        m4.compose(_vp.set(x, surfHeightFn(x, z) + 0.05, z), rq, rs);
+      });
+  }
 
   // puut (Maa)
   if (F.trees) {
@@ -551,6 +678,23 @@ function buildSurfaceScene(name){
       tc.setHSL(0.30 + hash2(i, 24) * 0.06, 0.45, 0.16 + hash2(i, 25) * 0.10);
       trees.setColorAt(i, tc);
     }
+  }
+
+  // pilvet: litteät kumpupilvet 400–580 m korkeudessa, seuraavat kameraa sirotteena
+  let cloudMat = null;
+  if (F.clouds) {
+    cloudMat = new THREE.MeshBasicMaterial({
+      map: getCloudTexture(), transparent: true, depthWrite: false,
+      side: THREE.DoubleSide, fog: true,
+    });
+    addScatter(sc, new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), cloudMat,
+      34, 3200, (i, x, z, m4, rq, re, rs) => {
+        const s = 150 + hash2(i, 41) * 230;
+        re.set(0, hash2(i, 42) * 6.28, 0);
+        rq.setFromEuler(re);
+        rs.set(s, 1, s * (0.55 + hash2(i, 43) * 0.5));
+        m4.compose(_vp.set(x, 400 + hash2(i, 44) * 180, z), rq, rs);
+      });
   }
 
   // rakennukset: kaupungit teiden risteyksissä (Maa)
@@ -641,7 +785,7 @@ function buildSurfaceScene(name){
   }
 
   daylight = {
-    sc, cfg, dl, hemi, disc, starsMat, bldgMat,
+    sc, cfg, dl, hemi, disc, starsMat, bldgMat, cloudMat,
     baseInt: lightDef.intensity,
     baseHemi: cfg.hemi ? cfg.hemi[2] : 0,
     skyDay: new THREE.Color(cfg.sky),
