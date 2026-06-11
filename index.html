@@ -140,13 +140,6 @@
   .tpbtn:disabled { opacity:0.35; cursor:default; }
   .tpbtn:disabled:hover { background:rgba(20,50,90,0.45); }
 
-  .led {
-    display:inline-block; width:9px; height:9px; border-radius:50%;
-    background:#5a3030; margin-right:6px; vertical-align:middle;
-    transition:background 0.2s, box-shadow 0.2s;
-  }
-  .led.on { background:#4dff88; box-shadow:0 0 8px rgba(77,255,136,0.9); }
-
   /* ---- pintamoodi ---- */
   #surfacePanel { top:16px; left:16px; display:none; max-width:360px; }
   #surfacePanel #surfInfo { line-height:1.55; color:var(--hud-dim); }
@@ -365,9 +358,8 @@
   <div class="big" id="targetName">—</div>
   <div class="row">etäisyys: <span id="targetDist">—</span></div>
   <div class="row">ETA: <span id="targetEta">—</span></div>
-  <div class="row" style="margin-top:6px"><span id="orbitLed" class="led"></span><span id="orbitLedText">kiertorata: liian kaukana</span></div>
   <div class="row" style="margin-top:6px">
-    <button id="btnOrbit" class="tpbtn" disabled>⇒ kiertoradalle · T</button>
+    <button id="btnOrbit" class="tpbtn">⚡ pikasiirtymä · R</button>
     <button id="btnBeam" class="tpbtn" style="display:none">⇓ pinnalle · G</button>
   </div>
 </div>
@@ -405,13 +397,11 @@
       <tr><td>0 – 8</td><td>valitse kohde (0 = Aurinko … 8 = Neptunus)</td></tr>
       <tr><td>F (pidä)</td><td>käänny kohti kohdetta</td></tr>
       <tr><td>O</td><td>kiertoradat näkyviin/pois</td></tr>
-      <tr><td>V</td><td>komentosilta näkyviin/pois</td></tr>
-      <tr><td>T</td><td>siirry kiertoradalle (vain kohteen läheisyydessä)</td></tr>
+      <tr><td>R</td><td>pikasiirtymä valitun kohteen luo</td></tr>
       <tr><td>G</td><td>laskeudu pinnalle (kiviplaneetan kiertoradalla)</td></tr>
       <tr><td>Matalalento</td><td>hidas lasku pintarajan alle vie pintalentoon — kova kosketus tuhoaa, hidas laskee</td></tr>
       <tr><td>B</td><td>palaa pinnalta/matalalennosta alukselle</td></tr>
       <tr><td>Lähialue</td><td>planeetan lähellä nopeus skaalautuu välille 1–10 % c</td></tr>
-      <tr><td>P</td><td>tauko</td></tr>
     </table>
     <div class="go" id="bootStatus">Ladataan (Three.js)…</div>
   </div>

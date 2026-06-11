@@ -1,7 +1,7 @@
 /* ---------------- Ohjaus: hiiri, näppäimet, UI-napit ---------------- */
 import { renderer } from './core.js';
 import { bodies, orbitLines, placeNearBody } from './bodies.js';
-import { teleportToOrbit, tryBeamDown, exitSurface, abortDescent } from './surface.js';
+import { quickTravel, tryBeamDown, exitSurface, abortDescent } from './surface.js';
 import { S, clamp01 } from './state.js';
 
 let started = false;
@@ -66,17 +66,12 @@ addEventListener('keydown', (e) => {
   S.keys[e.code] = true;
   if (e.code === 'KeyX') S.targetFrac = 0;
   if (e.code === 'KeyM') S.targetFrac = 0.99;
-  if (e.code === 'KeyP') {
-    S.paused = !S.paused;
-    document.getElementById('pausedTag').style.display = S.paused ? 'block' : 'none';
-  }
   if (e.code === 'KeyO') orbitLines.visible = !orbitLines.visible;
   if (e.code === 'KeyH') {
     overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
   }
   if (S.mode === 'space') {
-    if (e.code === 'KeyV') document.body.classList.toggle('bridge');
-    if (e.code === 'KeyT') teleportToOrbit();
+    if (e.code === 'KeyR') quickTravel();
     if (e.code === 'KeyG') tryBeamDown();
     if (/^Digit[0-8]$/.test(e.code)) setTarget(parseInt(e.code.slice(5), 10));
   } else {
@@ -104,5 +99,5 @@ export function setTarget(i){
 }
 setTarget(S.targetIdx);
 
-document.getElementById('btnOrbit').addEventListener('click', teleportToOrbit);
+document.getElementById('btnOrbit').addEventListener('click', quickTravel);
 document.getElementById('btnBeam').addEventListener('click', tryBeamDown);

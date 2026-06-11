@@ -30,11 +30,11 @@ Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen
 - Nopeussäätö 0–0,99c; **kehysseuranta**: alle 15 planeetansäteen etäisyydellä kamera kulkee planeetan radan mukana (täysi paino < 8 r), ja nopeusalue rajautuu 0,01–0,1c ("lähialuetila"). HUD näyttää `⊕ kehysseuranta: <planeetta> NN %`
 - Törmäyssuoja työntää kameran ulos pinnasta (r×1,15) vauhtia nollaamatta (liukuu pintaa pitkin)
 - Ilmakehään syöksyminen (kappaleet joilla `atmo`; ei Merkurius): vyöhyke r×1,15–r×3,0, tiheys ∝ syvyys³. Ilmanvastus jarruttaa, kitkalämpö q = tiheys × (effFrac/0,1)² sytyttää plasmakuoren (kameran lapsi, `depthTest:false` — muuten planeetta peittää sen!) ja ravistelee kameraa. Runkolämpö kertyy pääosin **jarrutusenergiasta** (∝ v·dv, `BRAKE_HEAT`) — pelkkä hetkellinen q ei riitä, koska jarrutus romahduttaa sen ennen täyttymistä; jäähtyminen kunnolla vain ohuessa ilmassa (tiheässä vain hidas `SOAK_COOL`). 100 % → alus tuhoutuu (`#deathOverlay`, klikkaus palauttaa Maan luo). Entry yli ~5 % c kuolettaa, alle selviää rajusti jarruttaen (lämpö jää hehkumaan), ≤1,5 % c liitää vapaasti. **Törmäystuho** (kaikki kappaleet, myös ilmakehättömät): pintakosketus (r×1,16) yli 1,5 % c:llä (`IMPACT_MAX`) tuhoaa aluksen; kaasujättiläisillä syynä paine, Auringon lähellä (r×1,2) höyrystyminen nopeudesta riippumatta. Laskeutuminen (G) vaatii ≤2 % c (`LANDING_MAX_EFF`). Debug: `__sim.reentry()`
-- Kiertoradalle teleporttaus (T) vain kantamalla: max(0,5 AU, 30 r) — merkkivalo kohdepaneelissa
+- Pikasiirtymä (R / kohdepaneelin nappi): hyppää valitun kohteen kiertoradalle mistä tahansa, nollaa nopeuden (`quickTravel`)
 
 ## Tilat (mode-muuttuja: 'space' | 'surface' | 'descent')
 
-- **space**: FPV-lento, komentosilta-overlay (SVG, V kytkee), warp-efekti
+- **space**: FPV-lento, komentosilta-overlay (SVG, aina päällä avaruudessa), warp-efekti
 - **descent** (matalalento): kun alus laskeutuu avaruudessa kiviplaneetan pintarajan (r×1,18) alle alle törmäysnopeuden, näkymä vaihtuu planeetan pintamaailmaan ~650 m korkeuteen ja lento jatkuu maaston yllä (hiiri ohjaa, W/S = vauhti 35–450 m/s). Kosketus yli 55 m/s → törmäystuho; alle → pehmeä lasku kävelymoodiin; nousu yli 900 m tai B → takaisin avaruuteen (r×1,5). Sama proseduraalinen scene kuin pintamoodissa — ei pikselöitynyttä planeettapalloa lähietäisyydellä
 - **surface**: kiviplaneetat (Merkurius, Venus, Maa, Mars; `ROCKY`-setti). Erillinen proseduraalinen maailma per planeetta (`SURFACE_CONFIGS`): fbm-maasto + todistetut piirteet (Mars: kanjoni/tulivuori/kraatterit/dyynit; Merkurius: kraatterit/jyrkänne; Venus: tulivuoret/repeämä; Maa: vuoret/puut), detaljitekstuuri + bump, kävelyheilunta (bobPhase/bobAmp). Komentosilta ja avaruus-HUD piilossa (`body.surface` CSS)
 - **Ääretön maasto**: korkeusfunktio on globaali; mesh generoidaan 600 yks laattoina 5×5-gridiin kameran ympärille (`updateTerrain`, kate 3000×3000, ~115k kolmiota) ja vapautuneet laatat kierrätetään — enintään yksi laatanrakennus per ruutu. Normaalit lasketaan korkeusnäyttein naapureineen (EI `computeVertexNormals` — laattasaumat näkyisivät). Kivet/pikkukivet/puut ovat kameraa seuraavaa jaksollista sirotetta (`addScatter`/`updateScatter`, solu 2200/480 yks). Paikkasidonnaiset piirteet (kraatterit, tulivuoret) toistuvat 4200 yks jaksolla (`wrapF`) — piirteet mahtuvat jakson sisään, ei saumaa
@@ -44,7 +44,7 @@ Selainpohjainen 3D-avaruussimulaattori: FPV-lento aurinkokunnassa, laskeutuminen
 
 ## Näppäimet
 
-Hiiri = katselu (pointer lock TAI vetämällä — lukko ei toimi kaikissa ympäristöissä, varajärjestelmä on). W/S/rulla = nopeus, Q/E = roll, X/M = pysäytä/täysi, 0–8 = kohde, F (pidä) = käänny kohteeseen, T = kiertoradalle, G = laskeudu, B = takaisin alukselle, V = komentosilta, O = kiertoradat, P = tauko, H = ohje. Pinnalla WASD + Shift.
+Hiiri = katselu (pointer lock TAI vetämällä — lukko ei toimi kaikissa ympäristöissä, varajärjestelmä on). W/S/rulla = nopeus, Q/E = roll, X/M = pysäytä/täysi, 0–8 = kohde, F (pidä) = käänny kohteeseen, R = pikasiirtymä kohteen luo (rajoittamaton, testaukseen), G = laskeudu, B = takaisin alukselle, O = kiertoradat, H = ohje. Pinnalla WASD + Shift. V/T/P poistettu: komentosilta on aina päällä avaruudessa, tauko vain `__sim.pause()`-koukulla.
 
 ## Renderöinti
 

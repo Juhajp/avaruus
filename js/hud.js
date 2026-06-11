@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { AU, C, C_KMS, camera } from './core.js';
 import { bodies } from './bodies.js';
-import { ROCKY, orbitRange } from './surface.js';
+import { ROCKY } from './surface.js';
 import { LANDING_MAX_EFF } from './reentry.js';
 import { S } from './state.js';
 
@@ -52,15 +52,8 @@ export function updateSpaceHUD(){
   const v = S.effFrac * C;
   hud.tEta.textContent = v > 0.5 ? fmtTime(distU / v) : '—';
 
-  // kiertoradan kantaman merkkivalo + napin tila
-  const distCenter = distU + tgt.def.r;
-  const inRange = distCenter < orbitRange(tgt);
-  document.getElementById('orbitLed').classList.toggle('on', inRange);
-  document.getElementById('orbitLedText').textContent =
-    inRange ? 'kiertorata: kantamalla' : 'kiertorata: liian kaukana';
-  document.getElementById('btnOrbit').disabled = !inRange;
-
   // laskeutumisnappi näkyviin kiviplaneetan kiertoradalla; vaatii hitaan vauhdin
+  const distCenter = distU + tgt.def.r;
   const canBeam = ROCKY.has(tgt.def.name) && distCenter < tgt.def.r * 15;
   const btnBeam = document.getElementById('btnBeam');
   btnBeam.style.display = canBeam ? '' : 'none';

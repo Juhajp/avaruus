@@ -58,5 +58,10 @@ window.__sim = {
   beamUp(){ exitSurface(); },
   surf(){ return surfDebug(); },
   reentry(){ return reentryDebug(); },
+  pause(){   // P-näppäin poistettu — tauko vain testikoukkuna
+    S.paused = !S.paused;
+    document.getElementById('pausedTag').style.display = S.paused ? 'block' : 'none';
+    return S.paused;
+  },
   camera, bodies, THREE, renderPass, renderer, scene,
 };

@@ -1,6 +1,6 @@
 /* ---------------- Pintamoodi: teleporttaus planeetoille ---------------- */
 import * as THREE from 'three';
-import { AU, renderer, scene, camera, renderPass } from './core.js';
+import { renderer, scene, camera, renderPass } from './core.js';
 import { bodies, placeNearBody } from './bodies.js';
 import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
@@ -798,15 +798,9 @@ function buildSurfaceScene(name){
   return sc;
 }
 
-// kiertoradalle voi siirtyä vain kohteen läheisyydestä
-export function orbitRange(b){ return Math.max(0.5 * AU, b.def.r * 30); }
-export function inOrbitRange(i){
-  const b = bodies[i];
-  return camera.position.distanceTo(b.group.position) < orbitRange(b);
-}
-
-export function teleportToOrbit(){
-  if (S.mode !== 'space' || !inOrbitRange(S.targetIdx)) return;
+// pikasiirtymä: hyppää valitun kohteen kiertoradalle mistä tahansa (testaukseen)
+export function quickTravel(){
+  if (S.mode !== 'space') return;
   S.targetFrac = 0; S.speedFrac = 0;
   placeNearBody(S.targetIdx, 6);
 }
