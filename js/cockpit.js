@@ -777,8 +777,8 @@ function buildFalcon(){
   applyPH(frameMat, 'metal_plate_02', [1.0, 1.1, 1.3], [2, 1]);
   // tumma kiiltävä kanopialasi (sisätilaa ei mallinneta — aurinko kimpoaa pinnasta)
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.15, metalness: 0.75, side: THREE.DoubleSide });
-  const glowMat = new THREE.MeshBasicMaterial();
-  glowMat.color.setRGB(0.45, 0.8, 1.1);   // hienovarainen moottorihehku
+  const glowMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  glowMat.color.setRGB(0.7, 1.2, 1.7);   // syvänsininen moottorihehku, kevyt bloom
 
   // lautasrunko: litistetty pallo + reunapanta
   const disc = new THREE.Mesh(new THREE.SphereGeometry(2.6, 28, 14), hullMat);
@@ -815,10 +815,18 @@ function buildFalcon(){
     tube.add(cap);
   }
 
-  // moottoripalkki ja hehku perään
-  box(g, darkMat, 3.4, 0.5, 0.3, 0, 0, 2.42);
-  const glow = box(g, glowMat, 2.9, 0.1, 0.05, 0, 0, 2.6);
-  glow.userData.glow = true;
+  // moottoriosa: lautasen takakaarta myötäilevä kaareva kotelo, jonka
+  // sisällä hehkunauha kiertää peräkaaren (sulautuu runkoon saumatta)
+  const ENG_ARC = 1.6;
+  const housing = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.68, 2.68, 0.46, 22, 1, true, -ENG_ARC / 2, ENG_ARC), darkMat);
+  g.add(housing);
+  const housingTrim = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.72, 2.72, 0.2, 22, 1, true, -ENG_ARC / 2 + 0.06, ENG_ARC - 0.12), hullMat);
+  g.add(housingTrim);
+  const glowBand = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.74, 2.74, 0.12, 22, 1, true, -ENG_ARC * 0.42, ENG_ARC * 0.84), glowMat);
+  g.add(glowBand);
 
   // lautasantenni ja greeblet kannelle
   const dishArm = box(g, frameMat, 0.07, 0.5, 0.07, -1.0, 0.6, 0.55);
@@ -838,81 +846,123 @@ function buildFalcon(){
   // lähellä kameraa ja pienennettynä — iso offset uppoaisi planeetan
   // pintaan lähietäisyyksillä (syvyystesti piilottaisi aluksen)
   g.scale.setScalar(0.5);
-  g.position.set(0, -0.95, -4.6);
+  g.position.set(0, -1.3, -4.6);   // alempana → katse takaviistosta ylhäältä
   g.visible = false;
   camera.add(g);
   return g;
 }
 
-/* Star Trek -henkinen sukkula: laatikkorunko viistolla keulalla,
-   tummat lasit, varoitusraidat, kaksi konehtimoa hehkuineen */
+/* Star Trek -henkinen sukkula: virtaviivainen runko viistetystä
+   poikkileikkauksesta (8 pistettä × 5 sektiota — kapenee keulaan ja
+   perään), yhtenäinen valkoinen pinta ja punainen vyötäisraita,
+   oktagonikonehtimot kiskomaisin laskujalaksin */
 function buildShuttle(){
   const g = new THREE.Group();
-  const panelT = makePanelTex();
   const hullMat = new THREE.MeshStandardMaterial({
-    map: panelT, bumpMap: panelT, bumpScale: 0.4,
-    roughness: 0.7, metalness: 0.25, side: THREE.DoubleSide,
+    color: 0xdfe3e8, roughness: 0.5, metalness: 0.15, side: THREE.DoubleSide,
   });
-  hullMat.color.setRGB(1.15, 1.16, 1.2);
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.65, metalness: 0.5, side: THREE.DoubleSide });
-  applyPH(darkMat, 'metal_plate_02', [0.7, 0.74, 0.85], [2, 2]);
+  const nacMat = new THREE.MeshStandardMaterial({
+    color: 0xdfe3e8, roughness: 0.5, metalness: 0.15, flatShading: true,
+  });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.6, metalness: 0.5, flatShading: true });
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.15, metalness: 0.75, side: THREE.DoubleSide });
-  const stripeMat = new THREE.MeshStandardMaterial({ color: 0x7a2828, roughness: 0.6, metalness: 0.3 });
+  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xb31f1f, roughness: 0.45, metalness: 0.1 });
   const redGlow = new THREE.MeshBasicMaterial();
   redGlow.color.setRGB(1.15, 0.35, 0.25);
   const blueGlow = new THREE.MeshBasicMaterial();
-  blueGlow.color.setRGB(0.45, 0.8, 1.1);
+  blueGlow.color.setRGB(0.5, 0.9, 1.2);
 
-  // päärunko ja viisto keulaosa (frustum nelikulmioista)
-  box(g, hullMat, 2.2, 1.35, 3.4, 0, 0, 0.7);
-  const A = [[-1.1, -0.675, -1.0], [1.1, -0.675, -1.0], [1.1, 0.675, -1.0], [-1.1, 0.675, -1.0]];
-  const B = [[-0.82, -0.62, -2.9], [0.82, -0.62, -2.9], [0.82, 0.16, -2.9], [-0.82, 0.16, -2.9]];
-  quad(g, hullMat, A[0], A[1], B[1], B[0]);   // pohja
-  quad(g, hullMat, A[3], B[3], B[2], A[2]);   // viisto katto
-  quad(g, hullMat, A[0], B[0], B[3], A[3]);   // vasen
-  quad(g, hullMat, A[1], A[2], B[2], B[1]);   // oikea
-  quad(g, hullMat, B[0], B[1], B[2], B[3]);   // keulalevy
-  // tuulilasi viistoon kattoon + kehys
-  const W0 = [-0.62, 0.62, -2.42], W1 = [0.62, 0.62, -2.42], W2 = [0.5, 0.28, -2.86], W3 = [-0.5, 0.28, -2.86];
-  quad(g, glassMat, W3, W2, W1, W0).position.y = 0.012;
-  bar(g, darkMat, W0, W1, 0.035); bar(g, darkMat, W2, W3, 0.035);
-  bar(g, darkMat, W0, W3, 0.035); bar(g, darkMat, W1, W2, 0.035);
-  bar(g, darkMat, [0, 0.62, -2.42], [0, 0.28, -2.86], 0.028);   // keskipuite
-
-  // sivuraidat ja takaovi varoitusraitoineen
-  for (const s of [-1, 1]) box(g, stripeMat, 0.02, 0.2, 3.2, s * 1.105, 0.18, 0.6);
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.15), new THREE.MeshStandardMaterial({
-    map: makeDoorTex(), roughness: 0.8, metalness: 0.25 }));
-  door.position.set(0, -0.02, 2.435);
-  door.rotation.y = Math.PI;
-  g.add(door);
-  const imp = box(g, redGlow, 1.5, 0.1, 0.05, 0, 0.55, 2.43);
-  imp.userData.glow = true;
-
-  // konehtimot pylonien varassa (toimivat laskutelineinä)
-  for (const s of [-1, 1]) {
-    const nac = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 3.3, 12), darkMat);
-    nac.rotation.x = Math.PI / 2;
-    nac.position.set(s * 1.42, -0.92, 0.55);
-    g.add(nac);
-    box(g, hullMat, 0.16, 0.55, 1.1, s * 1.22, -0.62, 0.55, 0, 0, s * 0.5);
-    const buss = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), redGlow);
-    buss.rotation.x = -Math.PI / 2;
-    buss.position.set(s * 1.42, -0.92, -1.1);
-    g.add(buss);
-    const strip = box(g, blueGlow, 0.05, 0.08, 2.0, s * 1.68, -0.92, 0.5);
-    strip.userData.glow = true;
-    blinker(g, s < 0 ? 0xff5340 : 0x46d06a, s * 1.42, -0.6, 1.9, 1.3, s);
+  // runko: viistetty poikkileikkaus pyyhkäistynä sektioiden läpi
+  const CS = [[-0.78, 0.66], [0.78, 0.66], [1.05, 0.38], [1.05, -0.42],
+              [0.74, -0.66], [-0.74, -0.66], [-1.05, -0.42], [-1.05, 0.38]];
+  const SEC = [
+    { z: 2.35, sx: 0.86, sy: 0.84, y: 0.02 },
+    { z: 0.60, sx: 1.00, sy: 1.00, y: 0.04 },
+    { z: -1.30, sx: 0.96, sy: 0.94, y: 0.00 },
+    { z: -2.20, sx: 0.84, sy: 0.70, y: -0.10 },
+    { z: -2.95, sx: 0.56, sy: 0.36, y: -0.28 },
+  ];
+  const sp = (si, ci) => {
+    const s = SEC[si], p = CS[ci % 8];
+    return [p[0] * s.sx, p[1] * s.sy + s.y, s.z];
+  };
+  for (let si = 0; si < SEC.length - 1; si++)
+    for (let ci = 0; ci < 8; ci++)
+      quad(g, hullMat, sp(si, ci), sp(si, ci + 1), sp(si + 1, ci + 1), sp(si + 1, ci));
+  // perä- ja keulakannet
+  for (const [si, flip] of [[0, false], [SEC.length - 1, true]]) {
+    const s = SEC[si];
+    const sh = new THREE.Shape(CS.map(p => new THREE.Vector2(p[0] * s.sx, p[1] * s.sy + s.y)));
+    const capM = new THREE.Mesh(new THREE.ShapeGeometry(sh), hullMat);
+    capM.position.z = s.z;
+    if (flip) capM.rotation.y = Math.PI;
+    g.add(capM);
   }
-  // kattogreeblet ja antenni
-  box(g, darkMat, 0.7, 0.14, 1.2, 0, 0.75, 0.8);
-  box(g, darkMat, 0.3, 0.1, 0.5, 0.55, 0.73, 0.1);
-  bar(g, darkMat, [-0.6, 0.68, 1.7], [-0.6, 1.05, 1.7], 0.025);
-  blinker(g, 0xffb340, -0.6, 1.1, 1.7, 0.9, 0.5);
+
+  // punainen vaakaraita kiertää koko rungon (sivut + kannet)
+  const stp = (si) => { const s = SEC[si]; return [1.065 * s.sx, 0.10 * s.sy + s.y, s.z]; };
+  for (const side of [-1, 1])
+    for (let si = 0; si < SEC.length - 1; si++) {
+      const a = stp(si), b = stp(si + 1);
+      bar(g, stripeMat, [side * a[0], a[1], a[2]], [side * b[0], b[1], b[2]], 0.034);
+    }
+  const sf = stp(SEC.length - 1), sr = stp(0);
+  bar(g, stripeMat, [-sf[0], sf[1], sf[2] - 0.015], [sf[0], sf[1], sf[2] - 0.015], 0.034);
+  bar(g, stripeMat, [-sr[0], sr[1], sr[2] + 0.015], [sr[0], sr[1], sr[2] + 0.015], 0.034);
+
+  // tuulilasi keulan viistoon yläpintaan + puitteet
+  const wt = (si, ci) => {
+    const p = sp(si, ci);
+    return [p[0] * 0.88, p[1] + 0.015, p[2]];
+  };
+  quad(g, glassMat, wt(3, 0), wt(3, 1), wt(4, 1), wt(4, 0));
+  bar(g, darkMat, wt(3, 0), wt(3, 1), 0.03);
+  bar(g, darkMat, wt(4, 0), wt(4, 1), 0.03);
+  bar(g, darkMat, wt(3, 0), wt(4, 0), 0.03);
+  bar(g, darkMat, wt(3, 1), wt(4, 1), 0.03);
+  bar(g, darkMat, [(wt(3, 0)[0] + wt(3, 1)[0]) / 2, wt(3, 0)[1], wt(3, 0)[2]],
+                  [(wt(4, 0)[0] + wt(4, 1)[0]) / 2, wt(4, 0)[1], wt(4, 0)[2]], 0.024);
+
+  // takaovi varoitusraitoineen + impulssipalkki
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 0.95), new THREE.MeshStandardMaterial({
+    map: makeDoorTex(), roughness: 0.8, metalness: 0.25 }));
+  door.position.set(0, -0.06, 2.37);   // taso osoittaa +z eli taaksepäin katsojaan
+  g.add(door);
+  box(g, redGlow, 1.2, 0.09, 0.04, 0, 0.46, 2.37);
+
+  // konehtimot: valkoiset oktagoniprismat, tummat kärkikartiot ja
+  // bussard-hehkut; alla viistetyt kiskomaiset laskujalakset
+  for (const s of [-1, 1]) {
+    const nac = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 2.9, 8, 1, false, Math.PI / 8), nacMat);
+    nac.rotation.x = Math.PI / 2;
+    nac.position.set(s * 1.36, -0.76, 0.45);
+    g.add(nac);
+    const cone = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.24, 0.4, 8, 1, false, Math.PI / 8), darkMat);
+    cone.rotation.x = -Math.PI / 2;
+    cone.position.set(s * 1.36, -0.76, -1.2);
+    g.add(cone);
+    const buss = new THREE.Mesh(new THREE.CircleGeometry(0.085, 8), redGlow);
+    buss.position.set(s * 1.36, -0.76, -1.41);
+    buss.rotation.y = Math.PI;
+    g.add(buss);
+    box(g, blueGlow, 0.04, 0.07, 1.7, s * 1.605, -0.76, 0.45);
+    // pyloni rungosta konehtimon kanteen
+    box(g, hullMat, 0.13, 0.5, 0.85, s * 1.16, -0.5, 0.45, 0, 0, s * 0.5);
+    // jalaskisko: matala palkki + ylösviistetty kärki
+    box(g, darkMat, 0.13, 0.07, 2.4, s * 1.36, -1.06, 0.55);
+    box(g, darkMat, 0.13, 0.07, 0.5, s * 1.36, -0.99, -0.85, -0.42, 0, 0);
+    blinker(g, s < 0 ? 0xff5340 : 0x46d06a, s * 1.36, -0.48, 1.85, 1.3, s);
+  }
+
+  // kattodetaljit ja antenni
+  box(g, hullMat, 0.7, 0.12, 1.2, 0, 0.74, 0.9);
+  box(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0);
+  bar(g, darkMat, [-0.55, 0.7, 1.8], [-0.55, 1.05, 1.8], 0.022);
+  blinker(g, 0xffb340, -0.55, 1.1, 1.8, 0.9, 0.5);
 
   mergeStatic(g);
   g.scale.setScalar(0.7);
-  g.position.set(0, -1.15, -7.5);
+  g.position.set(0, -1.5, -7.2);   // alempana → katse takaviistosta ylhäältä
   g.visible = false;
   camera.add(g);
   return g;
@@ -939,6 +989,28 @@ export function toggleShipView(){
   extView = !extView;
 }
 
+/* ohjausmyötäily: ulkomalli pankkaa kaarrossa, kääntää nokkaa kaarron
+   suuntaan ja nyökkää pystyohjauksessa — kulmanopeudet johdetaan
+   yaw/pitch-muutoksista ja suodatetaan pehmeiksi */
+let _pYaw = 0, _pPitch = 0, _swayX = 0, _swayY = 0, _swayZ = 0;
+function updateSway(dt){
+  let ry = S.yaw - _pYaw;
+  if (ry > Math.PI) ry -= Math.PI * 2; else if (ry < -Math.PI) ry += Math.PI * 2;
+  const rx = S.pitch - _pPitch;
+  _pYaw = S.yaw; _pPitch = S.pitch;
+  if (dt <= 0) return;
+  // teleportit (pikasiirtymä, spawn) ohitetaan — vain aito ohjausliike
+  const yawRate = Math.abs(ry) > 0.5 ? 0 : ry / dt;
+  const pitchRate = Math.abs(rx) > 0.5 ? 0 : rx / dt;
+  const k = 1 - Math.exp(-dt * 5);
+  const cl = (v, m) => Math.max(-m, Math.min(m, v));
+  _swayZ += (cl(yawRate * 0.40, 0.45) - _swayZ) * k;   // pankkaus kaartoon
+  _swayY += (cl(yawRate * 0.15, 0.20) - _swayY) * k;   // nokka kaarron suuntaan
+  _swayX += (cl(pitchRate * 0.22, 0.30) - _swayX) * k; // nyökkäys
+  falconExt.rotation.set(_swayX, _swayY, _swayZ);
+  shuttleExt.rotation.set(_swayX, _swayY, _swayZ);
+}
+
 /* valot: aurinko pistevalona origosta (avaruusscene — planeetat ovat
    shader-materiaaleja eivätkä reagoi) + himmeä ambientti ja ohjaamon
    sisäinen lämmin täytevalo, jotta mittaristo erottuu yöpuolellakin */
@@ -952,12 +1024,13 @@ fillLight.position.set(0, 0.25, -0.45);
 camera.add(fillLight);
 
 let _lastDraw = -9;
-export function updateCockpit(){
+export function updateCockpit(dt = 0.016){
   bridgeCockpit.visible = S.mode === 'space' && !extView;
   landerCockpit.visible = S.mode === 'descent' && !extView;
   falconExt.visible = S.mode === 'space' && extView;
   shuttleExt.visible = S.mode === 'descent' && extView;
   fillLight.visible = S.mode !== 'surface' && !extView;
+  updateSway(dt);
   const t = S.simTime;
   if (S.mode === 'surface') return;
   for (const b of _blinkers) {

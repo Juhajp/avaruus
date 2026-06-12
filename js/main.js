@@ -38,7 +38,7 @@ function animate(){
   // shaderien uniformit
   for (const m of shaderMats) m.uniforms.uTime.value = S.simTime;
 
-  updateCockpit();
+  updateCockpit(dt);
 
   if (S.mode === 'space') updateSpaceHUD();
 
