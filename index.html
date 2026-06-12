@@ -104,17 +104,10 @@
   @keyframes blink { 50% { opacity:0.35; } }
 
   /* ---- komentosiltatila (3D-ohjaamo renderöidään cockpit.js:ssä;
-          luokka säätää vain HUD-paneelien asettelun) ---- */
-  body.bridge #speedPanel {
-    top:auto; bottom:11%; left:4%; min-width:0; max-width:34vw;
-    font-size:11px; padding:8px 10px;
-    background:rgba(6,8,14,0.85); border-color:rgba(255,153,102,0.45);
-  }
-  body.bridge #targetPanel {
-    top:auto; bottom:11%; right:4%; min-width:0; max-width:34vw;
-    font-size:11px; padding:8px 10px;
-    background:rgba(6,8,14,0.85); border-color:rgba(153,153,204,0.55);
-  }
+          luokka säätää vain HUD-paneelien asettelun) ----
+     NOPEUS/KOHDE-paneelit piilossa — tiedot on integroitu kojelaudan
+     näyttöihin; nopeus säätyy rullalla/W/S, pikasiirtymä R:llä, lasku G:llä */
+  body.bridge #speedPanel, body.bridge #targetPanel { display:none; }
   body.bridge .panel .big { font-size:15px; }
   body.bridge #hint {
     left:50%; bottom:auto; top:8.5%; transform:translateX(-50%);

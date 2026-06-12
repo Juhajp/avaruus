@@ -489,7 +489,6 @@ const LIVE_DRAW = { pos: drawPos, spd: drawSpd, tgt: drawTgt };
 
 /* ---- geometria-apurit ---- */
 const _blinkers = [];
-const _screens = [];
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
 
 // nelikulmio neljästä kulmapisteestä (a→b→c→d sisäpuolelta katsottuna),
@@ -700,7 +699,6 @@ function buildCockpit(opts){
     const sc = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.24), sm);
     sc.position.z = 0.02;
     holder.add(sc);
-    _screens.push({ mat: sm, phase: sd.x * 3 });
   }
   blinker(dash, 0xffb340, -0.30, dashY + 0.06, dashZ + 0.20, 0.9, 0.4);
   blinker(dash, 0xff5340, 0.30, dashY + 0.06, dashZ + 0.20, 1.7, 1.3);
@@ -788,9 +786,6 @@ export function updateCockpit(){
   for (const b of _blinkers) {
     const on = Math.sin(t * 6.2832 / b.period + b.phase) > 0.2;
     b.mat.color.copy(b.on).multiplyScalar(on ? 1.6 : 0.12);
-  }
-  for (const s of _screens) {
-    s.mat.emissiveIntensity = 1.05 + 0.07 * Math.sin(t * 11 + s.phase) + 0.04 * Math.sin(t * 29 + s.phase * 2);
   }
   // elävät mittarinäytöt ~8 Hz — vain näkyvän ohjaamon
   if (t - _lastDraw >= 0.12) {
