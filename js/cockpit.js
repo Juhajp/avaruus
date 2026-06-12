@@ -321,12 +321,13 @@ function quad(parent, mat, a, b, c, d){
   return m;
 }
 
-// palkki kahden pisteen välille (kuusikulmainen sylinteri)
+// palkki kahden pisteen välille (oktagonipoikkileikkaus; fasetit erottuvat
+// materiaalin flatShadingilla)
 function bar(parent, mat, a, b, r){
   const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b);
   const dir = vb.clone().sub(va);
   const len = dir.length();
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 6), mat);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8, 1, false, Math.PI / 8), mat);
   m.position.copy(va).addScaledVector(dir, 0.5);
   m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
   parent.add(m);
@@ -380,7 +381,7 @@ function buildCockpit(opts){
 
   // kehys/rivat/tummat pinnat: kulunut paneloitu metalli (Poly Haven),
   // canvas-sävy jää varalle kunnes lataus valmistuu
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x383c42, roughness: 0.55, metalness: 0.7 });
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x383c42, roughness: 0.55, metalness: 0.7, flatShading: true });
   applyPH(frameMat, 'metal_plate_02', [1.1, 1.3, 1.65], [2, 1]);
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x202329, roughness: 0.75, metalness: 0.4 });
   applyPH(darkMat, 'metal_plate_02', [0.65, 0.75, 0.95], [1, 1]);
@@ -408,7 +409,7 @@ function buildCockpit(opts){
     roughness: 0.55, metalness: 0.22, side: THREE.DoubleSide, depthWrite: false,
   });
   const seatMat = new THREE.MeshStandardMaterial({ color: opts.seat, roughness: 0.95, metalness: 0.05 });
-  const pipeMat = new THREE.MeshStandardMaterial({ color: 0x4c5056, roughness: 0.45, metalness: 0.8 });
+  const pipeMat = new THREE.MeshStandardMaterial({ color: 0x4c5056, roughness: 0.45, metalness: 0.8, flatShading: true });
   applyPH(pipeMat, 'metal_plate_02', [0.95, 1.1, 1.4], [1, 2]);
 
   /* putkirunko: 8 fasettia takarenkaasta keularenkaaseen.
