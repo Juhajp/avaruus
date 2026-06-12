@@ -989,6 +989,35 @@ export function toggleShipView(){
   extView = !extView;
 }
 
+/* etäisyyssovitus: lähellä planeetan pintaa (tai matalalennossa maata)
+   ulkomalli vedetään lähemmäs kameraa ja kutistetaan samassa suhteessa —
+   näennäiskoko ruudulla ei muutu (yhdenmuotoiset kolmiot), mutta mallin
+   todellinen ulottuvuus pysyy vapaassa tilassa eikä leikkaa planeettaan
+   (syvyystesti upottaisi aluksen pinnan sisään) */
+const FALCON_POS = new THREE.Vector3(0, -1.3, -4.6), FALCON_SCALE = 0.5;
+const SHUTTLE_POS = new THREE.Vector3(0, -1.5, -7.2), SHUTTLE_SCALE = 0.7;
+let _extFit = 1;
+function updateExtFit(){
+  let target = 1;
+  if (S.mode === 'space') {
+    let dmin = Infinity;
+    for (const b of bodies) {
+      const d = camera.position.distanceTo(b.group.position) - b.def.r;
+      if (d < dmin) dmin = d;
+    }
+    target = Math.min(1, Math.max(0.06, dmin * 0.12));
+  } else {
+    const sd = surfDebug();
+    const alt = sd.descentPos.y - sd.h(sd.descentPos.x, sd.descentPos.z);
+    target = Math.min(1, Math.max(0.15, alt * 0.07));
+  }
+  _extFit += (target - _extFit) * 0.25;
+  falconExt.position.copy(FALCON_POS).multiplyScalar(_extFit);
+  falconExt.scale.setScalar(FALCON_SCALE * _extFit);
+  shuttleExt.position.copy(SHUTTLE_POS).multiplyScalar(_extFit);
+  shuttleExt.scale.setScalar(SHUTTLE_SCALE * _extFit);
+}
+
 /* ohjausmyötäily: ulkomalli pankkaa kaarrossa, kääntää nokkaa kaarron
    suuntaan ja nyökkää pystyohjauksessa — kulmanopeudet johdetaan
    yaw/pitch-muutoksista ja suodatetaan pehmeiksi */
@@ -1030,6 +1059,7 @@ export function updateCockpit(dt = 0.016){
   falconExt.visible = S.mode === 'space' && extView;
   shuttleExt.visible = S.mode === 'descent' && extView;
   fillLight.visible = S.mode !== 'surface' && !extView;
+  if (extView && S.mode !== 'surface') updateExtFit();
   updateSway(dt);
   const t = S.simTime;
   if (S.mode === 'surface') return;
