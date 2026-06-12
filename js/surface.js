@@ -54,11 +54,27 @@ function updateDaylight(){
   if (d.twilight) d.dl.color.copy(_c1.set(0xffffff).lerp(d.twilight, tw * 0.85));
   if (d.hemi) d.hemi.intensity = d.baseHemi * (0.22 + 0.78 * dayF);
   if (d.bldgMat) d.bldgMat.emissiveIntensity = (1 - dayF) * 1.2;   // ikkunat syttyvät yöksi
-  if (d.cloudMat) {
+  if (d.cloudU) {
     // pilvet tummuvat yöksi ja värjäytyvät ruskossa
     _c2.setScalar(0.18 + 0.82 * dayF);
     if (d.twilight) _c2.lerp(d.twilight, tw * 0.6);
-    d.cloudMat.color.copy(_c2);
+    d.cloudU.uTint.value.copy(_c2);
+  }
+
+  // pölypyörteet vaeltavat jaksollista polkua pelaajan ympäristössä;
+  // jaksohyppy (P) jää sumun taakse. Himmeämmät hämärässä
+  if (d.dust) {
+    for (const dv of d.dust) {
+      const t = S.simTime * 0.05 + dv.ph;
+      const wx = Math.cos(t) * 700 + Math.sin(t * 0.37 + dv.ph) * 500;
+      const wz = Math.sin(t * 0.81 + dv.ph * 2.0) * 700 + Math.cos(t * 0.29) * 400;
+      const P = 2600;
+      const px = wx + Math.round((camera.position.x - wx) / P) * P;
+      const pz = wz + Math.round((camera.position.z - wz) / P) * P;
+      dv.m.position.set(px, surfHeightFn(px, pz) - 2, pz);
+      dv.m.scale.set(dv.w, dv.h, 1);
+      dv.m.material.uniforms.uTint.value.set(0xd2a070).multiplyScalar(0.25 + 0.85 * dayF);
+    }
   }
 
   // fysikaalinen taivas: aurinko shaderille + IBL-kartta auringon liikkuessa
@@ -335,6 +351,7 @@ export const SURFACE_CONFIGS = {
       mountains: { amp: 40, maskF: 0.0006 },
       volcanoes: [{ x: -820, z: -720, R: 540, H: 130 }],
       dunes: true,
+      dust: true,
     },
   },
 };
@@ -394,8 +411,155 @@ function getCloudTexture(){
     c.fillRect(0, 0, S2, S2);
   }
   const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;   // billboard-shader siirtää uv:ta per puff
   _cloudTex = t;
   return t;
+}
+
+// pehmeä rakeinen kohinatekstuuri pölypyörteille (toistuu saumattomasti)
+let _dustTex = null;
+function getDustTexture(){
+  if (_dustTex) return _dustTex;
+  const S2 = 128;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S2;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(S2, S2);
+  for (let y = 0; y < S2; y++) {
+    for (let x = 0; x < S2; x++) {
+      // pystysuuntaan venynyt kohina — nouseva pöly juovittuu
+      let v = 0, amp = 0.55, fx = 6, fy = 2.5;
+      for (let o = 0; o < 3; o++) {
+        v += amp * vnoiseP(x * fx / S2, y * fy / S2 + o * 7, Math.max(fx, fy));
+        fx *= 2; fy *= 2.2; amp *= 0.5;
+      }
+      const g = Math.max(0, Math.min(255, v * 255 | 0));
+      const i = (y * S2 + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = g;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  _dustTex = t;
+  return t;
+}
+
+/* ---- valaistut billboard-pilvet ----
+   Kukin instanssi on kameraan päin käännetty levy (kääntö vertex-shaderissa
+   instanssimatriisin paikasta ja koosta). Valaistus: levyn yläosa vaaleampi
+   (aurinko ylhäältä), kokonaissävy uTint ajetaan updateDaylightista
+   (yö/rusko). Sumu ja log-syvyys mukana chunkeilla. */
+function makeCloudBillboardMaterial(map){
+  const u = {
+    uMap: { value: map },
+    uTint: { value: new THREE.Color(1, 1, 1) },
+    uTime: windU.uTime,
+  };
+  return new THREE.ShaderMaterial({
+    uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), u),
+    transparent: true, depthWrite: false, fog: true,
+    vertexShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    #include <fog_pars_vertex>
+    varying vec2 vUv;
+    varying float vLight;
+    varying float vSeed;
+    void main(){
+      vUv = uv;
+      vec3 ipos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+      float sx = length(vec3(instanceMatrix[0][0], instanceMatrix[0][1], instanceMatrix[0][2]));
+      float sy = length(vec3(instanceMatrix[1][0], instanceMatrix[1][1], instanceMatrix[1][2]));
+      vSeed = fract(ipos.x * 0.1373 + ipos.z * 0.2917);
+      vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+      vec3 camUp    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+      vec3 wpos = ipos + camRight * (position.x * sx) + camUp * (position.y * sy);
+      vLight = 0.66 + 0.44 * clamp(position.y + 0.6, 0.0, 1.0);
+      vec4 mvPosition = viewMatrix * vec4(wpos, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      #include <logdepthbuf_vertex>
+      #include <fog_vertex>
+    }`,
+    fragmentShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_fragment>
+    #include <fog_pars_fragment>
+    uniform sampler2D uMap;
+    uniform vec3 uTint;
+    uniform float uTime;
+    varying vec2 vUv;
+    varying float vLight;
+    varying float vSeed;
+    void main(){
+      vec2 uv = vUv * (0.75 + 0.5 * vSeed) + vec2(vSeed * 3.1 + uTime * 0.0035, vSeed * 1.7);
+      float a = smoothstep(0.06, 0.5, texture2D(uMap, uv).a);   // tiivis ydin, pehmeä reuna
+      vec2 c = vUv - 0.5;
+      a *= smoothstep(0.5, 0.2, length(c));    // pehmeä reuna levyn rajoille
+      if (a < 0.012) discard;
+      gl_FragColor = vec4(uTint * vLight * 1.12, a * 0.95);
+      #include <logdepthbuf_fragment>
+      #include <fog_fragment>
+    }`,
+  });
+}
+
+/* ---- Marsin pölypyörteet ----
+   Pystyakselin ympäri kameraan päin kääntyvä levy; kapeneva siluetti ja
+   ylöspäin vierivä kohina fragment-shaderissa. Liike ajetaan updateDaylightissa. */
+function makeDustDevilMaterial(map, seed){
+  const u = {
+    uMap: { value: map },
+    uTint: { value: new THREE.Color(0xd2a070) },
+    uSeed: { value: seed },
+    uTime: windU.uTime,
+  };
+  return new THREE.ShaderMaterial({
+    uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), u),
+    transparent: true, depthWrite: false, fog: true, side: THREE.DoubleSide,
+    vertexShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    #include <fog_pars_vertex>
+    varying vec2 vUv;
+    void main(){
+      vUv = uv;
+      vec3 ipos = vec3(modelMatrix[3][0], modelMatrix[3][1], modelMatrix[3][2]);
+      float sx = length(vec3(modelMatrix[0][0], modelMatrix[0][1], modelMatrix[0][2]));
+      float sy = length(vec3(modelMatrix[1][0], modelMatrix[1][1], modelMatrix[1][2]));
+      vec3 toCam = cameraPosition - ipos;
+      vec3 right = normalize(vec3(toCam.z, 0.0, -toCam.x));
+      vec3 wpos = ipos + right * (position.x * sx) + vec3(0.0, 1.0, 0.0) * (position.y * sy);
+      vec4 mvPosition = viewMatrix * vec4(wpos, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      #include <logdepthbuf_vertex>
+      #include <fog_vertex>
+    }`,
+    fragmentShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_fragment>
+    #include <fog_pars_fragment>
+    uniform sampler2D uMap;
+    uniform vec3 uTint;
+    uniform float uTime;
+    uniform float uSeed;
+    varying vec2 vUv;
+    void main(){
+      float wHalf = mix(0.10, 0.50, vUv.y);        // kapea tyvi, leveä huippu
+      float xx = abs(vUv.x - 0.5) / wHalf;
+      float shape = smoothstep(1.0, 0.5, xx);
+      vec2 nuv = vec2(vUv.x * 1.6 + uTime * (0.18 + uSeed * 0.07),
+                      vUv.y * 2.4 - uTime * 0.5 - uSeed * 3.0);
+      float n = texture2D(uMap, nuv).r;
+      float a = shape * smoothstep(0.30, 0.72, n)
+              * smoothstep(1.0, 0.8, vUv.y) * smoothstep(0.0, 0.07, vUv.y);
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(uTint, a * 0.5);
+      #include <logdepthbuf_fragment>
+      #include <fog_fragment>
+    }`,
+  });
 }
 
 // asfalttitekstuuri: keskikatkoviiva ja reunaviivat; v toistuu 15 m välein
@@ -1040,21 +1204,49 @@ function buildSurfaceScene(name){
     }
   }
 
-  // pilvet: litteät kumpupilvet 400–580 m korkeudessa, seuraavat kameraa sirotteena
-  let cloudMat = null;
+  // pilvet: valaistuja billboard-puffeja klustereina 420–600 m korkeudessa.
+  // Klusterointi: sirotteen peruspaikat (bx/bz) ylikirjoitetaan niin, että
+  // PUFFS peräkkäistä instanssia jakaa ryhmäkeskuksen — puffit pysyvät
+  // kimpuissa solusiirtymissäkin. Puffin korkeus/koko lasketaan jaetuilla
+  // funktioilla, joita myös white-out käyttää (cloudPuff)
+  let cloudU = null, cloudSct = null;
+  const CLOUD_W = 2400, PUFFS = 6;
+  const cloudPuff = (i) => ({
+    sx: 130 + hash2(i, 45) * 130,
+    sy: 40 + hash2(i, 46) * 34,
+    y: 420 + hash2(Math.floor(i / PUFFS), 47) * 150 + (hash2(i, 48) - 0.5) * 40,
+  });
   if (F.clouds) {
-    cloudMat = new THREE.MeshBasicMaterial({
-      map: getCloudTexture(), transparent: true, depthWrite: false,
-      side: THREE.DoubleSide, fog: true,
-    });
-    addScatter(sc, new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), cloudMat,
-      34, 3200, (i, x, z, m4, rq, re, rs) => {
-        const s = 150 + hash2(i, 41) * 230;
-        re.set(0, hash2(i, 42) * 6.28, 0);
-        rq.setFromEuler(re);
-        rs.set(s, 1, s * (0.55 + hash2(i, 43) * 0.5));
-        m4.compose(_vp.set(x, 400 + hash2(i, 44) * 180, z), rq, rs);
+    const cloudMat = makeCloudBillboardMaterial(getCloudTexture());
+    cloudU = cloudMat.uniforms;
+    const GROUPS = 24, N = GROUPS * PUFFS;
+    addScatter(sc, new THREE.PlaneGeometry(1, 1), cloudMat,
+      N, CLOUD_W, (i, x, z, m4, rq, re, rs) => {
+        const p = cloudPuff(i);
+        rq.identity();
+        rs.set(p.sx, p.sy, 1);
+        m4.compose(_vp.set(x, p.y, z), rq, rs);
       });
+    cloudSct = scatters[scatters.length - 1];
+    for (let i = 0; i < N; i++) {
+      const g = Math.floor(i / PUFFS);
+      cloudSct.bx[i] = (hash2(g, 41) - 0.5) * CLOUD_W + (hash2(i, 43) - 0.5) * 280;
+      cloudSct.bz[i] = (hash2(g, 42) - 0.5) * CLOUD_W + (hash2(i, 44) - 0.5) * 280;
+    }
+    cloudSct.puff = cloudPuff;
+  }
+
+  // pölypyörteet (Mars): vaeltavat pystypatsaat, liike updateDaylightissa
+  let dust = null;
+  if (F.dust) {
+    const dgeo = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0);   // ankkuri tyveen
+    dust = [];
+    for (let k = 0; k < 3; k++) {
+      const m = new THREE.Mesh(dgeo, makeDustDevilMaterial(getDustTexture(), k * 1.37));
+      m.frustumCulled = false;
+      sc.add(m);
+      dust.push({ m, ph: k * 2.3, w: 11 + k * 5, h: 75 + k * 28 });
+    }
   }
 
   // rakennukset: kaupungit teiden risteyksissä (Maa)
@@ -1166,7 +1358,7 @@ function buildSurfaceScene(name){
   }
 
   daylight = {
-    sc, cfg, dl, hemi, disc, starsMat, bldgMat, cloudMat,
+    sc, cfg, dl, hemi, disc, starsMat, bldgMat, cloudU, cloudSct, dust,
     skyMat, skyEnvScene, envMats, envRT: null, lastEnvElev: 99, lastEnvT: -99,
     baseInt: lightDef.intensity,
     baseHemi: cfg.hemi ? cfg.hemi[2] : 0,
@@ -1216,6 +1408,7 @@ function enterSurfaceScene(b, mode){
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
   S.mode = 'space';
+  whiteOutEl.style.opacity = '0';
   if (daylight && daylight.envRT) daylight.envRT.dispose();
   renderPass.scene = scene;
   scene.add(camera);          // kamera takaisin avaruusscenen jäseneksi
@@ -1310,6 +1503,7 @@ const _right = new THREE.Vector3();
 
 // fade to black -siirtymä: pimennys, vaihto, häivytys takaisin
 const fadeEl = document.getElementById('fadeBlack');
+const whiteOutEl = document.getElementById('whiteOut');
 let transitioning = false;
 function fadeSwap(fn){
   if (transitioning) return;
@@ -1421,6 +1615,7 @@ export function updateDescent(dt){
     }
     fadeSwap(() => {
       S.mode = 'surface';
+      whiteOutEl.style.opacity = '0';
       document.body.classList.remove('descent');
       surfX = descentPos.x; surfZ = descentPos.z;
       bobPhase = 0; bobAmp = 0;
@@ -1432,6 +1627,22 @@ export function updateDescent(dt){
   }
 
   camera.position.copy(descentPos);
+
+  // pilven läpäisyn white-out: tiheys lähimmästä puffista (ellipsoidi)
+  const cs = daylight.cloudSct;
+  if (cs) {
+    let wo = 0;
+    for (let i = 0; i < cs.count; i++) {
+      if (Number.isNaN(cs.kx[i])) continue;
+      const p = cs.puff(i);
+      const dh = Math.hypot(descentPos.x - (cs.bx[i] + cs.kx[i] * cs.W),
+                            descentPos.z - (cs.bz[i] + cs.kz[i] * cs.W)) / (p.sx * 0.55);
+      const dv = (descentPos.y - p.y) / (p.sy * 0.75);
+      const dens = 1 - (dh * dh + dv * dv);
+      if (dens > wo) wo = dens;
+    }
+    whiteOutEl.style.opacity = wo > 0 ? (0.94 * Math.min(1, wo * 2.2)).toFixed(3) : '0';
+  }
 
   // ohjaamon mittarit: keinohorisontti ja lukemat
   const pitchDeg = S.pitch * 180 / Math.PI;

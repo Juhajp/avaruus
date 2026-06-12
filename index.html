@@ -167,6 +167,11 @@
     position:fixed; inset:0; background:#000; opacity:0;
     pointer-events:none; z-index:65; transition:opacity 0.3s ease;
   }
+  /* pilven läpäisyn white-out matalalennossa — ohjaamo (#lander, z 7) jää näkyviin */
+  #whiteOut {
+    position:fixed; inset:0; background:#dfe6ee; opacity:0;
+    pointer-events:none; z-index:6; transition:opacity 0.22s linear;
+  }
 
   /* ---- pintamoodi ---- */
   #surfacePanel { top:16px; left:16px; display:none; max-width:360px; }
@@ -438,6 +443,7 @@
 </div>
 
 <div id="fadeBlack"></div>
+<div id="whiteOut"></div>
 
 <div id="speedPanel" class="panel">
   <h3>NOPEUS</h3>
