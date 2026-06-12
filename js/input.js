@@ -2,6 +2,7 @@
 import { renderer } from './core.js';
 import { bodies, orbitLines, placeNearBody } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent } from './surface.js';
+import { toggleShipView } from './cockpit.js';
 import { S, clamp01 } from './state.js';
 
 let started = false;
@@ -67,6 +68,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyX') S.targetFrac = 0;
   if (e.code === 'KeyM') S.targetFrac = 0.99;
   if (e.code === 'KeyO') orbitLines.visible = !orbitLines.visible;
+  if (e.code === 'KeyV') toggleShipView();
   if (e.code === 'KeyH') {
     overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
   }
