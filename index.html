@@ -376,6 +376,26 @@
 
 <div id="lander" aria-hidden="true">
   <svg class="frame" viewBox="0 0 1600 900" preserveAspectRatio="none">
+    <defs>
+      <!-- tuulilasin heijastusjuovien liukuväri -->
+      <linearGradient id="glassStreak" x1="0" y1="0" x2="0.6" y2="1">
+        <stop offset="0" stop-color="#d8e6f4" stop-opacity="0.11"/>
+        <stop offset="0.45" stop-color="#d8e6f4" stop-opacity="0.04"/>
+        <stop offset="1" stop-color="#d8e6f4" stop-opacity="0"/>
+      </linearGradient>
+      <radialGradient id="glassSheen" cx="0.32" cy="0.1" r="0.9">
+        <stop offset="0" stop-color="#e8f1fa" stop-opacity="0.05"/>
+        <stop offset="0.5" stop-color="#e8f1fa" stop-opacity="0.015"/>
+        <stop offset="1" stop-color="#e8f1fa" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <!-- lasin heijastukset: laaja kiilto + vinot juovat -->
+    <rect x="64" y="34" width="1472" height="668" fill="url(#glassSheen)"/>
+    <g>
+      <polygon points="430,64 580,64 250,702 145,702" fill="url(#glassStreak)"/>
+      <polygon points="655,64 715,64 430,702 345,702" fill="url(#glassStreak)" opacity="0.7"/>
+      <polygon points="1235,64 1330,64 1490,702 1400,702" fill="url(#glassStreak)" opacity="0.5"/>
+    </g>
     <!-- yläpalkki ja viistot sivupilarit -->
     <polygon points="0,0 1600,0 1600,64 1080,34 520,34 0,64" fill="#15171b"/>
     <polygon points="0,0 130,0 64,900 0,900" fill="#101317"/>

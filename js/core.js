@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 /* ============================================================
    Mittakaava
@@ -63,6 +64,37 @@ scene.add(camera);   // jotta kameraan kiinnitetyt efektit (warp) renderöityvä
 export const composer = new EffectComposer(renderer);
 export const renderPass = new RenderPass(scene, camera);
 composer.addPass(renderPass);
+
+/* Lämpöväreily: ruudun alaosan uv-huojunta (moottorin kuuma ilma laskussa).
+   Pass on käytössä vain kun amplitudi > 0 — muuten nollakustannus. */
+const HeatShimmerShader = {
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAmp: { value: 0 } },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uAmp;
+    varying vec2 vUv;
+    void main(){
+      float m = smoothstep(0.85, 0.2, vUv.y);   // voimistuu alareunaa kohti
+      vec2 off = vec2(
+        sin(vUv.y * 72.0 + uTime * 9.2) + sin(vUv.y * 31.0 - uTime * 5.3 + vUv.x * 17.0),
+        sin(vUv.x * 47.0 + uTime * 7.1 + vUv.y * 23.0)
+      ) * (uAmp * m) * vec2(1.0, 0.55);
+      gl_FragColor = texture2D(tDiffuse, vUv + off);
+    }`,
+};
+const heatPass = new ShaderPass(HeatShimmerShader);
+heatPass.enabled = false;
+composer.addPass(heatPass);
+export function setHeatShimmer(amp, time){
+  heatPass.uniforms.uAmp.value = amp;
+  heatPass.uniforms.uTime.value = time;
+  heatPass.enabled = amp > 0.00005;
+}
+
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.65, 0.5, 1.0);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());

@@ -1,6 +1,6 @@
 /* ---------------- Pintamoodi: teleporttaus planeetoille ---------------- */
 import * as THREE from 'three';
-import { renderer, scene, camera, renderPass } from './core.js';
+import { renderer, scene, camera, renderPass, setHeatShimmer } from './core.js';
 import { bodies, placeNearBody } from './bodies.js';
 import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
@@ -59,6 +59,18 @@ function updateDaylight(){
     _c2.setScalar(0.18 + 0.82 * dayF);
     if (d.twilight) _c2.lerp(d.twilight, tw * 0.6);
     d.cloudU.uTint.value.copy(_c2);
+  }
+
+  // laskeutumispöly: pistekoon ruutuskaala, värin vuorokausimodulointi
+  // ja purskeen sammutus, kun pilvi on laskeutunut
+  if (d.dustFx) {
+    const f = d.dustFx;
+    const px = renderer.domElement.height / (2 * Math.tan(camera.fov * Math.PI / 360));
+    f.thrust.u.uPxScale.value = f.burst.u.uPxScale.value = px;
+    _c2.copy(f.baseCol).multiplyScalar(0.25 + 0.75 * dayF);
+    f.thrust.u.uColor.value.copy(_c2);
+    f.burst.u.uColor.value.copy(_c2);
+    if (f.burst.pts.visible && S.simTime - f.burst.u.uT0.value > 4) f.burst.pts.visible = false;
   }
 
   // pölypyörteet vaeltavat jaksollista polkua pelaajan ympäristössä;
@@ -274,6 +286,84 @@ function makeSplatMaterial(detail, p){
   loadPH(p.second, 'diff', true).then(t => { if (t) uSecond.value = t; });
   loadPH(p.rock, 'diff', true).then(t => { if (t) uRock.value = t; });
   return mat;
+}
+
+/* ---- laskeutumispöly (tiekartan vaihe 5) ----
+   Kaksi tilatonta GPU-partikkelijärjestelmää (THREE.Points):
+   - thrust: moottorin nostattama pyörre matalalla — partikkelit kiertävät
+     jaksollisesti ulospäin uOrigin-pisteestä (maa aluksen alla), voimakkuus uInt
+   - burst: kosketuspölypilvi — kertapurske uT0-hetkestä, laajenee ja laskeutuu
+   Paikat lasketaan shaderissa siemenattribuutista, CPU päivittää vain uniformit. */
+function makeDustPoints(sc, color, mode){
+  const N = mode === 'thrust' ? 320 : 260;
+  const g = new THREE.BufferGeometry();
+  const seeds = new Float32Array(N * 3);
+  for (let i = 0; i < N * 3; i++) seeds[i] = hash2(i * 1.7 + (mode === 'thrust' ? 3 : 7), i % 97);
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+  g.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
+  const u = {
+    uTime: windU.uTime,
+    uOrigin: { value: new THREE.Vector3(0, -9999, 0) },
+    uInt: { value: 0 },
+    uT0: { value: -99 },
+    uPxScale: { value: 600 },
+    uColor: { value: color.clone() },
+  };
+  const motion = mode === 'thrust' ? /* glsl */`
+      float t = fract(uTime / T + aSeed.y);
+      float r = 1.5 + (6.0 + aSeed.y * 26.0) * t;
+      float h = sin(t * 3.1416) * (1.2 + aSeed.z * 3.0);
+      float size = 1.6 + 5.5 * t;
+      float al = uInt * (1.0 - t) * (0.28 + 0.3 * aSeed.x);` : /* glsl */`
+      float age = uTime - uT0;
+      float t = clamp(age / 3.2, 0.0, 1.0);
+      float r = 1.5 + (5.0 + aSeed.y * 16.0) * 2.2 * (1.0 - exp(-age * 0.9));
+      float h = (0.5 + aSeed.z * 3.0) * age * exp(-age) * 2.7;
+      float size = 2.0 + age * 6.0;
+      float al = (age < 0.0) ? 0.0 : (1.0 - t) * 0.55;`;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), u),
+    transparent: true, depthWrite: false, fog: true,
+    vertexShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    #include <fog_pars_vertex>
+    attribute vec3 aSeed;
+    uniform float uTime; uniform vec3 uOrigin; uniform float uInt;
+    uniform float uT0; uniform float uPxScale;
+    varying float vAlpha;
+    void main(){
+      float ang = aSeed.x * 6.2832;
+      float T = 1.1 + aSeed.z * 1.3;
+      ` + motion + /* glsl */`
+      vec3 wpos = uOrigin + vec3(cos(ang) * r, h, sin(ang) * r);
+      vec4 mvPosition = viewMatrix * vec4(wpos, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      gl_PointSize = size * uPxScale / max(1.0, -mvPosition.z);
+      vAlpha = al;
+      #include <logdepthbuf_vertex>
+      #include <fog_vertex>
+    }`,
+    fragmentShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_fragment>
+    #include <fog_pars_fragment>
+    uniform vec3 uColor;
+    varying float vAlpha;
+    void main(){
+      float d = length(gl_PointCoord - 0.5);
+      float a = vAlpha * smoothstep(0.5, 0.12, d);
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(uColor, a);
+      #include <logdepthbuf_fragment>
+      #include <fog_fragment>
+    }`,
+  });
+  const pts = new THREE.Points(g, mat);
+  pts.frustumCulled = false;
+  pts.visible = false;
+  sc.add(pts);
+  return { pts, u };
 }
 
 // olosuhteet nykytietämyksen mukaan
@@ -1236,6 +1326,14 @@ function buildSurfaceScene(name){
     cloudSct.puff = cloudPuff;
   }
 
+  // laskeutumispöly: moottoripyörre + kosketuspölypilvi (kaikki kiviplaneetat)
+  const dustCol = new THREE.Color(cfg.rock).lerp(_cWhite, 0.2).multiplyScalar(1.15);
+  const dustFx = {
+    thrust: makeDustPoints(sc, dustCol, 'thrust'),
+    burst: makeDustPoints(sc, dustCol, 'burst'),
+    baseCol: dustCol,
+  };
+
   // pölypyörteet (Mars): vaeltavat pystypatsaat, liike updateDaylightissa
   let dust = null;
   if (F.dust) {
@@ -1358,7 +1456,7 @@ function buildSurfaceScene(name){
   }
 
   daylight = {
-    sc, cfg, dl, hemi, disc, starsMat, bldgMat, cloudU, cloudSct, dust,
+    sc, cfg, dl, hemi, disc, starsMat, bldgMat, cloudU, cloudSct, dust, dustFx,
     skyMat, skyEnvScene, envMats, envRT: null, lastEnvElev: 99, lastEnvT: -99,
     baseInt: lightDef.intensity,
     baseHemi: cfg.hemi ? cfg.hemi[2] : 0,
@@ -1409,6 +1507,7 @@ function enterSurfaceScene(b, mode){
 function leaveSurfaceScene(){
   S.mode = 'space';
   whiteOutEl.style.opacity = '0';
+  setHeatShimmer(0, 0);
   if (daylight && daylight.envRT) daylight.envRT.dispose();
   renderPass.scene = scene;
   scene.add(camera);          // kamera takaisin avaruusscenen jäseneksi
@@ -1599,6 +1698,16 @@ export function updateDescent(dt){
   const alt = descentPos.y - ground;
   const rollDeg = descRoll * 180 / Math.PI;
 
+  // moottorin nostattama pöly ja lämpöväreily matalalla
+  const fx = daylight.dustFx;
+  const nearK = Math.max(0, 1 - alt / 90);
+  if (fx) {
+    fx.thrust.u.uOrigin.value.set(descentPos.x, ground + 0.4, descentPos.z);
+    fx.thrust.u.uInt.value = nearK * nearK;
+    fx.thrust.pts.visible = nearK > 0.02;
+  }
+  setHeatShimmer(nearK * nearK * 0.0042, S.simTime);
+
   // ylös avaruuteen
   if (descentPos.y > DESCENT_CEIL) { abortDescent(); return; }
 
@@ -1613,9 +1722,17 @@ export function updateDescent(dt){
       destroyShip(reason);
       return;
     }
+    // kosketuspölypilvi laukeaa laskupisteessä; jää näkyviin kävelymoodiin
+    if (fx) {
+      fx.burst.u.uT0.value = S.simTime;
+      fx.burst.u.uOrigin.value.set(descentPos.x, ground + 0.3, descentPos.z);
+      fx.burst.pts.visible = true;
+      fx.thrust.pts.visible = false;
+    }
     fadeSwap(() => {
       S.mode = 'surface';
       whiteOutEl.style.opacity = '0';
+      setHeatShimmer(0, 0);
       document.body.classList.remove('descent');
       surfX = descentPos.x; surfZ = descentPos.z;
       bobPhase = 0; bobAmp = 0;
