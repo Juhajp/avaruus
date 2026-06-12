@@ -10,8 +10,9 @@
    kamerassa = aluksen rungossa (lento kääntää alusta). */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { scene, camera } from './core.js';
-import { loadPH } from './surface.js';
+import { scene, camera, AU, C, C_KMS } from './core.js';
+import { loadPH, surfDebug } from './surface.js';
+import { bodies } from './bodies.js';
 import { S } from './state.js';
 
 /* Poly Haven -metallipinta materiaaliin taustalataukena (canvas jää varalle):
@@ -300,6 +301,192 @@ function makeOverheadTex(accent){
   return { map: tex(base), emissive: tex(emit) };
 }
 
+/* ---- elävät kojelautanäytöt ----
+   Keskirivin kolme näyttöä piirretään canvas-tekstuureihin ~8 Hz:
+   vasen = aluksen sijainti (aurinkokuntakartta / matalalennossa planeetta
+   ja korkeus), keski = nopeus, oikea = kohteen tiedot — samat luvut ja
+   kaavat kuin HUD-paneeleissa (hud.js). */
+const _live = [];
+const _dir = new THREE.Vector3();
+const MONO = 'ui-monospace, Menlo, Consolas, monospace';
+
+function fmtTime(s){
+  if (!isFinite(s)) return '—';
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+function scrHead(c, hue, title){
+  c.fillStyle = '#03070c';
+  c.fillRect(0, 0, 256, 192);
+  c.strokeStyle = hue; c.lineWidth = 1.5;
+  c.strokeRect(3, 3, 250, 186);
+  c.fillStyle = hue;
+  c.globalAlpha = 0.8;
+  c.font = '700 13px ' + MONO;
+  c.fillText(title, 12, 21);
+  c.fillRect(8, 28, 240, 1.2);
+  c.globalAlpha = 1;
+}
+
+// vasen näyttö: aurinkokuntakartta ylhäältä (log-skaalatut radat),
+// kohde korostettuna ja alus suuntakolmiona
+function drawPos(c, hue){
+  scrHead(c, hue, 'SIJAINTI');
+  if (S.mode === 'space') {
+    const cx = 128, cy = 108;
+    const rOf = (au) => 13 + 60 * Math.log10(1 + au * 3) / Math.log10(1 + 30.07 * 3);
+    c.fillStyle = '#ffd27f';
+    c.beginPath(); c.arc(cx, cy, 3, 0, 7); c.fill();
+    for (let i = 1; i < bodies.length; i++) {
+      const b = bodies[i];
+      if (!(b.def.a > 0)) continue;
+      const r = rOf(b.def.a);
+      c.strokeStyle = hue; c.globalAlpha = 0.22; c.lineWidth = 0.8;
+      c.beginPath(); c.arc(cx, cy, r, 0, 7); c.stroke();
+      c.globalAlpha = 1;
+      const ang = Math.atan2(b.group.position.z, b.group.position.x);
+      const px = cx + Math.cos(ang) * r, py = cy + Math.sin(ang) * r;
+      const isT = i === S.targetIdx;
+      c.fillStyle = isT ? '#aef7c1' : hue;
+      c.beginPath(); c.arc(px, py, isT ? 3 : 2, 0, 7); c.fill();
+      if (isT) { c.strokeStyle = '#aef7c1'; c.lineWidth = 1; c.beginPath(); c.arc(px, py, 6, 0, 7); c.stroke(); }
+    }
+    const sAU = Math.hypot(camera.position.x, camera.position.z) / AU;
+    const sr = rOf(sAU);
+    const sa = Math.atan2(camera.position.z, camera.position.x);
+    camera.getWorldDirection(_dir);
+    const ha = Math.atan2(_dir.z, _dir.x);
+    c.save();
+    c.translate(cx + Math.cos(sa) * sr, cy + Math.sin(sa) * sr);
+    c.rotate(ha);
+    c.fillStyle = '#ffffff';
+    c.beginPath(); c.moveTo(7, 0); c.lineTo(-4, 4.5); c.lineTo(-4, -4.5); c.closePath(); c.fill();
+    c.restore();
+    c.fillStyle = hue;
+    c.font = '12px ' + MONO;
+    c.fillText('r ' + sAU.toFixed(2) + ' AU', 12, 184);
+  } else {
+    const sd = surfDebug();
+    const alt = sd.descentPos.y - sd.h(sd.descentPos.x, sd.descentPos.z);
+    c.fillStyle = '#ffffff';
+    c.font = '700 22px ' + MONO;
+    c.fillText(sd.body || '—', 12, 62);
+    c.fillStyle = hue;
+    c.font = '13px ' + MONO;
+    c.fillText('KORKEUS', 12, 96);
+    c.fillStyle = '#ffffff';
+    c.font = '700 30px ' + MONO;
+    c.fillText(Math.max(0, Math.round(alt)) + ' m', 12, 128);
+    c.fillStyle = hue;
+    c.font = '12px ' + MONO;
+    c.fillText('X ' + Math.round(sd.descentPos.x) + '  Z ' + Math.round(sd.descentPos.z), 12, 160);
+  }
+}
+
+// keskinäyttö: nopeus — avaruudessa % c / km/s / gamma, matalalennossa m/s
+function drawSpd(c, hue){
+  scrHead(c, hue, 'NOPEUS');
+  if (S.mode === 'space') {
+    const eff = S.effFrac || 0;
+    c.fillStyle = '#ffffff';
+    c.font = '700 28px ' + MONO;
+    c.fillText((eff * 100).toFixed(eff < 0.105 ? 2 : 1) + ' % c', 12, 70);
+    c.fillStyle = hue;
+    c.font = '14px ' + MONO;
+    c.fillText(Math.round(eff * C_KMS).toLocaleString('fi-FI') + ' km/s', 12, 98);
+    c.fillText('γ = ' + (1 / Math.sqrt(1 - eff * eff)).toFixed(2), 12, 120);
+    c.globalAlpha = 0.5;
+    c.strokeStyle = hue; c.lineWidth = 1;
+    c.strokeRect(12, 138, 232, 14);
+    c.globalAlpha = 1;
+    c.fillRect(14, 140, 228 * Math.min(1, eff / 0.99), 10);
+    const tick = 12 + 232 * Math.min(1, (S.targetFrac || 0) / 0.99);
+    c.fillStyle = '#ffffff';
+    c.fillRect(tick - 1, 134, 2, 22);
+    if (S.dragBody && S.dragWeight > 0.01) {
+      c.fillStyle = '#aef7c1';
+      c.font = '11px ' + MONO;
+      c.fillText('⊕ ' + S.dragBody.def.name + ' ' + Math.round(S.dragWeight * 100) + ' %', 12, 178);
+    }
+  } else {
+    const sd = surfDebug();
+    const v = sd.descentV();
+    c.fillStyle = v <= 55 ? '#4dff88' : '#ffffff';
+    c.font = '700 34px ' + MONO;
+    c.fillText(Math.round(v) + ' m/s', 12, 78);
+    c.globalAlpha = 0.5;
+    c.strokeStyle = hue; c.lineWidth = 1;
+    c.strokeRect(12, 100, 232, 14);
+    c.globalAlpha = 1;
+    c.fillStyle = hue;
+    c.fillRect(14, 102, 228 * Math.min(1, v / 450), 10);
+    const mark = 12 + 232 * (55 / 450);
+    c.fillStyle = '#4dff88';
+    c.fillRect(mark - 1, 96, 2, 22);
+    const rollDeg = sd.roll() * 180 / Math.PI;
+    c.fillStyle = Math.abs(rollDeg) <= 2 ? '#4dff88' : '#ff7a5c';
+    c.font = '14px ' + MONO;
+    c.fillText('KALLISTUS ' + rollDeg.toFixed(1) + '°', 12, 148);
+    c.fillStyle = hue;
+    c.font = '11px ' + MONO;
+    c.fillText('lasku ≤ 55 m/s · ≤ 2°', 12, 178);
+  }
+}
+
+// oikea näyttö: kohteen tiedot — nimi, etäisyys ja ETA kuten HUD:ssa
+function drawTgt(c, hue){
+  scrHead(c, hue, 'KOHDE');
+  if (S.mode === 'space') {
+    const tgt = bodies[S.targetIdx];
+    const distU = camera.position.distanceTo(tgt.group.position) - tgt.def.r;
+    const distAU = distU / AU;
+    c.fillStyle = '#ffffff';
+    c.font = '700 24px ' + MONO;
+    c.fillText(tgt.def.name, 12, 64);
+    c.fillStyle = hue;
+    c.font = '15px ' + MONO;
+    if (distAU >= 0.01) {
+      c.fillText(distAU.toFixed(2) + ' AU', 12, 96);
+      c.font = '12px ' + MONO;
+      c.fillText('(' + Math.round(distAU * 149.6).toLocaleString('fi-FI') + ' milj. km)', 12, 116);
+    } else {
+      c.fillText(Math.max(0, Math.round(distU * 149600)).toLocaleString('fi-FI') + ' km', 12, 96);
+    }
+    const v = (S.effFrac || 0) * C;
+    c.font = '14px ' + MONO;
+    c.fillText('ETA ' + (v > 0.5 ? fmtTime(distU / v) : '—'), 12, 144);
+    // tähtäyskehikko koristeena
+    c.strokeStyle = hue; c.globalAlpha = 0.5; c.lineWidth = 1.5;
+    c.beginPath();
+    c.moveTo(196, 60); c.lineTo(186, 60); c.lineTo(186, 70);
+    c.moveTo(236, 60); c.lineTo(246, 60); c.lineTo(246, 70);
+    c.moveTo(196, 110); c.lineTo(186, 110); c.lineTo(186, 100);
+    c.moveTo(236, 110); c.lineTo(246, 110); c.lineTo(246, 100);
+    c.stroke();
+    c.globalAlpha = 1;
+  } else {
+    const sd = surfDebug();
+    const v = sd.descentV();
+    const rollDeg = Math.abs(sd.roll() * 180 / Math.PI);
+    c.fillStyle = '#ffffff';
+    c.font = '700 20px ' + MONO;
+    c.fillText((sd.body || '—') + ' · PINTA', 12, 60);
+    c.font = '14px ' + MONO;
+    c.fillStyle = v <= 55 ? '#4dff88' : '#ff7a5c';
+    c.fillText('VAUHTI    ' + (v <= 55 ? 'OK' : 'LIIAN KOVA'), 12, 100);
+    c.fillStyle = rollDeg <= 2 ? '#4dff88' : '#ff7a5c';
+    c.fillText('KALLISTUS ' + (rollDeg <= 2 ? 'OK' : 'LIIKAA'), 12, 126);
+    c.fillStyle = hue;
+    c.font = '12px ' + MONO;
+    c.fillText('B = takaisin avaruuteen', 12, 170);
+  }
+}
+
+const LIVE_DRAW = { pos: drawPos, spd: drawSpd, tgt: drawTgt };
+
 /* ---- geometria-apurit ---- */
 const _blinkers = [];
 const _screens = [];
@@ -480,17 +667,29 @@ function buildCockpit(opts){
     box(dash, darkMat, sg.w, 0.52, 0.07, sg.x * 1.13, dashY - 0.28, sg.z - 0.18 + Math.abs(sg.x) * 0.16, 0, sg.ry, 0);
     b.userData.ry = sg.ry;
   }
-  // näyttörivistö: 5 ruutua konsolien päällä
+  // näyttörivistö: keskirivin kolme ruutua ovat eläviä mittareita
+  // (sijainti / nopeus / kohde), reunimmaiset staattista telemetriakoristetta
   const screenDefs = [
-    { kind: 'orbit', x: -0.42, z: dashZ - 0.02, ry: 0 },
-    { kind: opts.midScreen, x: 0, z: dashZ - 0.04, ry: 0 },
-    { kind: 'bars', x: 0.42, z: dashZ - 0.02, ry: 0 },
+    { kind: 'pos', x: -0.42, z: dashZ - 0.02, ry: 0, live: true },
+    { kind: 'spd', x: 0, z: dashZ - 0.04, ry: 0, live: true },
+    { kind: 'tgt', x: 0.42, z: dashZ - 0.02, ry: 0, live: true },
     { kind: 'wave', x: -1.00, z: dashZ + 0.24, ry: 0.62 },
     { kind: 'bars', x: 1.00, z: dashZ + 0.24, ry: -0.62 },
   ];
   for (const sd of screenDefs) {
+    let emissiveMap;
+    if (sd.live) {
+      const cv = document.createElement('canvas');
+      cv.width = 256; cv.height = 192;
+      emissiveMap = new THREE.CanvasTexture(cv);
+      emissiveMap.colorSpace = THREE.SRGBColorSpace;
+      emissiveMap.anisotropy = 8;
+      _live.push({ kind: sd.kind, ctx: cv.getContext('2d'), tex: emissiveMap, hue: opts.screenCss, group: g });
+    } else {
+      emissiveMap = makeScreenTex(sd.kind, opts.screenCss);
+    }
     const sm = new THREE.MeshStandardMaterial({
-      color: 0x000000, emissive: 0xffffff, emissiveMap: makeScreenTex(sd.kind, opts.screenCss),
+      color: 0x000000, emissive: 0xffffff, emissiveMap,
       emissiveIntensity: 1.05, roughness: 0.3,
     });
     const holder = new THREE.Group();
@@ -559,12 +758,12 @@ function mergeStatic(g){
 /* avaruusaluksen komentosilta: siniset näytöt (referenssin mukaan) */
 const bridgeCockpit = buildCockpit({
   accent: 0x3fb8ff, accentCss: '#3fb8ff', screenCss: '#6cc8ff',
-  midScreen: 'nav', seat: 0x4a3c30,
+  seat: 0x4a3c30,
 });
 /* laskeutumisalus: lämmin meripihka-aksentti */
 const landerCockpit = buildCockpit({
   accent: 0xffb340, accentCss: '#ffb340', screenCss: '#ffc468',
-  midScreen: 'orbit', seat: 0x37404a,
+  seat: 0x37404a,
 });
 
 /* valot: aurinko pistevalona origosta (avaruusscene — planeetat ovat
@@ -579,6 +778,7 @@ const fillLight = new THREE.PointLight(0xdfe8f2, 0.4, 5, 1.6);
 fillLight.position.set(0, 0.25, -0.45);
 camera.add(fillLight);
 
+let _lastDraw = -9;
 export function updateCockpit(){
   bridgeCockpit.visible = S.mode === 'space';
   landerCockpit.visible = S.mode === 'descent';
@@ -591,5 +791,14 @@ export function updateCockpit(){
   }
   for (const s of _screens) {
     s.mat.emissiveIntensity = 1.05 + 0.07 * Math.sin(t * 11 + s.phase) + 0.04 * Math.sin(t * 29 + s.phase * 2);
+  }
+  // elävät mittarinäytöt ~8 Hz — vain näkyvän ohjaamon
+  if (t - _lastDraw >= 0.12) {
+    _lastDraw = t;
+    for (const ls of _live) {
+      if (!ls.group.visible) continue;
+      LIVE_DRAW[ls.kind](ls.ctx, ls.hue);
+      ls.tex.needsUpdate = true;
+    }
   }
 }

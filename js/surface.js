@@ -1779,6 +1779,7 @@ export function updateDescent(dt){
 export function surfDebug(){
   return {
     scene: surfaceScene, h: surfHeightFn, x: surfX, z: surfZ,
+    body: surfaceBody ? surfaceBody.def.name : null,
     dayPhase: daylight ? sunPhase() % (Math.PI * 2) : null,
     setDayPhase(p){ dayPhase0 = p; dayT0 = S.simTime; updateDaylight(); },
     descentPos, descentV: () => descentV,
