@@ -7,6 +7,7 @@ import { updateWarp } from './warp.js';
 import { updateReentry, reentryDebug } from './reentry.js';
 import { updateSurface, updateDescent, checkDescentEntry, tryBeamDown, exitSurface, surfDebug } from './surface.js';
 import { updateFlight } from './flight.js';
+import { updateCockpit } from './cockpit.js';
 import { updateSpaceHUD } from './hud.js';
 import { setTarget } from './input.js';
 import { S, clamp01 } from './state.js';
@@ -36,6 +37,8 @@ function animate(){
 
   // shaderien uniformit
   for (const m of shaderMats) m.uniforms.uTime.value = S.simTime;
+
+  updateCockpit();
 
   if (S.mode === 'space') updateSpaceHUD();
 

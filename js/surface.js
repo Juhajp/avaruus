@@ -221,7 +221,7 @@ function getDetailTexture(name, cfg){
 const PH_BASE = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/';
 const phLoader = new THREE.TextureLoader();
 const _phCache = {};
-function loadPH(slug, map, srgb){
+export function loadPH(slug, map, srgb){
   const key = slug + '_' + map;
   if (!_phCache[key]) {
     _phCache[key] = new Promise((resolve) => {

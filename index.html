@@ -103,10 +103,8 @@
   #startCard .go { margin-top:20px; font-size:14px; color:#fff; animation:blink 1.4s infinite; }
   @keyframes blink { 50% { opacity:0.35; } }
 
-  /* ---- NCC-1701-D komentosilta ---- */
-  #bridge { position:fixed; inset:0; pointer-events:none; z-index:6; }
-  #bridge svg { width:100%; height:100%; display:block; }
-  body:not(.bridge) #bridge { display:none; }
+  /* ---- komentosiltatila (3D-ohjaamo renderöidään cockpit.js:ssä;
+          luokka säätää vain HUD-paneelien asettelun) ---- */
   body.bridge #speedPanel {
     top:auto; bottom:11%; left:4%; min-width:0; max-width:34vw;
     font-size:11px; padding:8px 10px;
@@ -144,7 +142,6 @@
   #lander { position:fixed; inset:0; pointer-events:none; z-index:7; display:none; }
   body.descent #lander { display:block; }
   body.descent #surfacePanel { display:none !important; }
-  #lander .frame { width:100%; height:100%; display:block; }
   #attWrap {
     position:absolute; left:50%; bottom:1.6%; transform:translateX(-50%);
     width:175px; height:175px;
@@ -218,206 +215,7 @@
 <body class="bridge">
 <div id="app"></div>
 
-<div id="bridge" aria-hidden="true">
-  <svg viewBox="0 0 1600 900" preserveAspectRatio="none">
-    <defs>
-      <!-- seinät + päänäytön aukko -->
-      <path id="wallShape" fill-rule="evenodd"
-        d="M0,0H1600V900H0Z
-           M276,80 h1048 a46,46 0 0 1 46,46 v468 a46,46 0 0 1 -46,46 H276
-           a46,46 0 0 1 -46,-46 V126 a46,46 0 0 1 46,-46 Z"/>
-      <path id="floorP" d="M0,900 H1600 V768 Q800,694 0,768 Z"/>
-      <linearGradient id="wallGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#5c5042"/>
-        <stop offset="0.5" stop-color="#3b332a"/>
-        <stop offset="0.85" stop-color="#1c1814"/>
-        <stop offset="1" stop-color="#100d0b"/>
-      </linearGradient>
-      <radialGradient id="spill" cx="0.5" cy="0.4" r="0.62">
-        <stop offset="0" stop-color="rgba(115,165,255,0.30)"/>
-        <stop offset="0.6" stop-color="rgba(95,140,230,0.10)"/>
-        <stop offset="1" stop-color="rgba(0,0,0,0)"/>
-      </radialGradient>
-      <linearGradient id="metalV" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#2e3138"/>
-        <stop offset="0.16" stop-color="#7d838f"/>
-        <stop offset="0.36" stop-color="#23252a"/>
-        <stop offset="0.55" stop-color="#5a5f68"/>
-        <stop offset="0.78" stop-color="#191b1f"/>
-        <stop offset="1" stop-color="#3c4047"/>
-      </linearGradient>
-      <radialGradient id="floorGrad" cx="0.5" cy="1" r="0.95">
-        <stop offset="0" stop-color="#332b21"/>
-        <stop offset="0.55" stop-color="#1b1610"/>
-        <stop offset="1" stop-color="#0a0806"/>
-      </radialGradient>
-      <linearGradient id="topGradL" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#36405c"/>
-        <stop offset="1" stop-color="#141821"/>
-      </linearGradient>
-      <linearGradient id="skirtGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#161a24"/>
-        <stop offset="1" stop-color="#06070b"/>
-      </linearGradient>
-      <linearGradient id="dispGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#0d2238"/>
-        <stop offset="1" stop-color="#051018"/>
-      </linearGradient>
-      <radialGradient id="vig" cx="0.5" cy="0.48" r="0.78">
-        <stop offset="0" stop-color="rgba(0,0,0,0)"/>
-        <stop offset="0.62" stop-color="rgba(0,0,0,0)"/>
-        <stop offset="1" stop-color="rgba(0,0,0,0.55)"/>
-      </radialGradient>
-      <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
-        <feGaussianBlur stdDeviation="3.5" result="b"/>
-        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-      </filter>
-      <filter id="blur4"><feGaussianBlur stdDeviation="4"/></filter>
-      <filter id="blur8"><feGaussianBlur stdDeviation="8"/></filter>
-      <filter id="blur12"><feGaussianBlur stdDeviation="12"/></filter>
-      <filter id="carpetF">
-        <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" result="t"/>
-        <feColorMatrix in="t" type="saturate" values="0" result="g"/>
-        <feComposite in="g" in2="SourceGraphic" operator="in"/>
-      </filter>
-
-    </defs>
-
-    <!-- 1. seinät -->
-    <use href="#wallShape" fill="url(#wallGrad)"/>
-    <!-- seinäsaumat -->
-    <g stroke="rgba(0,0,0,0.45)" stroke-width="3">
-      <path d="M152,66 L98,748"/><path d="M212,72 L172,706"/>
-      <path d="M1448,66 L1502,748"/><path d="M1388,72 L1428,706"/>
-    </g>
-    <g stroke="rgba(255,255,255,0.06)" stroke-width="1.5">
-      <path d="M155,66 L101,748"/><path d="M1451,66 L1505,748"/>
-    </g>
-
-    <!-- 2. katto ja kattovalot -->
-    <path d="M0,0H1600V46Q800,112 0,46Z" fill="#1d1813"/>
-    <path d="M0,46 Q800,112 1600,46" stroke="rgba(255,180,94,0.5)" stroke-width="10" fill="none" filter="url(#blur4)"/>
-    <path d="M0,46 Q800,112 1600,46" stroke="#ffb45e" stroke-width="4" fill="none" opacity="0.85"/>
-    <g fill="#ffe9bb" filter="url(#glow)" opacity="0.55">
-      <circle cx="300" cy="28" r="4"/><circle cx="560" cy="40" r="4"/>
-      <circle cx="1040" cy="40" r="4"/><circle cx="1300" cy="28" r="4"/>
-    </g>
-
-    <!-- 4. näytön valo heijastuu sillalle -->
-    <use href="#wallShape" fill="url(#spill)" style="mix-blend-mode:screen"/>
-
-    <!-- 5. lattia + matto -->
-    <use href="#floorP" fill="url(#floorGrad)"/>
-    <use href="#floorP" filter="url(#carpetF)" opacity="0.13" style="mix-blend-mode:overlay"/>
-
-    <!-- 6. päänäytön kehys -->
-    <rect x="206" y="56" width="1188" height="608" rx="64" fill="none" stroke="rgba(0,0,0,0.5)" stroke-width="34" filter="url(#blur8)"/>
-    <rect x="219" y="69" width="1162" height="582" rx="54" fill="none" stroke="url(#metalV)" stroke-width="28"/>
-    <rect x="233" y="83" width="1134" height="554" rx="44" fill="none" stroke="#06070a" stroke-width="10"/>
-    <rect x="233" y="83" width="1134" height="554" rx="44" fill="none" stroke="rgba(100,170,255,0.38)" stroke-width="3" filter="url(#blur4)"/>
-    <path d="M330,56 H1270" stroke="rgba(220,230,245,0.4)" stroke-width="2.5" stroke-linecap="round"/>
-
-    <!-- 7. kaide (puinen, sylinterivarjostus) -->
-    <path d="M60,852 Q800,714 1540,852" stroke="#000" stroke-width="26" fill="none" stroke-linecap="round" opacity="0.45" filter="url(#blur4)"/>
-    <path d="M60,842 Q800,702 1540,842" stroke="#3f2c1d" stroke-width="22" fill="none" stroke-linecap="round"/>
-    <path d="M60,839 Q800,699 1540,839" stroke="#6e4a2f" stroke-width="13" fill="none" stroke-linecap="round"/>
-    <path d="M60,835 Q800,694 1540,835" stroke="#c89a6a" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.8"/>
-
-    <!-- 8. conn-konsoli (vasen) -->
-    <ellipse cx="390" cy="894" rx="210" ry="16" fill="#000" opacity="0.5" filter="url(#blur12)"/>
-    <polygon points="320,700 560,700 560,812 250,812" fill="url(#topGradL)" stroke="#0a0c10" stroke-width="1"/>
-    <polygon points="250,812 560,812 560,900 215,900" fill="url(#skirtGrad)"/>
-    <path d="M320,700 L250,812 L215,900" stroke="#05060a" stroke-width="8" fill="none"/>
-    <path d="M322,702 L253,812" stroke="#4d5b7a" stroke-width="2" fill="none"/>
-    <path d="M320,700 L560,700" stroke="rgba(110,170,255,0.5)" stroke-width="2.5"/>
-    <path d="M250,812 L560,812" stroke="rgba(140,170,220,0.18)" stroke-width="2"/>
-    <g>
-      <rect x="330" y="722" width="70" height="14" rx="7" fill="#33415c"/>
-      <rect x="408" y="722" width="30" height="14" rx="7" fill="#2b3850"/>
-      <rect x="446" y="722" width="52" height="14" rx="7" fill="#3a4a68"/>
-      <rect x="506" y="722" width="34" height="14" rx="7" fill="#2f3d57"/>
-      <rect x="318" y="744" width="44" height="14" rx="7" fill="#2f3d57"/>
-      <rect x="370" y="744" width="84" height="14" rx="7" fill="#3a4a68"/>
-      <rect x="462" y="744" width="60" height="14" rx="7" fill="#2b3850"/>
-      <circle cx="470" cy="786" r="7" fill="#42536f"/>
-      <circle cx="500" cy="786" r="7" fill="#56698a"/>
-    </g>
-    <rect x="318" y="766" width="120" height="38" rx="6" fill="url(#dispGrad)" stroke="#335577" stroke-width="1.5"/>
-    <polyline points="326,796 344,788 362,792 380,780 398,784 416,776 430,778" fill="none" stroke="#6db5ff" stroke-width="1.5" opacity="0.85"/>
-    <rect x="300" y="846" width="180" height="6" rx="3" fill="#2b4a78" opacity="0.8"/>
-
-    <!-- 9. ops-konsoli (oikea) -->
-    <ellipse cx="1210" cy="894" rx="210" ry="16" fill="#000" opacity="0.5" filter="url(#blur12)"/>
-    <polygon points="1040,700 1280,700 1350,812 1040,812" fill="url(#topGradL)" stroke="#0a0c10" stroke-width="1"/>
-    <polygon points="1040,812 1350,812 1385,900 1040,900" fill="url(#skirtGrad)"/>
-    <path d="M1280,700 L1350,812 L1385,900" stroke="#05060a" stroke-width="8" fill="none"/>
-    <path d="M1278,702 L1347,812" stroke="#4d5b7a" stroke-width="2" fill="none"/>
-    <path d="M1040,700 L1280,700" stroke="rgba(110,170,255,0.5)" stroke-width="2.5"/>
-    <path d="M1040,812 L1350,812" stroke="rgba(140,170,220,0.18)" stroke-width="2"/>
-    <g>
-      <rect x="1200" y="722" width="70" height="14" rx="7" fill="#33415c"/>
-      <rect x="1162" y="722" width="30" height="14" rx="7" fill="#2b3850"/>
-      <rect x="1102" y="722" width="52" height="14" rx="7" fill="#3a4a68"/>
-      <rect x="1060" y="722" width="34" height="14" rx="7" fill="#2f3d57"/>
-      <rect x="1238" y="744" width="44" height="14" rx="7" fill="#2f3d57"/>
-      <rect x="1146" y="744" width="84" height="14" rx="7" fill="#3a4a68"/>
-      <rect x="1078" y="744" width="60" height="14" rx="7" fill="#2b3850"/>
-      <circle cx="1130" cy="786" r="7" fill="#42536f"/>
-      <circle cx="1100" cy="786" r="7" fill="#56698a"/>
-    </g>
-    <rect x="1162" y="766" width="120" height="38" rx="6" fill="url(#dispGrad)" stroke="#335577" stroke-width="1.5"/>
-    <polyline points="1170,792 1188,784 1206,790 1224,778 1242,786 1260,774 1274,780" fill="none" stroke="#6db5ff" stroke-width="1.5" opacity="0.85"/>
-    <rect x="1120" y="846" width="180" height="6" rx="3" fill="#2b4a78" opacity="0.8"/>
-
-    <!-- 10. vinjetointi -->
-    <rect x="0" y="0" width="1600" height="900" fill="url(#vig)"/>
-  </svg>
-</div>
-
 <div id="lander" aria-hidden="true">
-  <svg class="frame" viewBox="0 0 1600 900" preserveAspectRatio="none">
-    <defs>
-      <!-- tuulilasin heijastusjuovien liukuväri -->
-      <linearGradient id="glassStreak" x1="0" y1="0" x2="0.6" y2="1">
-        <stop offset="0" stop-color="#d8e6f4" stop-opacity="0.11"/>
-        <stop offset="0.45" stop-color="#d8e6f4" stop-opacity="0.04"/>
-        <stop offset="1" stop-color="#d8e6f4" stop-opacity="0"/>
-      </linearGradient>
-      <radialGradient id="glassSheen" cx="0.32" cy="0.1" r="0.9">
-        <stop offset="0" stop-color="#e8f1fa" stop-opacity="0.05"/>
-        <stop offset="0.5" stop-color="#e8f1fa" stop-opacity="0.015"/>
-        <stop offset="1" stop-color="#e8f1fa" stop-opacity="0"/>
-      </radialGradient>
-    </defs>
-    <!-- lasin heijastukset: laaja kiilto + vinot juovat -->
-    <rect x="64" y="34" width="1472" height="668" fill="url(#glassSheen)"/>
-    <g>
-      <polygon points="430,64 580,64 250,702 145,702" fill="url(#glassStreak)"/>
-      <polygon points="655,64 715,64 430,702 345,702" fill="url(#glassStreak)" opacity="0.7"/>
-      <polygon points="1235,64 1330,64 1490,702 1400,702" fill="url(#glassStreak)" opacity="0.5"/>
-    </g>
-    <!-- yläpalkki ja viistot sivupilarit -->
-    <polygon points="0,0 1600,0 1600,64 1080,34 520,34 0,64" fill="#15171b"/>
-    <polygon points="0,0 130,0 64,900 0,900" fill="#101317"/>
-    <polygon points="1600,0 1470,0 1536,900 1600,900" fill="#101317"/>
-    <line x1="130" y1="0" x2="64" y2="900" stroke="#2a2f36" stroke-width="3"/>
-    <line x1="1470" y1="0" x2="1536" y2="900" stroke="#2a2f36" stroke-width="3"/>
-    <line x1="520" y1="34" x2="1080" y2="34" stroke="#2a2f36" stroke-width="2"/>
-    <!-- alakonsoli -->
-    <polygon points="0,900 0,742 250,702 1350,702 1600,742 1600,900" fill="#13151a"/>
-    <line x1="0" y1="742" x2="250" y2="702" stroke="#323844" stroke-width="3"/>
-    <line x1="250" y1="702" x2="1350" y2="702" stroke="#323844" stroke-width="3"/>
-    <line x1="1350" y1="702" x2="1600" y2="742" stroke="#323844" stroke-width="3"/>
-    <!-- varoitusraidat konsolin reunassa -->
-    <g fill="#caa23c" opacity="0.55">
-      <polygon points="300,702 330,702 318,716 288,716"/>
-      <polygon points="360,702 390,702 378,716 348,716"/>
-      <polygon points="1210,702 1240,702 1252,716 1222,716"/>
-      <polygon points="1270,702 1300,702 1312,716 1282,716"/>
-    </g>
-    <text x="800" y="688" text-anchor="middle" fill="#5a6675"
-      font-family="ui-monospace, Menlo, monospace" font-size="15" letter-spacing="4">LK-1 LASKEUTUMISALUS</text>
-  </svg>
   <div id="attWrap">
     <svg viewBox="-100 -100 200 200">
       <defs><clipPath id="attClip"><circle cx="0" cy="0" r="74"/></clipPath></defs>
