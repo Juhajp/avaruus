@@ -4,7 +4,11 @@ import { renderer, scene, camera, renderPass } from './core.js';
 import { bodies, placeNearBody } from './bodies.js';
 import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
+import { makeSky } from './sky.js';
 import { S } from './state.js';
+
+/* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
+let pmrem = null;
 
 export const ROCKY = new Set(['Merkurius', 'Venus', 'Maa', 'Mars']);
 let surfaceBody = null;
@@ -56,6 +60,20 @@ function updateDaylight(){
     d.cloudMat.color.copy(_c2);
   }
 
+  // fysikaalinen taivas: aurinko shaderille + IBL-kartta auringon liikkuessa
+  if (d.skyMat) {
+    d.skyMat.uniforms.sunPosition.value.copy(_sunDir);
+    d.skyEnvScene.userData.envMat.uniforms.sunPosition.value.copy(_sunDir);
+    if (Math.abs(_sunDir.y - d.lastEnvElev) > 0.02 && S.simTime - d.lastEnvT > 1.2) {
+      d.lastEnvElev = _sunDir.y;
+      d.lastEnvT = S.simTime;
+      const rt = pmrem.fromScene(d.skyEnvScene, 0, 100, 250000);
+      if (d.envRT) d.envRT.dispose();
+      d.envRT = rt;
+      for (const m of d.envMats) m.envMap = rt.texture;
+    }
+  }
+
   // taivas ja sumu tummuvat yöksi, rusko värjää horisontin tuntumassa
   _c1.copy(d.skyNight).lerp(d.skyDay, dayF);
   if (d.twilight) _c1.lerp(d.twilight, tw * 0.55);
@@ -80,8 +98,9 @@ function updateDaylight(){
     }
   }
 
-  // ilmakehällisten yötähdet häivytetään sisään pimeällä
-  if (d.starsMat && d.cfg.nightStars) d.starsMat.opacity = 0.7 * (1 - dayF);
+  // ilmakehällisten yötähdet häivytetään sisään pimeällä (neliöllisesti —
+  // muuten tähdet erottuvat jo iltapäivän kirkkaalla taivaalla)
+  if (d.starsMat && d.cfg.nightStars) d.starsMat.opacity = 0.7 * (1 - dayF) * (1 - dayF);
 }
 
 // 2D-kohina maastoa varten
@@ -205,6 +224,8 @@ export const SURFACE_CONFIGS = {
     hScale: 18, freq: 0.004,
     dayLength: 240,     // 24 h → 4 min
     skyNight: 0x060a13, twilight: 0xff8a50, nightStars: true,
+    // fysikaalinen taivas: Maan Rayleigh-oletukset (sininen taivas, punainen rusko)
+    scatter: { turbidity: 2.5, rayleigh: 2.0, mie: 0.006, mieG: 0.8, gain: 0.28 },
     sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.9 },
     hemi: [0x9ec8ee, 0x4a5a35, 0.6],
     features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true, roads: true, towns: true,
@@ -218,6 +239,9 @@ export const SURFACE_CONFIGS = {
     hScale: 24, freq: 0.005,
     dayLength: 246.6,   // sol 24,66 h → ~4,1 min
     skyNight: 0x080605, twilight: 0x8898c8, nightStars: true,   // Marsin rusko on sinertävä
+    // pölysironta: punainen siroaa sinistä enemmän → voinkeltainen taivas, sininen rusko
+    scatter: { betaR: [2.6e-5, 1.2e-5, 0.45e-5], turbidity: 5, rayleigh: 1.4,
+               mie: 0.012, mieG: 0.76, mieTint: [1.0, 0.8, 0.62], gain: 0.3 },
     sun: { color: [2.6, 2.5, 2.3], size: 65, intensity: 1.9 },
     hemi: [0xc89a6e, 0x5a3520, 0.62],
     // todistetusti: Valles Marineris -kanjonit, Olympus Mons, kraatterit ja dyynit
@@ -618,6 +642,10 @@ function buildSurfaceScene(name){
   // ääretön maasto: laattagridi kameran ympärillä
   initTerrain(sc, cfg, name);
 
+  // materiaalit, jotka saavat taivaasta lasketun ympäristökartan (IBL).
+  // HUOM: ei koko ruudun täyttävään maastoon — env-näytteistys maksaa siinä ~20 fps
+  const envMats = [];
+
   // piilota sirote-instanssi (tien/kaupungin alle jäävät)
   const hideInstance = (m4, rq, rs) => {
     rq.identity(); rs.set(0, 0, 0);
@@ -632,8 +660,9 @@ function buildSurfaceScene(name){
 
   // kivet: tasainen jakauma toistuvassa solussa (ei Maassa — nurmella murikat näyttävät vierailta)
   if (F.rocks !== false) {
-    const rocks = addScatter(sc, new THREE.DodecahedronGeometry(1, 0),
-      new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
+    const rocksMat = new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1, envMapIntensity: 0.25 });
+    envMats.push(rocksMat);
+    const rocks = addScatter(sc, new THREE.DodecahedronGeometry(1, 0), rocksMat,
       600, 2200, (i, x, z, m4, rq, re, rs) => {
         if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
         const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
@@ -662,8 +691,9 @@ function buildSurfaceScene(name){
   // puut (Maa)
   if (F.trees) {
     const TREE_N = 420;
-    const trees = addScatter(sc, new THREE.ConeGeometry(1, 3.2, 7),
-      new THREE.MeshStandardMaterial({ roughness: 1 }),
+    const treesMat = new THREE.MeshStandardMaterial({ roughness: 1, envMapIntensity: 0.25 });
+    envMats.push(treesMat);
+    const trees = addScatter(sc, new THREE.ConeGeometry(1, 3.2, 7), treesMat,
       TREE_N, 2200, (i, x, z, m4, rq, re, rs) => {
         if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
         const s = 1.2 + Math.pow(hash2(i, 23), 2) * 2.8;
@@ -702,10 +732,11 @@ function buildSurfaceScene(name){
   if (F.towns) {
     const { facade, windows } = getBuildingTextures();
     bldgMat = new THREE.MeshStandardMaterial({
-      map: facade, roughness: 0.9, metalness: 0,
+      map: facade, roughness: 0.9, metalness: 0, envMapIntensity: 0.3,
       emissive: 0xffc488, emissiveMap: windows, emissiveIntensity: 0,
     });
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0x3b3b3e, roughness: 1 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x3b3b3e, roughness: 1, envMapIntensity: 0.25 });
+    envMats.push(bldgMat, roofMat);
     const buildings = addScatter(sc, new THREE.BoxGeometry(1, 1, 1),
       [bldgMat, bldgMat, roofMat, roofMat, bldgMat, bldgMat],
       500, 2400, (i, x, z, m4, rq, re, rs) => {
@@ -734,7 +765,26 @@ function buildSurfaceScene(name){
   updateTerrain(0, 0, true);
   updateScatter(0, 0);
 
-  // valaistus — auringon suunta ja voimakkuus ajetaan updateDaylightissa
+  // fysikaalinen taivas (Maa, Mars): sirontashader + IBL-ympäristökartta
+  let skyMat = null, skyEnvScene = null;
+  if (cfg.scatter) {
+    const sky = makeSky(cfg.scatter);
+    sc.add(sky);
+    skyMat = sky.material;
+    // erillinen minimaailma ympäristökartan renderöintiin: sama taivas
+    // ILMAN auringon HDR-kiekkoa (muuten ambientti ylivalottuu)
+    skyEnvScene = new THREE.Scene();
+    const envMat = skyMat.clone();
+    envMat.uniforms.uSunGlow.value = 0;
+    const envSky = new THREE.Mesh(sky.geometry, envMat);
+    envSky.scale.setScalar(120000);
+    skyEnvScene.add(envSky);
+    skyEnvScene.userData.envMat = envMat;
+    pmrem = pmrem ?? new THREE.PMREMGenerator(renderer);
+  }
+
+  // valaistus — auringon suunta ja voimakkuus ajetaan updateDaylightissa.
+  // IBL-planeetoilla hemisfäärivaloa lasketaan, ettei ambientti tuplaannu
   let hemi = null;
   if (cfg.hemi) {
     hemi = new THREE.HemisphereLight(cfg.hemi[0], cfg.hemi[1], cfg.hemi[2]);
@@ -756,9 +806,10 @@ function buildSurfaceScene(name){
   sc.add(dl);
   sc.add(dl.target);
 
-  // aurinkokiekko (jos näkyvissä) — paikka päivittyy radan mukana
+  // aurinkokiekko (jos näkyvissä) — paikka päivittyy radan mukana.
+  // Sirontataivaalla aurinko hehkuineen syntyy shaderissa, erillistä kiekkoa ei tarvita
   let disc = null;
-  if (cfg.sun) {
+  if (cfg.sun && !cfg.scatter) {
     disc = new THREE.Mesh(
       new THREE.CircleGeometry(cfg.sun.size, 48),
       new THREE.MeshBasicMaterial({ color: new THREE.Color(...cfg.sun.color), fog: false })
@@ -786,6 +837,7 @@ function buildSurfaceScene(name){
 
   daylight = {
     sc, cfg, dl, hemi, disc, starsMat, bldgMat, cloudMat,
+    skyMat, skyEnvScene, envMats, envRT: null, lastEnvElev: 99, lastEnvT: -99,
     baseInt: lightDef.intensity,
     baseHemi: cfg.hemi ? cfg.hemi[2] : 0,
     skyDay: new THREE.Color(cfg.sky),
@@ -834,6 +886,7 @@ function enterSurfaceScene(b, mode){
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
   S.mode = 'space';
+  if (daylight && daylight.envRT) daylight.envRT.dispose();
   renderPass.scene = scene;
   scene.add(camera);          // kamera takaisin avaruusscenen jäseneksi
   document.body.classList.remove('surface');
