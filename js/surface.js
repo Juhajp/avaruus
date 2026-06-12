@@ -37,6 +37,7 @@ function sunDirAt(p, out){ return out.set(Math.cos(p), Math.sin(p), -0.45).norma
 function updateDaylight(){
   const d = daylight;
   if (!d) return;
+  windU.uTime.value = S.simTime;
   sunDirAt(sunPhase(), _sunDir);
   const elev = _sunDir.y;
   const dayF = sstep(-0.12, 0.15, elev);
@@ -310,7 +311,7 @@ export const SURFACE_CONFIGS = {
     sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.9 },
     hemi: [0x9ec8ee, 0x4a5a35, 0.6],
     features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true, roads: true, towns: true,
-                rocks: false, clouds: true },
+                rocks: false, clouds: true, grass: true },
   },
   Mars: {
     title: 'MARS — PINTA',
@@ -696,7 +697,7 @@ function updateTerrain(ax, az, buildAll = false){
    lähinnä kameraa; solun vaihtuessa paikka ja korkeus lasketaan uudelleen. */
 let scatters = [];
 
-function addScatter(sc, geo, mat, count, W, place){
+function addScatter(sc, geo, mat, count, W, place, seedOff = 0){
   const mesh = new THREE.InstancedMesh(geo, mat, count);
   mesh.frustumCulled = false;   // instanssit hajallaan — perusgeometrian mukainen kullaus veisi ne piiloon
   const sct = {
@@ -705,8 +706,8 @@ function addScatter(sc, geo, mat, count, W, place){
     kx: new Float64Array(count).fill(NaN), kz: new Float64Array(count).fill(NaN),
   };
   for (let i = 0; i < count; i++) {
-    sct.bx[i] = (hash2(i, 91) - 0.5) * W;
-    sct.bz[i] = (hash2(i, 92) - 0.5) * W;
+    sct.bx[i] = (hash2(i + seedOff, 91) - 0.5) * W;
+    sct.bz[i] = (hash2(i + seedOff, 92) - 0.5) * W;
   }
   scatters.push(sct);
   sc.add(mesh);
@@ -715,6 +716,7 @@ function addScatter(sc, geo, mat, count, W, place){
 
 function updateScatter(ax, az){
   for (const s of scatters) {
+    if (s.lazy && S.mode === 'descent') continue;   // solusiirtymät jäävät odottamaan laskua
     let dirty = false;
     for (let i = 0; i < s.count; i++) {
       const kx = Math.round((ax - s.bx[i]) / s.W);
@@ -727,6 +729,140 @@ function updateScatter(ax, az){
     }
     if (dirty) s.mesh.instanceMatrix.needsUpdate = true;
   }
+}
+
+/* ---- kasvillisuus ja kivivariaatiot (tiekartan vaihe 3) ---- */
+
+// yhteinen tuuliaika ruohoshaderille (päivitetään updateDaylightissa)
+const windU = { uTime: { value: 0 } };
+
+// yhdistä osageometriat yhdeksi vertex-värilliseksi geometriaksi (ei uv:ta)
+function mergeGeoms(parts){
+  const ps = [], ns = [], cs = [];
+  const c = new THREE.Color();
+  for (const part of parts) {
+    const g = part.geo.index ? part.geo.toNonIndexed() : part.geo;
+    const p = g.attributes.position, n = g.attributes.normal;
+    c.set(part.color);
+    for (let i = 0; i < p.count; i++) {
+      ps.push(p.getX(i), p.getY(i), p.getZ(i));
+      ns.push(n.getX(i), n.getY(i), n.getZ(i));
+      cs.push(c.r, c.g, c.b);
+    }
+    g.dispose();
+    if (g !== part.geo) part.geo.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(ps, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(ns, 3));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(cs, 3));
+  return out;
+}
+
+// kuusi: runko + kolme latvuskartiota
+function makeSpruceGeo(){
+  return mergeGeoms([
+    { geo: new THREE.CylinderGeometry(0.10, 0.16, 1.0, 5).translate(0, 0.5, 0), color: 0x3d2e1e },
+    { geo: new THREE.ConeGeometry(1.35, 1.7, 8).translate(0, 1.75, 0), color: 0x122a0c },
+    { geo: new THREE.ConeGeometry(1.00, 1.5, 8).translate(0, 2.75, 0), color: 0x16320e },
+    { geo: new THREE.ConeGeometry(0.62, 1.3, 8).translate(0, 3.60, 0), color: 0x1a3a11 },
+  ]);
+}
+
+// lehtipuu: runko + epäsäännöllinen latvuspallo
+function makeLeafTreeGeo(){
+  return mergeGeoms([
+    { geo: new THREE.CylinderGeometry(0.12, 0.20, 1.6, 5).translate(0, 0.8, 0), color: 0x4a3624 },
+    { geo: new THREE.IcosahedronGeometry(1.25, 1).scale(1, 1.2, 1).translate(0, 2.4, 0), color: 0x1d4012 },
+  ]);
+}
+
+// kivivariaatio: ikosaedri, jonka verteksit siirtyvät paikkahash-kohinalla.
+// Siirtymä lasketaan vertexin koordinaateista, joten monistetut verteksit
+// siirtyvät samalla tavalla eikä pintaan tule rakoja; flat-varjostus
+// (ei-indeksoitu geometria) sopii kivelle
+function makeRockGeo(seed){
+  const g = new THREE.IcosahedronGeometry(1, 1);
+  const p = g.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.set(p.getX(i), p.getY(i), p.getZ(i));
+    const d = 1 + (hash2(Math.round(v.x * 37 + v.y * 17) + seed, Math.round(v.z * 29 - v.y * 11)) - 0.5) * 0.55;
+    p.setXYZ(i, v.x * d, v.y * d, v.z * d);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+// ruohotupas: kolme ristikkäistä kapenevaa lehteä. Normaalit ylöspäin,
+// jotta ruoho valaistuu kuten maasto eikä lehtien suunta näy varjostuksessa
+function makeGrassGeometry(){
+  const ps = [], ns = [], cs = [];
+  // lineaariavaruudessa (näyttömuunnos kirkastaa) — tyvi tumma, kärki kellertävä
+  const baseC = [0.020, 0.055, 0.010], tipC = [0.095, 0.175, 0.040];
+  for (let b = 0; b < 5; b++) {
+    const a = b * 2.4;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    const w0 = 0.06, w1 = 0.012;
+    const h = 0.75 + hash2(b, 77) * 0.5;
+    // lehden tyvi hieman sivussa keskeltä, kärki nojaa ulospäin
+    const ox = dz * 0.10, oz = -dx * 0.10;
+    const lean = 0.22 + hash2(b, 78) * 0.2;
+    const quad = [
+      [ox - dx * w0, 0, oz - dz * w0, 0], [ox + dx * w0, 0, oz + dz * w0, 0],
+      [ox + dx * w1 + dz * lean, h, oz + dz * w1 - dx * lean, 1],
+      [ox - dx * w1 + dz * lean, h, oz - dz * w1 - dx * lean, 1],
+    ];
+    for (const tri of [[0, 1, 2], [0, 2, 3]]) {
+      for (const k of tri) {
+        ps.push(quad[k][0], quad[k][1], quad[k][2]);
+        ns.push(0, 1, 0);
+        const t = quad[k][3];
+        cs.push(baseC[0] + (tipC[0] - baseC[0]) * t,
+                baseC[1] + (tipC[1] - baseC[1]) * t,
+                baseC[2] + (tipC[2] - baseC[2]) * t);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(ps, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(ns, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(cs, 3));
+  return g;
+}
+
+/* Ruohomateriaali: tuulivärähtely vertex-shaderissa (instanssin paikasta
+   johdettu vaihe) ja etäisyyshäivytys — korret kutistuvat nollaan ennen
+   sirotesolun reunaa, joten kierrätyshyppyjä ei näe */
+function makeGrassMaterial(fadeStart, fadeEnd){
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide,
+  });
+  mat.customProgramCacheKey = () => 'grassWind';
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = windU.uTime;
+    sh.uniforms.uFadeStart = { value: fadeStart };
+    sh.uniforms.uFadeEnd = { value: fadeEnd };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>',
+        '#include <common>\nuniform float uTime;\nuniform float uFadeStart;\nuniform float uFadeEnd;')
+      .replace('#include <begin_vertex>', [
+        '#include <begin_vertex>',
+        'vec3 gPos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);',
+        'float gH = clamp(transformed.y, 0.0, 2.0);',
+        'float gPh = uTime * 1.8 + gPos.x * 0.31 + gPos.z * 0.23;',
+        'float gSw = (sin(gPh) + 0.45 * sin(gPh * 2.33 + 1.3)) * 0.10 * gH * gH;',
+        'float gFade = 1.0 - smoothstep(uFadeStart, uFadeEnd, distance(gPos, cameraPosition));',
+        'transformed.x += gSw;',
+        'transformed.z += gSw * 0.6;',
+        'transformed.y *= gFade;',
+      ].join('\n'));
+    // kumoa DOUBLE_SIDED-normaalin kääntö: korsi valaistaan aina ylänormaalilla,
+    // muuten takapinnat (puolet korsista katselusuunnasta riippuen) tummuisivat
+    sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>',
+      '#include <normal_fragment_begin>\nnormal = normalize( vNormal );');
+  };
+  return mat;
 }
 
 function buildSurfaceScene(name){
@@ -807,29 +943,36 @@ function buildSurfaceScene(name){
     return townAt(ix, iz) && Math.hypot(x - ix * ROAD_SP, z - iz * ROAD_SP) < 220;
   };
 
-  // kivet: tasainen jakauma toistuvassa solussa (ei Maassa — nurmella murikat näyttävät vierailta)
+  // kivet: kolme muotovarianttia, planeetan kivitekstuuri + normaalikartta
+  // (ei Maassa — nurmella murikat näyttävät vierailta)
   if (F.rocks !== false) {
-    const rocksMat = new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1, envMapIntensity: 0.25 });
+    const rocksMat = new THREE.MeshStandardMaterial({
+      color: _cc.copy(_cWhite).lerp(new THREE.Color(cfg.rock), 0.45).multiplyScalar(1.25).clone(),
+      roughness: 1, envMapIntensity: 0.25,
+    });
+    if (cfg.pbr) {
+      loadPH(cfg.pbr.rock, 'diff', true).then(t => { if (t) { rocksMat.map = t; rocksMat.needsUpdate = true; } });
+      loadPH(cfg.pbr.rock, 'nor_gl', false).then(t => { if (t) { rocksMat.normalMap = t; rocksMat.needsUpdate = true; } });
+    }
     envMats.push(rocksMat);
-    const rocks = addScatter(sc, new THREE.DodecahedronGeometry(1, 0), rocksMat,
-      600, 2200, (i, x, z, m4, rq, re, rs) => {
-        if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
-        const s = 0.25 + Math.pow(hash2(i, 3), 2) * 3.4;
-        re.set(hash2(i, 4) * 3.14, hash2(i, 5) * 6.28, hash2(i, 6) * 3.14);
-        rq.setFromEuler(re);
-        rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
-        m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
-      });
-    rocks.castShadow = true;
-    rocks.receiveShadow = true;
-  }
+    for (let vr = 0; vr < 3; vr++) {
+      const rocks = addScatter(sc, makeRockGeo(vr * 113 + 7), rocksMat,
+        200, 2200, (i, x, z, m4, rq, re, rs) => {
+          if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
+          const s = 0.25 + Math.pow(hash2(i + vr * 200, 3), 2) * 3.4;
+          re.set(hash2(i, 4) * 3.14, hash2(i + vr, 5) * 6.28, hash2(i, 6) * 3.14);
+          rq.setFromEuler(re);
+          rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
+          m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
+        }, vr * 1000 + 1);
+      rocks.castShadow = true;
+      rocks.receiveShadow = true;
+    }
 
-  // pikkukivet lähimaisemaan: pieni solu pitää ne aina kameran lähellä
-  if (F.rocks !== false) {
-    addScatter(sc, new THREE.IcosahedronGeometry(0.22, 0),
-      new THREE.MeshStandardMaterial({ color: cfg.rock, roughness: 1 }),
+    // pikkukivet lähimaisemaan: pieni solu pitää ne aina kameran lähellä
+    addScatter(sc, makeRockGeo(57), rocksMat,
       1300, 480, (i, x, z, m4, rq, re, rs) => {
-        const s = 0.4 + hash2(i, 13) * 1.5;
+        const s = (0.4 + hash2(i, 13) * 1.5) * 0.22;
         re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
         rq.setFromEuler(re);
         rs.set(s, s * 0.7, s);
@@ -837,25 +980,63 @@ function buildSurfaceScene(name){
       });
   }
 
-  // puut (Maa)
+  // puut (Maa): kuusia ja lehtipuita vertex-värein; instanssiväri vain
+  // kirkkausvaihteluna, ettei runko värjäydy latvuksen sävyyn
   if (F.trees) {
-    const TREE_N = 420;
-    const treesMat = new THREE.MeshStandardMaterial({ roughness: 1, envMapIntensity: 0.25 });
+    const treesMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, envMapIntensity: 0.25 });
     envMats.push(treesMat);
-    const trees = addScatter(sc, new THREE.ConeGeometry(1, 3.2, 7), treesMat,
-      TREE_N, 2200, (i, x, z, m4, rq, re, rs) => {
-        if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
-        const s = 1.2 + Math.pow(hash2(i, 23), 2) * 2.8;
-        rq.identity();
-        rs.set(s, s, s);
-        m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 1.5, z), rq, rs);
-      });
-    trees.castShadow = true;
-    trees.receiveShadow = true;
     const tc = new THREE.Color();
-    for (let i = 0; i < TREE_N; i++) {
-      tc.setHSL(0.30 + hash2(i, 24) * 0.06, 0.45, 0.16 + hash2(i, 25) * 0.10);
-      trees.setColorAt(i, tc);
+    const types = [
+      { geo: makeSpruceGeo(), n: 260, seedOff: 0 },
+      { geo: makeLeafTreeGeo(), n: 170, seedOff: 5000 },
+    ];
+    for (const ty of types) {
+      const trees = addScatter(sc, ty.geo, treesMat,
+        ty.n, 2200, (i, x, z, m4, rq, re, rs) => {
+          if (inTownArea(x, z)) { hideInstance(m4, rq, rs); return; }
+          const s = 1.0 + Math.pow(hash2(i + ty.seedOff, 23), 2) * 2.2;
+          re.set(0, hash2(i + ty.seedOff, 26) * 6.28, 0);
+          rq.setFromEuler(re);
+          rs.set(s, s, s);
+          m4.compose(_vp.set(x, surfHeightFn(x, z) - 0.15, z), rq, rs);
+        }, ty.seedOff);
+      trees.castShadow = true;
+      trees.receiveShadow = true;
+      for (let i = 0; i < ty.n; i++) {
+        tc.setScalar(0.7 + hash2(i + ty.seedOff, 24) * 0.35);
+        trees.setColorAt(i, tc);
+      }
+    }
+  }
+
+  // ruoho (Maa): instansoidut tupaat tuulivärähtelyllä; vain loivaan
+  // nurmimaastoon (ei teille, multaläiskiin eikä jyrkänteille)
+  if (F.grass) {
+    const GRASS_N = 18000, GRASS_W = 80;
+    const grass = addScatter(sc, makeGrassGeometry(), makeGrassMaterial(22, 36),
+      GRASS_N, GRASS_W, (i, x, z, m4, rq, re, rs) => {
+        // halvat hylkäystestit ensin, korkeusnäytteet vasta sitten
+        if (inTownArea(x, z) || fbm2(x * 0.009 + 31, z * 0.009 + 7, 3) > 0.55) {
+          hideInstance(m4, rq, rs);
+          return;
+        }
+        const h0 = surfHeightFn(x, z);
+        const gx = surfHeightFn(x + 1.5, z) - h0;
+        const gz = surfHeightFn(x, z + 1.5) - h0;
+        if (gx * gx + gz * gz > 0.55) { hideInstance(m4, rq, rs); return; }
+        const s = 0.5 + hash2(i, 71) * 0.4;
+        re.set(0, hash2(i, 72) * 6.28, 0);
+        rq.setFromEuler(re);
+        rs.set(s, s * (0.5 + hash2(i, 73) * 0.4), s);
+        m4.compose(_vp.set(x, h0 - 0.04, z), rq, rs);
+      });
+    // matalalennossa korret eivät näy (häivytys 55 yks) — älä päivitä sirotetta
+    scatters[scatters.length - 1].lazy = true;
+    grass.receiveShadow = true;
+    const gc = new THREE.Color();
+    for (let i = 0; i < GRASS_N; i++) {
+      gc.setScalar(0.8 + hash2(i, 74) * 0.5);
+      grass.setColorAt(i, gc);
     }
   }
 
