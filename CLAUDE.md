@@ -55,6 +55,17 @@ Hiiri = katselu (pointer lock TAI vetämällä — lukko ei toimi kaikissa ympä
 - Planeetat: NASA-tekstuurikartat + custom-valaistusshader (aurinko origossa); Aurinko proseduraalinen (animoitu granulaatio); Saturnuksen renkaat proseduraaliset (Cassinin rako, planeetan varjo); ilmakehäkajot fresnel-kuorina; Maalla pilvikerros + yövalot (ei spekulaaria merikiiltoa — poistettu häiritsevänä)
 - Warp-efekti (`warpGroup`, kameran lapsi): 2001-stargate-henkinen slit-scan-käytävä — 2 tunnelikuorta, joissa kirkkaus painottuu ylä- ja alavalotasoihin (`vUp`-varying ruutukoordinaateissa), pitkät z-suuntaan venyneet valoraidat ja hitaasti vaeltava cos-spektripaletti (simplex-kohina, jaksolliset cos/sin-koordinaatit — EI uv.x:ää suoraan, tulee sauma) + spektrinväriset tähtijuovat. Voimakkuus skaalautuu kiihtyvyyden mukaan (`updateWarp`), häipyy ~3 s tasaisessa vauhdissa, vain kehysseurannan ulkopuolella ja >10 % c
 
+## Visuaalisuustiekartta (sovittu käyttäjän kanssa, FPS-raja ≥50)
+
+Selainstackissa pysytään (porttauspäätös lykätty); vaiheet tehdään yksi kerrallaan, jokainen verifioidaan kuvakaappauksin + FPS-mittauksin ja committoidaan erikseen:
+
+1. ~~Fysikaalinen taivas (Preetham, planeettaparametrit) + valikoiva IBL~~ ✓ tehty
+2. **SEURAAVAKSI**: maaston PBR-materiaalit — oikeat bittikarttatekstuurit CDN:ltä (CC0, esim. ambientCG, samalla mallilla kuin NASA-planeettakartat), tekstuurisplatting rinne/korkeus/kohina-painoilla, triplanar jyrkänteille, LOD-renkaat laattagridiin (lähilaatat tiheämmät)
+3. Kasvillisuus: instansoitu ruoho Maahan (tuulivärähtely vertex-shaderissa, etäisyyshäivytys), kunnon matalapoly-puut, kivivariaatiot normaalikartoin
+4. Pilvet: valaistut billboard-pilvet tai raymarch-kerros; pilven läpäisyn white-out matalalennossa; Marsin pölypyörteet
+5. Laskeutumisen viimeistely: laskeutumispölypartikkelit, kosketuspölypilvi, lämpöväreily, ohjaamon lasiheijastukset; (ääni erikseen sovittaessa)
+6. Tarvittaessa WebGPU-renderöijä (compute-pilvet, jos FPS-katto tulee vastaan)
+
 ## Tunnetut sudenkuopat
 
 - Kirkkauden säätö: planeettojen diffuusikertoimet ~1,0–1,1 — isommat arvot puhkipalavat bloomissa
