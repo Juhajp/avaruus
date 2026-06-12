@@ -184,6 +184,81 @@ function getDetailTexture(name, cfg){
   return t;
 }
 
+/* ---- PBR-pintatekstuurit (Poly Haven, CC0) ----
+   Ladataan CDN:ltä samalla mallilla kuin NASA-planeettakartat; kunnes
+   lataus valmistuu (tai jos se epäonnistuu), proseduraalinen
+   detaljitekstuuri jää varalle. Kartat jäävät moduulitason välimuistiin
+   pintakäyntien välillä. */
+const PH_BASE = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/';
+const phLoader = new THREE.TextureLoader();
+const _phCache = {};
+function loadPH(slug, map, srgb){
+  const key = slug + '_' + map;
+  if (!_phCache[key]) {
+    _phCache[key] = new Promise((resolve) => {
+      phLoader.load(PH_BASE + slug + '/' + slug + '_' + map + '_1k.jpg', (t) => {
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+        resolve(t);
+      }, undefined, () => resolve(null));
+    });
+  }
+  return _phCache[key];
+}
+let _flatNormal = null;
+function flatNormalTex(){
+  if (!_flatNormal) {
+    _flatNormal = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
+    _flatNormal.needsUpdate = true;
+  }
+  return _flatNormal;
+}
+
+/* Maastomateriaali tekstuurisplattauksella: pohja (map + normaalikartta),
+   sekundäärikerros (kohinaläiskät) ja kivi, joka näytteistetään triplanaaristi
+   maailmakoordinaateista — jyrkänteillä ei UV-venymiä. Painot tulevat
+   aSplat-attribuutista (lasketaan fillTilessä rinteestä/korkeudesta/kohinasta),
+   vertex-värit säilyvät sävytyksenä (korkeusvarjostus, tieasfaltti). */
+function makeSplatMaterial(detail, p){
+  const uSecond = { value: detail }, uRock = { value: detail };
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 1, metalness: 0,
+    map: detail, normalMap: flatNormalTex(),
+  });
+  mat.customProgramCacheKey = () => 'terrainSplat';
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTexSecond = uSecond;
+    sh.uniforms.uTexRock = uRock;
+    sh.uniforms.uSecondScale = { value: p.secondScale };
+    sh.uniforms.uRockScale = { value: p.rockScale };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>',
+        '#include <common>\nattribute vec3 aSplat;\nvarying vec3 vSplat;\nvarying vec3 vWPos;\nvarying vec3 vWNorm;')
+      .replace('#include <fog_vertex>',
+        '#include <fog_vertex>\nvSplat = aSplat;\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNorm = normalize(mat3(modelMatrix) * objectNormal);');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>',
+        '#include <common>\nuniform sampler2D uTexSecond;\nuniform sampler2D uTexRock;\nuniform float uSecondScale;\nuniform float uRockScale;\nvarying vec3 vSplat;\nvarying vec3 vWPos;\nvarying vec3 vWNorm;')
+      .replace('#include <map_fragment>', [
+        'vec3 splatCol = texture2D( map, vMapUv ).rgb * vSplat.x;',
+        'splatCol += texture2D( uTexSecond, vMapUv * uSecondScale ).rgb * vSplat.y;',
+        'vec3 triW = pow(abs(normalize(vWNorm)), vec3(6.0));',
+        'triW /= (triW.x + triW.y + triW.z);',
+        'vec3 rp = vWPos / uRockScale;',
+        'splatCol += (texture2D( uTexRock, rp.zy ).rgb * triW.x',
+        '  + texture2D( uTexRock, rp.xz ).rgb * triW.y',
+        '  + texture2D( uTexRock, rp.xy ).rgb * triW.z) * vSplat.z;',
+        'diffuseColor.rgb *= splatCol;',
+      ].join('\n'));
+  };
+  loadPH(p.base, 'diff', true).then(t => { if (t) { mat.map = t; mat.needsUpdate = true; } });
+  loadPH(p.base, 'nor_gl', false).then(t => { if (t) { mat.normalMap = t; mat.needsUpdate = true; } });
+  loadPH(p.second, 'diff', true).then(t => { if (t) uSecond.value = t; });
+  loadPH(p.rock, 'diff', true).then(t => { if (t) uRock.value = t; });
+  return mat;
+}
+
 // olosuhteet nykytietämyksen mukaan
 export const SURFACE_CONFIGS = {
   Merkurius: {
@@ -192,6 +267,8 @@ export const SURFACE_CONFIGS = {
     sky: 0x000000, fog: null,
     ground: 0x8a8178, ground2: 0x55504a, rock: 0x6e675f,
     hScale: 26, freq: 0.0045,
+    pbr: { base: 'gravelly_sand', second: 'rocks_ground_05', rock: 'rock_boulder_dry',
+           baseScale: 6, secondScale: 0.45, rockScale: 16, tint: 0.5, bright: 1.3 },
     dayLength: 42230,   // aurinkovuorokausi ~176 vrk → käytännössä paikallaan
     sun: { color: [4.0, 4.0, 3.9], size: 260, intensity: 2.4 },
     hemi: [0x101010, 0x201d16, 0.3], stars: true,
@@ -204,6 +281,8 @@ export const SURFACE_CONFIGS = {
     sky: 0xc08038, fog: { color: 0xb5762f, near: 8, far: 230 },
     ground: 0x8a6038, ground2: 0x5e3f22, rock: 0x75522e,
     hScale: 10, freq: 0.006, rockFlat: 0.35,
+    pbr: { base: 'mud_cracked_dry_03', second: 'gravelly_sand', rock: 'rock_boulder_cracked',
+           baseScale: 7, secondScale: 0.5, rockScale: 15, tint: 0.5, bright: 1.2 },
     dayLength: 28020,   // aurinkovuorokausi ~117 vrk; vain usvan kirkkaus elää
     skyNight: 0x140a02,
     sun: null,
@@ -222,6 +301,8 @@ export const SURFACE_CONFIGS = {
     sky: 0x7fb8e8, fog: { color: 0xcfe2f5, near: 60, far: 1500 },
     ground: 0x4a7a30, ground2: 0x6a6648, rock: 0x8a8578,
     hScale: 18, freq: 0.004,
+    pbr: { base: 'rocky_terrain_02', second: 'brown_mud_dry', rock: 'rocks_ground_05',
+           baseScale: 6, secondScale: 0.42, rockScale: 14, tint: 0.3, bright: 1.25 },
     dayLength: 240,     // 24 h → 4 min
     skyNight: 0x060a13, twilight: 0xff8a50, nightStars: true,
     // fysikaalinen taivas: Maan Rayleigh-oletukset (sininen taivas, punainen rusko)
@@ -237,6 +318,8 @@ export const SURFACE_CONFIGS = {
     sky: 0xc89a6e, fog: { color: 0xc28d5e, near: 40, far: 900 },
     ground: 0xb56f3e, ground2: 0x8a4f28, rock: 0x96603a,
     hScale: 24, freq: 0.005,
+    pbr: { base: 'red_sand', second: 'red_laterite_soil_stones', rock: 'rock_face',
+           baseScale: 6, secondScale: 0.5, rockScale: 18, tint: 0.4, bright: 1.7 },
     dayLength: 246.6,   // sol 24,66 h → ~4,1 min
     skyNight: 0x080605, twilight: 0x8898c8, nightStars: true,   // Marsin rusko on sinertävä
     // pölysironta: punainen siroaa sinistä enemmän → voinkeltainen taivas, sininen rusko
@@ -371,8 +454,16 @@ function makeCraters(n, seed){
    kameran ympärille; liikuttaessa vapautuneet laatat kierrätetään uusiin
    kohtiin (enintään yksi laatanrakennus per ruutu — ei nykäyksiä).
    Normaalit lasketaan korkeusnäytteistä naapureineen, joten laattasaumat
-   eivät erotu valaistuksessa. */
-const TILE = 600, TILE_SEGS = 48, TILE_GRID = 5;   // kate 3000×3000, ~115k kolmiota
+   eivät erotu valaistuksessa.
+   LOD-renkaat: keskimmäinen 3×3 tiheillä laatoilla, ulkorengas harvoilla
+   (kate 3000×3000, ~115k kolmiota). Eri tiheydet eivät kohtaa vertex
+   vertexiltä, joten jokaisella laatalla on alaspäin laskostuva helma
+   (SKIRT) — raot reunoilla peittyvät eikä T-saumoja tarvitse ommella. */
+const TILE = 600, TILE_GRID = 5;
+const LOD_SEGS = [64, 32];       // [0] = keskimmäinen 3×3, [1] = ulkorengas
+const SKIRT = 14;                // helman syvyys (yks)
+const ROAD_SEGS = 48;
+function lodFor(dx, dz){ return Math.max(Math.abs(dx), Math.abs(dz)) <= 1 ? 0 : 1; }
 let terrain = null;
 const _vn = new THREE.Vector3();
 const _cc = new THREE.Color();
@@ -384,20 +475,25 @@ function initTerrain(sc, cfg, name){
   const detail = getDetailTexture(name, cfg);
   terrain = {
     sc, cfg,
-    mat: new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 1, metalness: 0,
-      map: detail, bumpMap: detail, bumpScale: 0.85,
-    }),
+    mat: cfg.pbr
+      ? makeSplatMaterial(detail, cfg.pbr)
+      : new THREE.MeshStandardMaterial({
+          vertexColors: true, roughness: 1, metalness: 0,
+          map: detail, bumpMap: detail, bumpScale: 0.85,
+        }),
+    // uv-attribuutti maailmakoordinaateista: PBR-pohjakerroksen toistoväli,
+    // muuten proseduraalisen detaljitekstuurin laaja toisto
+    uvScale: cfg.pbr ? cfg.pbr.baseScale : 2600,
     cA: new THREE.Color(cfg.ground),
     cB: new THREE.Color(cfg.ground2),
     tiles: new Map(),
-    pool: [],
+    pool: [[], []],              // kierrätys per LOD-taso
     queue: [],
     ctx: null, ctz: null,
     roads: !!(cfg.features && cfg.features.roads),
     roadMat: null,
     roadPool: { x: [], z: [] },
-    H: new Float32Array((TILE_SEGS + 3) * (TILE_SEGS + 3)),   // korkeusnäytteet +1 reunamarginaalilla
+    H: new Float32Array((LOD_SEGS[0] + 3) * (LOD_SEGS[0] + 3)),   // korkeusnäytteet +1 reunamarginaalilla
   };
   if (terrain.roads) {
     terrain.roadMat = new THREE.MeshStandardMaterial({
@@ -407,6 +503,7 @@ function initTerrain(sc, cfg, name){
   }
 }
 const _cAsphalt = new THREE.Color(0x232326);
+const _cWhite = new THREE.Color(0xffffff);
 const ROAD_W = 11;   // tiekaistan leveys
 
 /* tiekaistat: laattaan kuuluvat ohuet meshit, jotka myötäilevät maastoa
@@ -416,8 +513,8 @@ function getRoadStrip(dir){
   let m = t.roadPool[dir].pop();
   if (!m) {
     const g = dir === 'z'
-      ? new THREE.PlaneGeometry(ROAD_W, TILE, 1, TILE_SEGS)
-      : new THREE.PlaneGeometry(TILE, ROAD_W, TILE_SEGS, 1);
+      ? new THREE.PlaneGeometry(ROAD_W, TILE, 1, ROAD_SEGS)
+      : new THREE.PlaneGeometry(TILE, ROAD_W, ROAD_SEGS, 1);
     g.rotateX(-Math.PI / 2);
     m = new THREE.Mesh(g, t.roadMat);
     m.userData.dir = dir;
@@ -445,41 +542,89 @@ function fillRoadStrip(mesh, dir, line, center){
   mesh.position.set(dir === 'z' ? line : center, 0, dir === 'z' ? center : line);
 }
 
-function fillTile(mesh, tx, tz){
+/* laattageometria: segs×segs-ruudukko + helmarengas reunan ympäri.
+   Helmaverteksit jakavat reunan xz:n mutta painuvat SKIRT verran alas —
+   eri LOD-tasojen laattojen väliset raot peittyvät. xz kirjoitetaan tässä,
+   y/normaalit/värit/uv/splat fillTilessä. */
+function makeTileGeo(segs){
+  const n = segs + 3, step = TILE / segs;
+  const count = n * n;
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(count * 3);
+  let v = 0;
+  for (let j = -1; j <= segs + 1; j++) {
+    for (let i = -1; i <= segs + 1; i++, v++) {
+      const ci = Math.min(segs, Math.max(0, i)), cj = Math.min(segs, Math.max(0, j));
+      pos[v * 3] = ci * step - TILE / 2;
+      pos[v * 3 + 2] = cj * step - TILE / 2;
+    }
+  }
+  const idx = [];
+  for (let j = 0; j < n - 1; j++) {
+    for (let i = 0; i < n - 1; i++) {
+      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  g.setIndex(idx);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
+  g.setAttribute('aSplat', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  return g;
+}
+
+function fillTile(mesh, tx, tz, segs){
   const t = terrain;
   const g = mesh.geometry;
   const pos = g.attributes.position, col = g.attributes.color,
-        uv = g.attributes.uv, nor = g.attributes.normal;
-  const n = TILE_SEGS + 1, step = TILE / TILE_SEGS, W = n + 2;
+        uv = g.attributes.uv, nor = g.attributes.normal, spl = g.attributes.aSplat;
+  const step = TILE / segs, W = segs + 3;
   const ox = tx * TILE, oz = tz * TILE;
   const x0 = ox - TILE / 2, z0 = oz - TILE / 2;
   const H = t.H;
-  for (let j = -1; j <= n; j++)
-    for (let i = -1; i <= n; i++)
+  for (let j = -1; j <= segs + 1; j++)
+    for (let i = -1; i <= segs + 1; i++)
       H[(j + 1) * W + (i + 1)] = surfHeightFn(x0 + i * step, z0 + j * step);
-  const hs = t.cfg.hScale;
-  for (let v = 0; v < pos.count; v++) {
-    const i = Math.round((pos.getX(v) + TILE / 2) / step);
-    const j = Math.round((pos.getZ(v) + TILE / 2) / step);
-    const h = H[(j + 1) * W + (i + 1)];
-    pos.setY(v, h);
-    // normaali naapurikorkeuksista — yhtenevä laattasaumojen yli
-    _vn.set(H[(j + 1) * W + i] - H[(j + 1) * W + (i + 2)], 2 * step,
-            H[j * W + (i + 1)] - H[(j + 2) * W + (i + 1)]).normalize();
+  const hs = t.cfg.hScale, pbr = t.cfg.pbr;
+  let v = 0;
+  for (let j = -1; j <= segs + 1; j++) for (let i = -1; i <= segs + 1; i++, v++) {
+    const ci = Math.min(segs, Math.max(0, i)), cj = Math.min(segs, Math.max(0, j));
+    const h = H[(cj + 1) * W + (ci + 1)];
+    pos.setY(v, h - (ci !== i || cj !== j ? SKIRT : 0));   // helma painuu alas
+    // normaali naapurikorkeuksista — yhtenevä laattasaumojen yli;
+    // helma perii reunan normaalin eikä erotu valaistuksessa
+    _vn.set(H[(cj + 1) * W + ci] - H[(cj + 1) * W + (ci + 2)], 2 * step,
+            H[cj * W + (ci + 1)] - H[(cj + 2) * W + (ci + 1)]).normalize();
     nor.setXYZ(v, _vn.x, _vn.y, _vn.z);
-    const wx = x0 + i * step, wz = z0 + j * step;
+    const wx = x0 + ci * step, wz = z0 + cj * step;
     const tt = Math.min(1, Math.max(0, fbm2(wx * 0.011 + 7, wz * 0.011 + 7, 3)));
     // korkeammat kohdat vaaleampia, painanteet tummempia
-    const shade = (0.72 + 0.55 * ((h / hs) * 0.5 + 0.5)) * 1.16;
-    _cc.copy(t.cA).lerp(t.cB, tt).multiplyScalar(shade);
+    if (pbr) {
+      // tekstuurit kantavat sävyn — vertex-väri vain hillitty planeettatintti
+      const hf = Math.min(1, Math.max(0, (h / hs) * 0.5 + 0.5));
+      _cc.copy(t.cA).lerp(t.cB, tt).lerp(_cWhite, 1 - pbr.tint)
+         .multiplyScalar((0.8 + 0.4 * hf) * (pbr.bright ?? 1));
+      // splat-painot: jyrkänteet ja lakikorkeudet kiveä, kohinaläiskät sekundääriä
+      const jit = fbm2(wx * 0.05 + 5, wz * 0.05, 2) - 0.47;
+      let rockW = 1 - sstep(0.58 + jit * 0.2, 0.80, _vn.y);
+      rockW = Math.max(rockW, sstep(hs * 2.0, hs * 3.4, h));
+      const secW = sstep(0.42, 0.60, fbm2(wx * 0.009 + 31, wz * 0.009 + 7, 3) + jit * 0.3) * (1 - rockW);
+      spl.setXYZ(v, 1 - rockW - secW, secW, rockW);
+    } else {
+      const shade = (0.72 + 0.55 * ((h / hs) * 0.5 + 0.5)) * 1.16;
+      _cc.copy(t.cA).lerp(t.cB, tt).multiplyScalar(shade);
+      spl.setXYZ(v, 1, 0, 0);
+    }
     if (t.roads) {
       const a = 1 - sstep(6.5, 11, roadDist(wx, wz));
       if (a > 0) _cc.lerp(_cAsphalt, a * 0.88);
     }
     col.setXYZ(v, _cc.r, _cc.g, _cc.b);
-    uv.setXY(v, wx / 2600, wz / 2600);   // detaljitekstuuri maailmakoordinaateissa — jatkuva laattojen yli
+    uv.setXY(v, wx / t.uvScale, wz / t.uvScale);   // maailmakoordinaateissa — jatkuva laattojen yli
   }
-  pos.needsUpdate = col.needsUpdate = uv.needsUpdate = nor.needsUpdate = true;
+  pos.needsUpdate = col.needsUpdate = uv.needsUpdate = nor.needsUpdate = spl.needsUpdate = true;
   g.computeBoundingSphere();
   mesh.position.set(ox, 0, oz);
 }
@@ -488,20 +633,18 @@ function buildQueuedTile(){
   const t = terrain;
   const key = t.queue.shift();
   if (!key || t.tiles.has(key)) return;
-  let mesh = t.pool.pop();
+  const [tx, tz] = key.split(',').map(Number);
+  const lod = lodFor(tx - t.ctx, tz - t.ctz);
+  let mesh = t.pool[lod].pop();
   if (!mesh) {
-    const g = new THREE.PlaneGeometry(TILE, TILE, TILE_SEGS, TILE_SEGS);
-    g.rotateX(-Math.PI / 2);
-    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3));
-    mesh = new THREE.Mesh(g, t.mat);
+    mesh = new THREE.Mesh(makeTileGeo(LOD_SEGS[lod]), t.mat);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
   }
   if (!mesh.parent) t.sc.add(mesh);
   mesh.visible = true;
-  const [tx, tz] = key.split(',').map(Number);
-  fillTile(mesh, tx, tz);
-  const entry = { mesh, roads: [] };
+  fillTile(mesh, tx, tz, LOD_SEGS[lod]);
+  const entry = { mesh, lod, roads: [] };
   if (t.roadMat) {
     // laatan läpi kulkevat tielinjat saavat omat kaistameshinsä
     const ox = tx * TILE, oz = tz * TILE;
@@ -525,18 +668,24 @@ function updateTerrain(ax, az, buildAll = false){
   if (ctx !== t.ctx || ctz !== t.ctz) {
     t.ctx = ctx; t.ctz = ctz;
     const R = (TILE_GRID - 1) / 2;
-    const want = new Set();
+    const want = new Map();   // avain → haluttu LOD-taso
     for (let dz = -R; dz <= R; dz++)
-      for (let dx = -R; dx <= R; dx++) want.add((ctx + dx) + ',' + (ctz + dz));
+      for (let dx = -R; dx <= R; dx++) want.set((ctx + dx) + ',' + (ctz + dz), lodFor(dx, dz));
     for (const [k, e] of t.tiles) {
-      if (!want.has(k)) {
+      // pois gridistä pudonneet JA väärälle LOD-tasolle jääneet kierrätetään
+      if (want.get(k) !== e.lod) {
         t.tiles.delete(k);
         e.mesh.visible = false;
-        t.pool.push(e.mesh);
+        t.pool[e.lod].push(e.mesh);
         for (const r of e.roads) { r.visible = false; t.roadPool[r.userData.dir].push(r); }
       }
     }
-    t.queue = [...want].filter(k => !t.tiles.has(k));
+    // lähimmät laatat rakennetaan ensin
+    const cd = (k) => {
+      const [x, z] = k.split(',').map(Number);
+      return Math.max(Math.abs(x - ctx), Math.abs(z - ctz));
+    };
+    t.queue = [...want.keys()].filter(k => !t.tiles.has(k)).sort((a, b) => cd(a) - cd(b));
   }
   if (buildAll) { while (t.queue.length) buildQueuedTile(); }
   else if (t.queue.length) buildQueuedTile();
