@@ -855,8 +855,10 @@ function buildFalcon(){
 /* Star Trek -henkinen sukkula: virtaviivainen runko viistetystä
    poikkileikkauksesta (8 pistettä × 5 sektiota — kapenee keulaan ja
    perään), yhtenäinen valkoinen pinta ja punainen vyötäisraita,
-   oktagonikonehtimot kiskomaisin laskujalaksin */
-function buildShuttle(){
+   oktagonikonehtimot kiskomaisin laskujalaksin.
+   makeShuttleModel rakentaa tuoreen mallin omine resursseineen —
+   pinnalle pysäköity kopio saa tuhoutua scenen mukana */
+function makeShuttleModel(withBlinkers = true){
   const g = new THREE.Group();
   const hullMat = new THREE.MeshStandardMaterial({
     color: 0xdfe3e8, roughness: 0.5, metalness: 0.15, side: THREE.DoubleSide,
@@ -951,16 +953,21 @@ function buildShuttle(){
     // jalaskisko: matala palkki + ylösviistetty kärki
     box(g, darkMat, 0.13, 0.07, 2.4, s * 1.36, -1.06, 0.55);
     box(g, darkMat, 0.13, 0.07, 0.5, s * 1.36, -0.99, -0.85, -0.42, 0, 0);
-    blinker(g, s < 0 ? 0xff5340 : 0x46d06a, s * 1.36, -0.48, 1.85, 1.3, s);
+    if (withBlinkers) blinker(g, s < 0 ? 0xff5340 : 0x46d06a, s * 1.36, -0.48, 1.85, 1.3, s);
   }
 
   // kattodetaljit ja antenni
   box(g, hullMat, 0.7, 0.12, 1.2, 0, 0.74, 0.9);
   box(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0);
   bar(g, darkMat, [-0.55, 0.7, 1.8], [-0.55, 1.05, 1.8], 0.022);
-  blinker(g, 0xffb340, -0.55, 1.1, 1.8, 0.9, 0.5);
+  if (withBlinkers) blinker(g, 0xffb340, -0.55, 1.1, 1.8, 0.9, 0.5);
 
   mergeStatic(g);
+  return g;
+}
+
+function buildShuttle(){
+  const g = makeShuttleModel(true);
   g.scale.setScalar(0.7);
   g.position.set(0, -1.5, -7.2);   // alempana → katse takaviistosta ylhäältä
   g.visible = false;
@@ -987,6 +994,32 @@ let extView = false;
 export function toggleShipView(){
   if (S.mode === 'surface') return;
   extView = !extView;
+}
+
+/* ---- pinnalle pysäköity sukkula ----
+   Laskeuduttaessa pintascenen spawn-pisteen viereen pysäköidään sukkula;
+   paluu kiertoradalle onnistuu vain sen vierestä (B). Malli rakennetaan
+   tuoreena joka laskulle — leaveSurfaceScenen dispose saa tuhota sen. */
+let shuttleSurf = null;
+let _prevMode = S.mode;
+export function nearParkedShuttle(){
+  return !!(shuttleSurf && camera.position.distanceTo(shuttleSurf.position) < 10);
+}
+function parkShuttle(){
+  const sd = surfDebug();
+  if (!sd.scene) return;
+  const m = makeShuttleModel(false);   // pysäköitynä valot sammuksissa
+  m.scale.setScalar(1.3);
+  // viistosti pelaajan vasempaan etukulmaan, nokka saapumissuuntaan
+  const fx = -Math.sin(S.yaw), fz = -Math.cos(S.yaw);
+  const rx = Math.cos(S.yaw), rz = -Math.sin(S.yaw);
+  const px = sd.x + fx * 7.5 - rx * 4.5;
+  const pz = sd.z + fz * 7.5 - rz * 4.5;
+  m.position.set(px, sd.h(px, pz) + 1.43, pz);   // jalakset maahan
+  m.rotation.y = S.yaw + 0.45;
+  m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  sd.scene.add(m);
+  shuttleSurf = m;
 }
 
 /* etäisyyssovitus: lähellä planeetan pintaa (tai matalalennossa maata)
@@ -1054,6 +1087,13 @@ camera.add(fillLight);
 
 let _lastDraw = -9;
 export function updateCockpit(dt = 0.016){
+  // moodisiirtymät: pinnalle → pysäköi sukkula; pois pinnalta → scene
+  // hävitti pysäköidyn mallin resursseineen, pudota viite
+  if (S.mode !== _prevMode) {
+    if (S.mode === 'surface') parkShuttle();
+    else shuttleSurf = null;
+    _prevMode = S.mode;
+  }
   bridgeCockpit.visible = S.mode === 'space' && !extView;
   landerCockpit.visible = S.mode === 'descent' && !extView;
   falconExt.visible = S.mode === 'space' && extView;

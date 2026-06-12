@@ -2,7 +2,7 @@
 import { renderer } from './core.js';
 import { bodies, orbitLines, placeNearBody } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent } from './surface.js';
-import { toggleShipView } from './cockpit.js';
+import { toggleShipView, nearParkedShuttle } from './cockpit.js';
 import { S, clamp01 } from './state.js';
 
 let started = false;
@@ -77,7 +77,10 @@ addEventListener('keydown', (e) => {
     if (e.code === 'KeyG') tryBeamDown();
     if (/^Digit[0-8]$/.test(e.code)) setTarget(parseInt(e.code.slice(5), 10));
   } else {
-    if (e.code === 'KeyB') S.mode === 'descent' ? abortDescent() : exitSurface();
+    if (e.code === 'KeyB') {
+      if (S.mode === 'descent') abortDescent();
+      else if (nearParkedShuttle()) exitSurface();   // paluu vain sukkulan vierestä
+    }
   }
 });
 addEventListener('keyup', (e) => { S.keys[e.code] = false; });

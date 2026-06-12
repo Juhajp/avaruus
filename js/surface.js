@@ -1607,14 +1607,14 @@ let transitioning = false;
 function fadeSwap(fn){
   if (transitioning) return;
   transitioning = true;
-  fadeEl.style.transition = 'opacity 0.3s ease';
+  fadeEl.style.transition = 'opacity 0.7s ease';
   fadeEl.style.opacity = '1';
   setTimeout(() => {
     fn();
-    fadeEl.style.transition = 'opacity 0.9s ease';
+    fadeEl.style.transition = 'opacity 1.8s ease';
     fadeEl.style.opacity = '0';
     transitioning = false;
-  }, 330);
+  }, 750);
 }
 
 // ohjaamon mittarielementit
