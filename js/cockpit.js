@@ -720,7 +720,10 @@ function buildCockpit(opts){
       emissiveIntensity: intensity, roughness: 0.3,
     });
   };
-  const SCR = [['pos', 0.95], ['spd', 0.72], ['tgt', 0.72]];
+  // sukkulalla kallistuksen näyttö (keinohorisontti = 'pos'/ASENTO) keskelle
+  const SCR = opts.shuttle
+    ? [['spd', 0.72], ['pos', 0.95], ['tgt', 0.72]]
+    : [['pos', 0.95], ['spd', 0.72], ['tgt', 0.72]];
   // sukkulalla loiva leveä panoraama; komentosillalla pienemmät ruudut
   // (vähemmän peittoa) ylempänä että kaikki tieto näkyy. Jokaisen näytön
   // yläreuna mukailee kojelaudan kaarta (arch), reunanäytöt viistottu.

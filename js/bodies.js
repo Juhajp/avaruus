@@ -429,17 +429,34 @@ for (const def of BODIES) {
   });
 }
 
-/* ---------------- NASA-kuvamateriaaliin perustuvat pintakartat ---------------- */
-const TEX_EARTH   = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/textures/planets/';
-const TEX_PLANETS = 'https://cdn.jsdelivr.net/gh/jeromeetienne/threex.planets@master/images/';
+/* ---------------- Planeettakartat: Solar System Scope (CC-BY 4.0) ----------------
+   Pohjakartat ovat 2K-versioita TÄYSIN samoista kartoista kuin hi-resit (Wikimedia,
+   CORS-sallittu). Koska base ja hi-res ovat sama kuva eri tarkkuudella, ristihäivytys
+   2K→8K on pelkkää saman kuvan terävöitymistä — ei väri-/piirremuutosta. */
+const WM = 'https://upload.wikimedia.org/wikipedia/commons/';
 const PLANET_TEXTURES = {
-  Merkurius: TEX_PLANETS + 'mercurymap.jpg',
-  Venus:     TEX_PLANETS + 'venusmap.jpg',
-  Mars:      TEX_PLANETS + 'marsmap1k.jpg',
-  Jupiter:   TEX_PLANETS + 'jupitermap.jpg',
-  Saturnus:  TEX_PLANETS + 'saturnmap.jpg',
-  Uranus:    TEX_PLANETS + 'uranusmap.jpg',
-  Neptunus:  TEX_PLANETS + 'neptunemap.jpg',
+  Merkurius: WM + '9/92/Solarsystemscope_texture_2k_mercury.jpg',
+  Venus:     WM + '4/40/Solarsystemscope_texture_2k_venus_surface.jpg',
+  Mars:      WM + '4/46/Solarsystemscope_texture_2k_mars.jpg',
+  Jupiter:   WM + 'b/be/Solarsystemscope_texture_2k_jupiter.jpg',
+  Saturnus:  WM + 'e/ea/Solarsystemscope_texture_2k_saturn.jpg',
+  Uranus:    WM + '9/95/Solarsystemscope_texture_2k_uranus.jpg',
+  Neptunus:  WM + '1/1e/Solarsystemscope_texture_2k_neptune.jpg',
+};
+const EARTH_DAY   = WM + 'c/c3/Solarsystemscope_texture_2k_earth_daymap.jpg';
+const EARTH_NIGHT = WM + '2/2f/Solarsystemscope_texture_2k_earth_nightmap.jpg';
+
+/* Hi-res (8K kiviplaneetat + Maa, 4K Jupiter/Saturnus). Ladataan vain lähestyttävälle
+   planeetalle (`updatePlanetLOD`), yksi kerrallaan VRAMin säästämiseksi, ja vapautetaan
+   kun etääntyy. Uranus/Neptunus jäävät 2K:hon — ei 8K:ta saatavilla eikä tarvetta
+   (sileitä kaasukehiä). 2K-pohja jää aina varalle. */
+const HIRES = {
+  Merkurius: WM + '2/27/Solarsystemscope_texture_8k_mercury.jpg',
+  Venus:     WM + '1/1c/Solarsystemscope_texture_8k_venus_surface.jpg',
+  Maa:       WM + '0/04/Solarsystemscope_texture_8k_earth_daymap.jpg',
+  Mars:      WM + '7/70/Solarsystemscope_texture_8k_mars.jpg',
+  Jupiter:   WM + '5/5e/Solarsystemscope_texture_8k_jupiter.jpg',
+  Saturnus:  WM + '1/1e/Solarsystemscope_texture_8k_saturn.jpg',
 };
 
 const texLoader = new THREE.TextureLoader();
@@ -453,17 +470,32 @@ function loadTex(url){
   });
 }
 
-function makeTexturedMaterial(map){
+function makeTexturedMaterial(map, radius){
   const u = baseUniforms();
-  u.uMap = { value: map };
+  u.uMap = { value: map };          // pohjakartta (1–2K)
+  u.uMap2 = { value: map };         // hi-res (sama kunnes LOD lataa)
+  u.uBlend = { value: 0 };          // 0 = pohja, 1 = hi-res — ristihäivytys
+  u.uRadius = { value: radius || 1.0 };
   return registerMat(new THREE.ShaderMaterial({
     uniforms: u,
     vertexShader: PLANET_VERT,
     fragmentShader: FRAG_HEAD + /* glsl */`
     uniform sampler2D uMap;
+    uniform sampler2D uMap2;
+    uniform float uBlend;
+    uniform float uRadius;
     varying vec2 vUv;
     void main(){
-      vec3 col = texture2D(uMap, vUv).rgb;
+      vec3 col = mix(texture2D(uMap, vUv).rgb, texture2D(uMap2, vUv).rgb, uBlend);
+      // proseduraalinen lähidetalji peittää matalan kartan pikselöitymisen
+      // lähietäisyydellä; häivytetään sisään kameran pintaetäisyydestä, ja
+      // vOP (pinnan suunta objektiavaruudessa) pitää detaljin kiinni pinnassa
+      // vain aivan lähellä (8K riittää kauempaa) ja kevyt — 3 näytettä
+      float nd = 1.0 - smoothstep(uRadius * 0.15, uRadius * 1.4, length(cameraPosition - vWP));
+      if (nd > 0.002) {
+        float det = snoise(vOP * 170.0) * 0.5 + snoise(vOP * 520.0) * 0.32 + snoise(vOP * 1400.0) * 0.18;
+        col *= 1.0 + det * 0.16 * nd;
+      }
       vec3 N = normalize(vN);
       vec3 S = sunDirAt(vWP);
       float diff = pow(clamp(dot(N, S), 0.0, 1.0), 1.05);
@@ -474,19 +506,31 @@ function makeTexturedMaterial(map){
   }));
 }
 
-function makeTexturedEarthMaterial(day, night){
+function makeTexturedEarthMaterial(day, night, radius){
   const u = baseUniforms();
   u.uMap = { value: day };
+  u.uMap2 = { value: day };
+  u.uBlend = { value: 0 };
   u.uNight = { value: night };
+  u.uRadius = { value: radius || 1.0 };
   return registerMat(new THREE.ShaderMaterial({
     uniforms: u,
     vertexShader: PLANET_VERT,
     fragmentShader: FRAG_HEAD + /* glsl */`
     uniform sampler2D uMap;
+    uniform sampler2D uMap2;
+    uniform float uBlend;
     uniform sampler2D uNight;
+    uniform float uRadius;
     varying vec2 vUv;
     void main(){
-      vec3 day = texture2D(uMap, vUv).rgb;
+      vec3 day = mix(texture2D(uMap, vUv).rgb, texture2D(uMap2, vUv).rgb, uBlend);
+      // lähidetalji (kevyempi kuin kiviplaneetoilla, ettei meri kohise)
+      float nd = 1.0 - smoothstep(uRadius * 0.15, uRadius * 1.4, length(cameraPosition - vWP));
+      if (nd > 0.002) {
+        float det = snoise(vOP * 170.0) * 0.5 + snoise(vOP * 520.0) * 0.32 + snoise(vOP * 1400.0) * 0.18;
+        day *= 1.0 + det * 0.11 * nd;
+      }
       vec3 night = texture2D(uNight, vUv).rgb;
       vec3 N = normalize(vN);
       vec3 S = sunDirAt(vWP);
@@ -510,17 +554,19 @@ function makeTexturedEarthMaterial(day, night){
 for (const b of bodies) {
   if (b.def.type === 'earth') {
     Promise.all([
-      loadTex(TEX_EARTH + 'earth_atmos_2048.jpg'),
-      loadTex(TEX_EARTH + 'earth_lights_2048.png'),
+      loadTex(EARTH_DAY),
+      loadTex(EARTH_NIGHT),
     ]).then(([d, n]) => {
       const old = b.mesh.material;
-      b.mesh.material = makeTexturedEarthMaterial(d, n);
+      b.mesh.material = makeTexturedEarthMaterial(d, n, b.def.r);
+      b.baseMap = d;
       old.dispose();
     }).catch(() => {});
   } else if (PLANET_TEXTURES[b.def.name]) {
     loadTex(PLANET_TEXTURES[b.def.name]).then((t) => {
       const old = b.mesh.material;
-      b.mesh.material = makeTexturedMaterial(t);
+      b.mesh.material = makeTexturedMaterial(t, b.def.r);
+      b.baseMap = t;
       old.dispose();
     }).catch(() => {});
   }
@@ -550,10 +596,64 @@ export function placeNearBody(idx, distMult = 3.5){
 }
 
 // kappaleiden paikat ja pyöriminen (kaikissa moodeissa)
+/* ---- planeettatekstuurin LOD: korkearesoluutiokartta vain lähestyttävälle
+   kappaleelle, yksi kerrallaan. Lataus alkaa jo kaukaa (lead time), ja kartat
+   ristihäivytetään (uBlend 0→1) jotta vaihto on huomaamaton. ---- */
+const LOD_LOAD = 80, LOD_KEEP = 120, LOD_FADE = 3.0;   // vaihto 8K:ksi < 80 r, pidä < 120 r, häivytys ~0,3 s τ
+let activeLOD = null;   // { b, tex, target }  target 1 = hi näkyviin, 0 = takaisin pohjaan
+let lodLoading = null;  // kappale jolla lataus kesken
+function surfDist(b){ return camera.position.distanceTo(b.group.position) - b.def.r; }
+function lodDrop(b){
+  const u = b.mesh.material.uniforms;
+  if (u.uMap2) u.uMap2.value = b.baseMap;
+  if (u.uBlend) u.uBlend.value = 0;
+}
+function updatePlanetLOD(dt){
+  // lähin kappale, jolla on hi-res ja pohjakartta jo ladattu
+  let cand = null, candD = Infinity;
+  for (const b of bodies) {
+    if (!b.baseMap || !HIRES[b.def.name]) continue;
+    const d = surfDist(b);
+    if (d < candD) { candD = d; cand = b; }
+  }
+  // aloita lataus kun lähestyttävä tulee alueelle (yksi kerrallaan)
+  if (cand && candD < cand.def.r * LOD_LOAD && lodLoading !== cand &&
+      (!activeLOD || activeLOD.b !== cand)) {
+    const want = cand;
+    lodLoading = want;
+    loadTex(HIRES[want.def.name]).then((t) => {
+      if (lodLoading === want) lodLoading = null;
+      if (!want.baseMap || surfDist(want) > want.def.r * LOD_KEEP) { t.dispose(); return; }
+      t.anisotropy = 4;   // 8K + 16× anisotropia koko ruudulla maksaa fps:ää
+      if (activeLOD) { lodDrop(activeLOD.b); activeLOD.tex.dispose(); }   // jäännös (harvinainen)
+      const u = want.mesh.material.uniforms;
+      if (u.uMap2) u.uMap2.value = t;
+      if (u.uBlend) u.uBlend.value = 0;
+      activeLOD = { b: want, tex: t, target: 1 };   // häivytetään sisään
+    }).catch(() => { if (lodLoading === want) lodLoading = null; });
+  } else if (activeLOD && activeLOD.b === cand && candD < cand.def.r * LOD_KEEP) {
+    activeLOD.target = 1;   // palasi alueelle → häivytä takaisin
+  }
+  // häivytys ja vapautus
+  if (activeLOD) {
+    if (activeLOD.target === 1 && surfDist(activeLOD.b) > activeLOD.b.def.r * LOD_KEEP) activeLOD.target = 0;
+    const u = activeLOD.b.mesh.material.uniforms;
+    if (u.uBlend) {
+      u.uBlend.value += (activeLOD.target - u.uBlend.value) * Math.min(1, dt * LOD_FADE);
+      if (activeLOD.target === 0 && u.uBlend.value < 0.02) {   // häivytys loppuun → vapauta
+        lodDrop(activeLOD.b);
+        activeLOD.tex.dispose();
+        activeLOD = null;
+      }
+    }
+  }
+}
+
 export function updateBodies(dt){
   for (const b of bodies) {
     bodyPosition(b, S.simTime, b.group.position);
     b.mesh.rotation.y += b.spinVel * dt;
     if (b.clouds) b.clouds.rotation.y += b.spinVel * 1.25 * dt;
   }
+  updatePlanetLOD(dt);
 }
