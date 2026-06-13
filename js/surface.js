@@ -5,6 +5,7 @@ import { bodies, placeNearBody } from './bodies.js';
 import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
 import { makeSky } from './sky.js';
+import { initMining, updateMining, clearMining } from './mining.js';
 import { S } from './state.js';
 
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
@@ -1467,6 +1468,7 @@ function buildSurfaceScene(name){
     twilight: cfg.twilight ? new THREE.Color(cfg.twilight) : null,
     discDay: disc ? disc.material.color.clone() : null,
   };
+  initMining(sc, name, surfHeightFn);   // mineraaliesiintymät (vain Mars)
   return sc;
 }
 
@@ -1505,6 +1507,7 @@ function enterSurfaceScene(b, mode){
 
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
+  clearMining();
   S.mode = 'space';
   whiteOutEl.style.opacity = '0';
   setHeatShimmer(0, 0);
@@ -1565,6 +1568,7 @@ export function updateSurface(dt){
   }
   updateTerrain(surfX, surfZ);
   updateScatter(surfX, surfZ);
+  updateMining(dt, surfX, surfZ);
 
   // kävelyheilunta: askelpomppu, sivuttaishuojunta ja kevyt kallistus
   bobAmp += ((moving ? (running ? 1.4 : 1.0) : 0) - bobAmp) * (1 - Math.exp(-dt * 8));
@@ -1734,6 +1738,7 @@ export function updateDescent(dt){
       whiteOutEl.style.opacity = '0';
       setHeatShimmer(0, 0);
       document.body.classList.remove('descent');
+      document.body.classList.add('surface');
       surfX = descentPos.x; surfZ = descentPos.z;
       bobPhase = 0; bobAmp = 0;
       const cfg = SURFACE_CONFIGS[surfaceBody.def.name];

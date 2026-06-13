@@ -1074,8 +1074,17 @@ function parkShuttle(){
   const rx = Math.cos(S.yaw), rz = -Math.sin(S.yaw);
   const px = sd.x + fx * 7.5 - rx * 4.5;
   const pz = sd.z + fz * 7.5 - rz * 4.5;
-  m.position.set(px, sd.h(px, pz) + 1.43, pz);   // jalakset maahan
-  m.rotation.y = S.yaw + 0.45;
+  // pinnan normaali korkeusfunktiosta (keskidifferenssi footprintin yli) →
+  // sukkula kallistuu rinteen suuntaan eikä jää vaakatasoon
+  const e = 3;
+  const dhx = (sd.h(px + e, pz) - sd.h(px - e, pz)) / (2 * e);
+  const dhz = (sd.h(px, pz + e) - sd.h(px, pz - e)) / (2 * e);
+  const up = new THREE.Vector3(0, 1, 0);
+  const N = new THREE.Vector3(-dhx, 1, -dhz).normalize();
+  const qTilt = new THREE.Quaternion().setFromUnitVectors(up, N);
+  const qYaw = new THREE.Quaternion().setFromAxisAngle(up, S.yaw + 0.45);
+  m.quaternion.multiplyQuaternions(qTilt, qYaw);   // suuntaus ensin, sitten kallistus rinteeseen
+  m.position.set(px, sd.h(px, pz) + 1.43, pz);     // jalakset maahan
   m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   sd.scene.add(m);
   shuttleSurf = m;

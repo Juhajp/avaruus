@@ -3,6 +3,7 @@ import { renderer } from './core.js';
 import { bodies, orbitLines, placeNearBody } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent } from './surface.js';
 import { toggleShipView, nearParkedShuttle } from './cockpit.js';
+import { toggleCraft, craftRecipe, isCraftOpen, setMining } from './mining.js';
 import { S, clamp01 } from './state.js';
 
 let started = false;
@@ -38,10 +39,13 @@ renderer.domElement.addEventListener('click', () => {
 
 // varajärjestelmä: katselu hiirellä vetämällä, jos hiirilukkoa ei saada
 renderer.domElement.addEventListener('mousedown', (e) => {
-  if (e.button === 0) { dragging = true; lastMX = e.clientX; lastMY = e.clientY; }
+  if (e.button === 0) {
+    dragging = true; lastMX = e.clientX; lastMY = e.clientY;
+    if (S.mode === 'surface') setMining(true);   // pinnalla vasen = louhi (tähtää esiintymään)
+  }
 });
-addEventListener('mouseup', () => { dragging = false; });
-addEventListener('blur', () => { dragging = false; });
+addEventListener('mouseup', () => { dragging = false; setMining(false); });
+addEventListener('blur', () => { dragging = false; setMining(false); });
 
 document.addEventListener('mousemove', (e) => {
   const locked = document.pointerLockElement === renderer.domElement;
@@ -65,6 +69,9 @@ addEventListener('wheel', (e) => {
 
 addEventListener('keydown', (e) => {
   S.keys[e.code] = true;
+  // jalostus: C avaa/sulkee paneelin, numerot jalostavat kun paneeli auki
+  if (e.code === 'KeyC') { toggleCraft(); return; }
+  if (isCraftOpen() && /^Digit[1-9]$/.test(e.code)) { craftRecipe(parseInt(e.code.slice(5), 10) - 1); return; }
   if (e.code === 'KeyX') S.targetFrac = 0;
   if (e.code === 'KeyM') S.targetFrac = 0.99;
   if (e.code === 'KeyO') orbitLines.visible = !orbitLines.visible;

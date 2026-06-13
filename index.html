@@ -156,7 +156,50 @@
   #surfacePanel #surfInfo { line-height:1.55; color:var(--hud-dim); }
   body.surface #surfacePanel { display:block; }
   body.surface #speedPanel, body.surface #targetPanel, body.surface #bodyBar,
-  body.surface #crosshair, body.surface #hint, body.surface #labels { display:none !important; }
+  body.surface #hint, body.surface #labels { display:none !important; }
+  body.surface #crosshair { display:block; opacity:0.6; }   /* tähtäin louhintaa varten */
+
+  /* ---- louhinta + jalostus ---- */
+  #miningHud {
+    position:fixed; top:16px; right:16px; z-index:8; display:none; text-align:right;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px;
+    color:#cfe6d6; text-shadow:0 0 6px rgba(60,180,120,0.4); pointer-events:none;
+    line-height:1.7;
+  }
+  body.surface #miningHud { display:block; }
+  #miningHud b { color:#fff; font-weight:700; }
+  #miningHud .mhMade { color:#9fd0ff; text-shadow:0 0 6px rgba(80,150,255,0.4); }
+  #miningHud .mhDim { color:var(--hud-dim); }
+  #miningHud .mhHint { color:rgba(180,210,190,0.55); font-size:10px; margin-top:3px; }
+  #miningHud.mhPulse { animation: mhpulse 0.45s ease; }
+  @keyframes mhpulse { 0% { transform:scale(1.12); filter:brightness(1.8); } 100% { transform:scale(1); filter:brightness(1); } }
+
+  #mineBar {
+    position:fixed; top:calc(50% + 22px); left:50%; transform:translateX(-50%);
+    width:120px; height:7px; display:none; z-index:9; pointer-events:none;
+    background:rgba(0,0,0,0.5); border:1px solid rgba(174,247,193,0.55); border-radius:4px; overflow:hidden;
+  }
+  #mineBar > i { display:block; height:100%; width:0%; background:linear-gradient(90deg,#aef7c1,#fff); }
+
+  #craftPanel {
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:30; display:none;
+    background:rgba(10,16,20,0.92); border:1px solid rgba(120,200,160,0.4); border-radius:12px;
+    padding:18px 22px; min-width:340px; box-shadow:0 0 40px rgba(0,0,0,0.6);
+    font-family: ui-monospace, Menlo, Consolas, monospace; color:#cfe6d6;
+  }
+  #craftPanel .crHead { letter-spacing:4px; font-size:13px; color:#aef7c1; margin-bottom:12px; }
+  #craftPanel .crRow { font-size:13px; padding:5px 0; display:flex; align-items:center; gap:8px; }
+  #craftPanel .crRow b { color:#fff; }
+  #craftPanel .crNum {
+    display:inline-block; width:18px; height:18px; line-height:18px; text-align:center;
+    border:1px solid rgba(174,247,193,0.5); border-radius:4px; font-size:11px; color:#aef7c1; flex:0 0 auto;
+  }
+  #craftPanel .crHave { margin-left:auto; color:var(--hud-dim); }
+  #craftPanel .crOk { color:#cfe6d6; }
+  #craftPanel .crNo { opacity:0.42; }
+  #craftPanel .crHint { margin-top:12px; font-size:10px; color:rgba(180,210,190,0.55); }
+  #craftPanel.crShake { animation: crshake 0.3s; }
+  @keyframes crshake { 0%,100%{transform:translate(-50%,-50%);} 25%{transform:translate(-52%,-50%);} 75%{transform:translate(-48%,-50%);} }
 
   #pausedTag {
     top:60px; left:50%; transform:translateX(-50%);
@@ -243,6 +286,9 @@
 
 <div id="fadeBlack"></div>
 <div id="whiteOut"></div>
+<div id="miningHud"></div>
+<div id="mineBar"><i></i></div>
+<div id="craftPanel"></div>
 
 <div id="speedPanel" class="panel">
   <h3>NOPEUS</h3>
