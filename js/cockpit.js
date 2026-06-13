@@ -204,59 +204,6 @@ function makeConsoleTex(accent){
   return { map: tex(base), emissive: tex(emit), bump: tex(bump, false) };
 }
 
-// näyttöruudut: 'orbit' = tutkakehä, 'bars' = telemetria, 'nav' = reittiruudukko, 'wave' = käyrästö
-function makeScreenTex(kind, hue){
-  const cv = document.createElement('canvas');
-  cv.width = 256; cv.height = 192;
-  const c = cv.getContext('2d');
-  const r = rng(kind.length * 31 + kind.charCodeAt(0));
-  c.fillStyle = '#03070c'; c.fillRect(0, 0, 256, 192);
-  c.strokeStyle = hue; c.fillStyle = hue;
-  c.strokeRect(3, 3, 250, 186);
-  if (kind === 'orbit') {
-    c.lineWidth = 1.2;
-    for (const rad of [26, 52, 78]) { c.beginPath(); c.arc(128, 96, rad, 0, 7); c.stroke(); }
-    c.beginPath(); c.moveTo(128, 14); c.lineTo(128, 178); c.moveTo(40, 96); c.lineTo(216, 96); c.stroke();
-    for (let i = 0; i < 7; i++) {
-      const a = r() * 6.28, d = 20 + r() * 60;
-      c.fillRect(128 + Math.cos(a) * d - 2, 96 + Math.sin(a) * d - 2, 4, 4);
-    }
-    c.fillRect(20, 170, 90, 4); c.fillRect(20, 178, 60, 4);
-  } else if (kind === 'bars') {
-    for (let i = 0; i < 12; i++) {
-      const h = 16 + r() * 120;
-      c.globalAlpha = 0.85;
-      c.fillRect(16 + i * 19, 168 - h, 13, h);
-    }
-    c.globalAlpha = 0.6; c.lineWidth = 0.7;
-    for (let y = 20; y < 170; y += 30) { c.beginPath(); c.moveTo(12, y); c.lineTo(244, y); c.stroke(); }
-    c.globalAlpha = 1;
-  } else if (kind === 'wave') {
-    c.lineWidth = 0.7; c.globalAlpha = 0.45;
-    for (let y = 16; y < 192; y += 22) { c.beginPath(); c.moveTo(8, y); c.lineTo(248, y); c.stroke(); }
-    c.globalAlpha = 1; c.lineWidth = 2;
-    for (const [amp, f, y0] of [[18, 0.09, 60], [12, 0.05, 120], [8, 0.13, 160]]) {
-      c.beginPath();
-      for (let x = 8; x < 248; x += 4) {
-        const y = y0 + Math.sin(x * f + r() * 2) * amp;
-        x === 8 ? c.moveTo(x, y) : c.lineTo(x, y);
-      }
-      c.stroke();
-    }
-  } else {
-    c.lineWidth = 0.8; c.globalAlpha = 0.5;
-    for (let x = 16; x < 256; x += 24) { c.beginPath(); c.moveTo(x, 8); c.lineTo(x, 184); c.stroke(); }
-    for (let y = 8; y < 192; y += 24) { c.beginPath(); c.moveTo(16, y); c.lineTo(240, y); c.stroke(); }
-    c.globalAlpha = 1; c.lineWidth = 2.4;
-    c.beginPath(); c.moveTo(28, 160);
-    let x = 28, y = 160;
-    for (let i = 0; i < 6; i++) { x += 32; y -= 10 + r() * 28; c.lineTo(x, y); }
-    c.stroke();
-    c.save(); c.translate(x, y); c.rotate(0.785); c.fillRect(-5, -5, 10, 10); c.restore();
-  }
-  return tex(cv);
-}
-
 // takaseinän ovi varoitusraitoineen
 function makeDoorTex(){
   const cv = document.createElement('canvas');
@@ -307,6 +254,7 @@ function makeOverheadTex(accent){
    ja korkeus), keski = nopeus, oikea = kohteen tiedot — samat luvut ja
    kaavat kuin HUD-paneeleissa (hud.js). */
 const _live = [];
+let falconGlow = null;   // avaruusaluksen moottorihehkun materiaali (ajetaan vauhdista)
 const _dir = new THREE.Vector3();
 const MONO = 'ui-monospace, Menlo, Consolas, monospace';
 
@@ -319,22 +267,28 @@ function fmtTime(s){
 }
 
 function scrHead(c, hue, title){
-  c.fillStyle = '#03070c';
-  c.fillRect(0, 0, 256, 192);
-  c.strokeStyle = hue; c.lineWidth = 1.5;
-  c.strokeRect(3, 3, 250, 186);
-  c.fillStyle = hue;
-  c.globalAlpha = 0.8;
-  c.font = '700 13px ' + MONO;
-  c.fillText(title, 12, 21);
-  c.fillRect(8, 28, 240, 1.2);
+  // tumma metallinen reunus (sulautuu kojelautaan) + sisään upotettu ruutu:
+  // reuna = kojelaudan väriä, upotusvarjo ja ohut valoreuna → ei "päälleliimattu"
+  const m = 9;
+  c.fillStyle = '#0c0f14'; c.fillRect(0, 0, 256, 192);               // reunus = tumma metalli
+  // upotusviiste: tumma reuna sisään, ohut yläkiilto
+  c.fillStyle = '#05080d'; c.fillRect(m - 2, m - 2, 256 - 2 * (m - 2), 192 - 2 * (m - 2));
+  c.fillStyle = '#03070c'; c.fillRect(m, m, 256 - 2 * m, 192 - 2 * m); // varsinainen ruutu
+  c.strokeStyle = 'rgba(0,0,0,0.6)'; c.lineWidth = 2;
+  c.strokeRect(m + 1, m + 1, 254 - 2 * m, 190 - 2 * m);               // sisävarjo
+  c.strokeStyle = 'rgba(150,170,200,0.10)'; c.lineWidth = 1;
+  c.strokeRect(m - 1.5, m - 1.5, 259 - 2 * m, 195 - 2 * m);           // valoreuna
+  c.fillStyle = hue; c.globalAlpha = 0.65;
+  c.font = '700 12px ' + MONO;
+  c.fillText(title, 15, 33);
+  c.globalAlpha = 0.28; c.fillRect(m + 4, 39, 256 - 2 * m - 8, 1);
   c.globalAlpha = 1;
 }
 
 // vasen näyttö: aurinkokuntakartta ylhäältä (log-skaalatut radat),
 // kohde korostettuna ja alus suuntakolmiona
 function drawPos(c, hue){
-  scrHead(c, hue, 'SIJAINTI');
+  scrHead(c, hue, S.mode === 'space' ? 'SIJAINTI' : 'ASENTO');
   if (S.mode === 'space') {
     const cx = 128, cy = 108;
     const rOf = (au) => 13 + 60 * Math.log10(1 + au * 3) / Math.log10(1 + 30.07 * 3);
@@ -369,20 +323,46 @@ function drawPos(c, hue){
     c.font = '12px ' + MONO;
     c.fillText('r ' + sAU.toFixed(2) + ' AU', 12, 184);
   } else {
+    // matalalento: keinohorisontti + korkeus näytölle (DOM-overlayt poistettu)
     const sd = surfDebug();
     const alt = sd.descentPos.y - sd.h(sd.descentPos.x, sd.descentPos.z);
-    c.fillStyle = '#ffffff';
-    c.font = '700 22px ' + MONO;
-    c.fillText(sd.body || '—', 12, 62);
-    c.fillStyle = hue;
-    c.font = '13px ' + MONO;
-    c.fillText('KORKEUS', 12, 96);
-    c.fillStyle = '#ffffff';
-    c.font = '700 30px ' + MONO;
-    c.fillText(Math.max(0, Math.round(alt)) + ' m', 12, 128);
-    c.fillStyle = hue;
-    c.font = '12px ' + MONO;
-    c.fillText('X ' + Math.round(sd.descentPos.x) + '  Z ' + Math.round(sd.descentPos.z), 12, 160);
+    const roll = sd.roll();
+    const pitchDeg = (S.pitch || 0) * 180 / Math.PI;
+    const cx = 128, cy = 104, R = 58;
+    // horisonttilevy: taivas/maa kallistuu -rollin mukaan, siirtyy pitchistä
+    c.save();
+    c.beginPath(); c.arc(cx, cy, R, 0, 7); c.clip();
+    c.translate(cx, cy); c.rotate(-roll);
+    const ph = pitchDeg * 1.6;
+    c.fillStyle = '#2e5f8e'; c.fillRect(-R - 40, -R - 70 + ph, (R + 40) * 2, R + 70);
+    c.fillStyle = '#6e4a2c'; c.fillRect(-R - 40, ph, (R + 40) * 2, R + 70);
+    c.strokeStyle = '#e8eef4'; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(-R - 40, ph); c.lineTo(R + 40, ph); c.stroke();
+    c.restore();
+    // kallistusasteikko: vihreä ±2°, harmaat ±5/±10°
+    for (const [a, col, ln] of [[-2, '#4dff88', 9], [2, '#4dff88', 9], [-5, '#9fb4c8', 6], [5, '#9fb4c8', 6], [-10, '#9fb4c8', 6], [10, '#9fb4c8', 6]]) {
+      const rad = a * Math.PI / 180;
+      c.strokeStyle = col; c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(cx + Math.sin(rad) * R, cy - Math.cos(rad) * R);
+      c.lineTo(cx + Math.sin(rad) * (R + ln), cy - Math.cos(rad) * (R + ln));
+      c.stroke();
+    }
+    c.strokeStyle = hue; c.lineWidth = 2;
+    c.beginPath(); c.arc(cx, cy, R, 0, 7); c.stroke();
+    // kallistusosoitin (kääntyy kallistuksen mukaan)
+    c.save(); c.translate(cx, cy); c.rotate(roll);
+    c.fillStyle = '#ffd27f'; c.beginPath();
+    c.moveTo(0, -R + 2); c.lineTo(-6, -R + 14); c.lineTo(6, -R + 14); c.closePath(); c.fill();
+    c.restore();
+    // kiinteä alus-symboli
+    c.strokeStyle = '#ffd27f'; c.lineWidth = 3;
+    c.beginPath(); c.moveTo(cx - 28, cy); c.lineTo(cx - 9, cy); c.lineTo(cx, cy + 7); c.lineTo(cx + 9, cy); c.lineTo(cx + 28, cy); c.stroke();
+    c.fillStyle = '#ffd27f'; c.beginPath(); c.arc(cx, cy, 2.5, 0, 7); c.fill();
+    // korkeus
+    c.fillStyle = hue; c.font = '11px ' + MONO; c.fillText('KORKEUS', 12, 181);
+    c.fillStyle = '#ffffff'; c.font = '14px ' + MONO;
+    c.fillText(Math.max(0, Math.round(alt)) + ' m', 88, 181);
   }
 }
 
@@ -391,9 +371,9 @@ function drawSpd(c, hue){
   scrHead(c, hue, 'NOPEUS');
   if (S.mode === 'space') {
     const eff = S.effFrac || 0;
-    c.fillStyle = '#ffffff';
-    c.font = '700 28px ' + MONO;
-    c.fillText((eff * 100).toFixed(eff < 0.105 ? 2 : 1) + ' % c', 12, 70);
+    c.fillStyle = '#d4dde6';
+    c.font = '16px ' + MONO;
+    c.fillText((eff * 100).toFixed(eff < 0.105 ? 2 : 1) + ' % c', 12, 64);
     c.fillStyle = hue;
     c.font = '14px ' + MONO;
     c.fillText(Math.round(eff * C_KMS).toLocaleString('fi-FI') + ' km/s', 12, 98);
@@ -414,9 +394,9 @@ function drawSpd(c, hue){
   } else {
     const sd = surfDebug();
     const v = sd.descentV();
-    c.fillStyle = v <= 55 ? '#4dff88' : '#ffffff';
-    c.font = '700 34px ' + MONO;
-    c.fillText(Math.round(v) + ' m/s', 12, 78);
+    c.fillStyle = v <= 55 ? '#4dff88' : '#d4dde6';
+    c.font = '18px ' + MONO;
+    c.fillText(Math.round(v) + ' m/s', 12, 72);
     c.globalAlpha = 0.5;
     c.strokeStyle = hue; c.lineWidth = 1;
     c.strokeRect(12, 100, 232, 14);
@@ -443,9 +423,9 @@ function drawTgt(c, hue){
     const tgt = bodies[S.targetIdx];
     const distU = camera.position.distanceTo(tgt.group.position) - tgt.def.r;
     const distAU = distU / AU;
-    c.fillStyle = '#ffffff';
-    c.font = '700 24px ' + MONO;
-    c.fillText(tgt.def.name, 12, 64);
+    c.fillStyle = '#d4dde6';
+    c.font = '14px ' + MONO;
+    c.fillText(tgt.def.name, 12, 58);
     c.fillStyle = hue;
     c.font = '15px ' + MONO;
     if (distAU >= 0.01) {
@@ -471,17 +451,18 @@ function drawTgt(c, hue){
     const sd = surfDebug();
     const v = sd.descentV();
     const rollDeg = Math.abs(sd.roll() * 180 / Math.PI);
-    c.fillStyle = '#ffffff';
-    c.font = '700 20px ' + MONO;
-    c.fillText((sd.body || '—') + ' · PINTA', 12, 60);
-    c.font = '14px ' + MONO;
+    c.fillStyle = '#d4dde6';
+    c.font = '13px ' + MONO;
+    c.fillText((sd.body || '—') + ' · PINTA', 12, 56);
+    c.font = '13px ' + MONO;
     c.fillStyle = v <= 55 ? '#4dff88' : '#ff7a5c';
     c.fillText('VAUHTI    ' + (v <= 55 ? 'OK' : 'LIIAN KOVA'), 12, 100);
     c.fillStyle = rollDeg <= 2 ? '#4dff88' : '#ff7a5c';
     c.fillText('KALLISTUS ' + (rollDeg <= 2 ? 'OK' : 'LIIKAA'), 12, 126);
     c.fillStyle = hue;
-    c.font = '12px ' + MONO;
-    c.fillText('B = takaisin avaruuteen', 12, 170);
+    c.font = '11px ' + MONO;
+    c.fillText('W/S vauhti · A/D kallistus', 12, 156);
+    c.fillText('B = takaisin avaruuteen', 12, 174);
   }
 }
 
@@ -526,6 +507,58 @@ function box(parent, mat, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0){
   m.rotation.set(rx, ry, rz);
   parent.add(m);
   return m;
+}
+
+/* kaareva näyttöpaneelin kehys: nauha, joka kiertää kaarta (keskus
+   +z-puolella pelaajan suunnassa) — sitoo mittarinäytöt yhdeksi
+   kojelaudaksi. Yläreuna kaareutuu samalla `arch`-käyrällä kuin näyttöjen
+   yläreunat (huippu keskellä, laskee reunoja kohti); alareuna suora.
+   bezelMat on DoubleSide, joten kiertosuunnalla ei väliä. */
+function arcBezel(parent, mat, Cz, R, yC, halfH, a0, a1, arch, segs){
+  const pos = [], uv = [];
+  let prev = null;
+  for (let k = 0; k <= segs; k++) {
+    const t = k / segs;
+    const th = a0 + (a1 - a0) * t;
+    const n = 2 * t - 1;   // -1..1 kaaren yli → sama (θ/a)² kuin näytöillä
+    const cur = { x: R * Math.sin(th), z: Cz - R * Math.cos(th), top: yC + halfH - arch * n * n, u: t };
+    if (prev) {
+      const b0 = [prev.x, yC - halfH, prev.z], t0 = [prev.x, prev.top, prev.z];
+      const b1 = [cur.x, yC - halfH, cur.z], t1 = [cur.x, cur.top, cur.z];
+      pos.push(...b0, ...t0, ...t1, ...b0, ...t1, ...b1);
+      uv.push(prev.u, 0, prev.u, 1, cur.u, 1, prev.u, 0, cur.u, 1, cur.u, 0);
+    }
+    prev = cur;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  parent.add(new THREE.Mesh(geo, mat));
+}
+
+/* yksittäisen näytön geometria (XY-taso, normaali +z): alareuna suora,
+   YLÄREUNA kaareutuu kojelaudan kaaren mukaan — kukin näyttö kojelaudan eri
+   kohdassa (thMid), joten jokaisen yläreuna on hieman erilainen (keskinäyttö
+   symmetrinen, reunanäytöt viistottu ulospäin laskevaksi). Pystysarakkeet:
+   UV venytetään niin että canvas-sisältö täyttää kaarevan yläreunan. */
+function screenGeo(w, h, thMid, R, arch, aMax){
+  const cols = 16, hw = w / 2, bottom = -h / 2;
+  const top = x => { const n = (thMid + x / R) / aMax; return h / 2 - arch * n * n; };
+  const pos = [], uv = [];
+  for (let i = 0; i < cols; i++) {
+    const x0 = -hw + w * i / cols, x1 = -hw + w * (i + 1) / cols;
+    const t0 = top(x0), t1 = top(x1);
+    pos.push(x0, bottom, 0, x1, bottom, 0, x1, t1, 0,
+             x0, bottom, 0, x1, t1, 0, x0, t0, 0);
+    const u0 = (x0 + hw) / w, u1 = (x1 + hw) / w;
+    uv.push(u0, 0, u1, 0, u1, 1, u0, 0, u1, 1, u0, 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.computeVertexNormals();
+  return g;
 }
 
 function blinker(parent, color, x, y, z, period, phase){
@@ -597,11 +630,14 @@ function buildCockpit(opts){
   const seatMat = new THREE.MeshStandardMaterial({ color: opts.seat, roughness: 0.95, metalness: 0.05 });
   const pipeMat = new THREE.MeshStandardMaterial({ color: 0x4c5056, roughness: 0.45, metalness: 0.8, flatShading: true });
   applyPH(pipeMat, 'metal_plate_02', [0.95, 1.1, 1.4], [1, 2]);
+  // kaarevan näyttöpaneelin taustakehys (DoubleSide → sisäpinta näkyy pelaajalle)
+  const bezelMat = new THREE.MeshStandardMaterial({ color: 0x23262c, roughness: 0.7, metalness: 0.5, side: THREE.DoubleSide });
+  applyPH(bezelMat, 'metal_plate_02', [0.7, 0.78, 0.95], [3, 1]);
 
   /* putkirunko: 8 fasettia takarenkaasta keularenkaaseen.
      Sivufasetteihin (i 3 = vasen, i 7 = oikea) upotetaan pieni ikkuna. */
   for (let i = 0; i < 8; i++) {
-    const win = (i === 3 || i === 7);
+    const win = !opts.shuttle && (i === 3 || i === 7);   // sukkulalla ei sivuikkunoita
     if (!win) {
       quad(g, wallMat, ringP(RING_REAR, i), ringP(RING_FRONT, i), ringP(RING_FRONT, i + 1), ringP(RING_REAR, i + 1));
     } else {
@@ -625,9 +661,11 @@ function buildCockpit(opts){
      Tukipuut säteilevät renkaiden kulmista — falcon-kanopia */
   for (let i = 0; i < 8; i++) {
     quad(g, glassMat, ringP(RING_FRONT, i), ringP(RING_INNER, i), ringP(RING_INNER, i + 1), ringP(RING_FRONT, i + 1));
-    bar(g, frameMat, ringP(RING_FRONT, i), ringP(RING_INNER, i), 0.05);       // säteittäiset tukipuut
-    bar(g, frameMat, ringP(RING_FRONT, i), ringP(RING_FRONT, i + 1), 0.055);  // keularengas
-    bar(g, frameMat, ringP(RING_INNER, i), ringP(RING_INNER, i + 1), 0.04);   // sisärengas
+    bar(g, frameMat, ringP(RING_FRONT, i), ringP(RING_FRONT, i + 1), 0.055);  // keularengas (ikkunan ulkokehys)
+    if (!opts.shuttle) {   // sukkulalla yksi iso ikkuna ilman tukipuita
+      bar(g, frameMat, ringP(RING_FRONT, i), ringP(RING_INNER, i), 0.05);     // säteittäiset tukipuut
+      bar(g, frameMat, ringP(RING_INNER, i), ringP(RING_INNER, i + 1), 0.04); // sisärengas
+    }
   }
   {
     // keskioktagonin lasi
@@ -666,38 +704,42 @@ function buildCockpit(opts){
     box(dash, darkMat, sg.w, 0.52, 0.07, sg.x * 1.13, dashY - 0.28, sg.z - 0.18 + Math.abs(sg.x) * 0.16, 0, sg.ry, 0);
     b.userData.ry = sg.ry;
   }
-  // näyttörivistö: keskirivin kolme ruutua ovat eläviä mittareita
-  // (sijainti / nopeus / kohde), reunimmaiset staattista telemetriakoristetta
-  const screenDefs = [
-    { kind: 'pos', x: -0.42, z: dashZ - 0.02, ry: 0, live: true },
-    { kind: 'spd', x: 0, z: dashZ - 0.04, ry: 0, live: true },
-    { kind: 'tgt', x: 0.42, z: dashZ - 0.02, ry: 0, live: true },
-    { kind: 'wave', x: -1.00, z: dashZ + 0.24, ry: 0.62 },
-    { kind: 'bars', x: 1.00, z: dashZ + 0.24, ry: -0.62 },
-  ];
-  for (const sd of screenDefs) {
-    let emissiveMap;
-    if (sd.live) {
-      const cv = document.createElement('canvas');
-      cv.width = 256; cv.height = 192;
-      emissiveMap = new THREE.CanvasTexture(cv);
-      emissiveMap.colorSpace = THREE.SRGBColorSpace;
-      emissiveMap.anisotropy = 8;
-      _live.push({ kind: sd.kind, ctx: cv.getContext('2d'), tex: emissiveMap, hue: opts.screenCss, group: g });
-    } else {
-      emissiveMap = makeScreenTex(sd.kind, opts.screenCss);
-    }
-    const sm = new THREE.MeshStandardMaterial({
+  // elävät mittarinäytöt (sijainti / nopeus / kohde) integroituina yhteen
+  // kaarevaan näyttöpaneeliin — kolme ruutua kiertävät jaettua kaarta ja
+  // yhtenäinen kaareva taustakehys sitoo ne yhdeksi kojelaudaksi. Nopeus ja
+  // kohde himmeämmällä emissiolla ettei teksti heku bloomissa.
+  const makeLiveScreen = (kind, intensity) => {
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 192;
+    const emissiveMap = new THREE.CanvasTexture(cv);
+    emissiveMap.colorSpace = THREE.SRGBColorSpace;
+    emissiveMap.anisotropy = 8;
+    _live.push({ kind, ctx: cv.getContext('2d'), tex: emissiveMap, hue: opts.screenCss, group: g });
+    return new THREE.MeshStandardMaterial({
       color: 0x000000, emissive: 0xffffff, emissiveMap,
-      emissiveIntensity: 1.05, roughness: 0.3,
+      emissiveIntensity: intensity, roughness: 0.3,
     });
+  };
+  const SCR = [['pos', 0.95], ['spd', 0.72], ['tgt', 0.72]];
+  // sukkulalla loiva leveä panoraama; komentosillalla pienemmät ruudut
+  // (vähemmän peittoa) ylempänä että kaikki tieto näkyy. Jokaisen näytön
+  // yläreuna mukailee kojelaudan kaarta (arch), reunanäytöt viistottu.
+  const ARC = opts.shuttle
+    ? { R: 3.0, angs: [-0.135, 0, 0.135], a: 0.24, tilt: -0.24, w: 0.40, h: 0.30, y: 0.12, arch: 0.05 }
+    : { R: 1.45, angs: [-0.265, 0, 0.265], a: 0.40, tilt: -0.26, w: 0.32, h: 0.215, y: 0.19, arch: 0.05 };
+  const scrY = dashY + ARC.y;
+  const arcCz = dashZ + ARC.R;
+  // tumma metallikonsoli näyttöjen takana aivan kiinni (gap ~1 cm) → ruudut
+  // upotettuina, eivät kellu. Reunus jää näyttöjen ympärille kehykseksi.
+  arcBezel(dash, bezelMat, arcCz, ARC.R + 0.022, scrY, ARC.h / 2 + 0.012, -ARC.a, ARC.a, ARC.arch, 26);
+  for (let i = 0; i < 3; i++) {
+    const th = ARC.angs[i];
     const holder = new THREE.Group();
-    holder.position.set(sd.x, dashY + 0.10, sd.z);
-    holder.rotation.set(-0.32, sd.ry, 0);
+    holder.position.set(ARC.R * Math.sin(th), scrY, arcCz - ARC.R * Math.cos(th));
+    holder.rotation.set(ARC.tilt, -th, 0);
     dash.add(holder);
-    box(holder, frameMat, 0.40, 0.28, 0.035, 0, 0, 0);
-    const sc = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.24), sm);
-    sc.position.z = 0.02;
+    const sc = new THREE.Mesh(screenGeo(ARC.w, ARC.h, th, ARC.R, ARC.arch, ARC.a), makeLiveScreen(SCR[i][0], SCR[i][1]));
+    sc.position.z = 0.012;
     holder.add(sc);
   }
   blinker(dash, 0xffb340, -0.30, dashY + 0.06, dashZ + 0.20, 0.9, 0.4);
@@ -777,8 +819,10 @@ function buildFalcon(){
   applyPH(frameMat, 'metal_plate_02', [1.0, 1.1, 1.3], [2, 1]);
   // tumma kiiltävä kanopialasi (sisätilaa ei mallinneta — aurinko kimpoaa pinnasta)
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.15, metalness: 0.75, side: THREE.DoubleSide });
+  // moottorihehku: sammuksissa musta, väri ajetaan vauhdista updateCockpitissa
   const glowMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
-  glowMat.color.setRGB(0.7, 1.2, 1.7);   // syvänsininen moottorihehku, kevyt bloom
+  glowMat.color.setRGB(0, 0, 0);
+  falconGlow = glowMat;
 
   // lautasrunko: litistetty pallo + reunapanta
   const disc = new THREE.Mesh(new THREE.SphereGeometry(2.6, 28, 14), hullMat);
@@ -825,7 +869,7 @@ function buildFalcon(){
     new THREE.CylinderGeometry(2.72, 2.72, 0.2, 22, 1, true, -ENG_ARC / 2 + 0.06, ENG_ARC - 0.12), hullMat);
   g.add(housingTrim);
   const glowBand = new THREE.Mesh(
-    new THREE.CylinderGeometry(2.74, 2.74, 0.12, 22, 1, true, -ENG_ARC * 0.42, ENG_ARC * 0.84), glowMat);
+    new THREE.CylinderGeometry(2.74, 2.74, 0.18, 22, 1, true, -ENG_ARC * 0.42, ENG_ARC * 0.84), glowMat);
   g.add(glowBand);
 
   // lautasantenni ja greeblet kannelle
@@ -980,10 +1024,11 @@ const bridgeCockpit = buildCockpit({
   accent: 0x3fb8ff, accentCss: '#3fb8ff', screenCss: '#6cc8ff',
   seat: 0x4a3c30,
 });
-/* laskeutumisalus: lämmin meripihka-aksentti */
+/* laskeutumisalus: lämmin meripihka-aksentti, erilainen kojelauta ja
+   yksi iso ikkuna ilman tukipuita/sivuikkunoita */
 const landerCockpit = buildCockpit({
   accent: 0xffb340, accentCss: '#ffb340', screenCss: '#ffc468',
-  seat: 0x37404a,
+  seat: 0x37404a, shuttle: true,
 });
 /* ulkonäkymän mallit */
 const falconExt = buildFalcon();
@@ -1101,6 +1146,12 @@ export function updateCockpit(dt = 0.016){
   fillLight.visible = S.mode !== 'surface' && !extView;
   if (extView && S.mode !== 'surface') updateExtFit();
   updateSway(dt);
+  // moottorihehku skaalautuu vauhdista: sammuksissa musta, kovassa vauhdissa
+  // kirkas sininen (kanavat yli 1.0 → bloom syttyy ja voimistuu)
+  if (falconGlow) {
+    const lvl = Math.pow(Math.min(1, (S.effFrac || 0) / 0.6), 0.8);
+    falconGlow.color.setRGB(lvl * 0.85, lvl * 1.3, lvl * 1.95);
+  }
   const t = S.simTime;
   if (S.mode === 'surface') return;
   for (const b of _blinkers) {

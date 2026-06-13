@@ -135,26 +135,12 @@
   #lander { position:fixed; inset:0; pointer-events:none; z-index:7; display:none; }
   body.descent #lander { display:block; }
   body.descent #surfacePanel { display:none !important; }
-  #attWrap {
-    position:absolute; left:50%; bottom:1.6%; transform:translateX(-50%);
-    width:175px; height:175px;
-  }
-  #attWrap svg { width:100%; height:100%; }
-  /* lukemat integroitu 3D-kojelaudan näyttöihin (cockpit.js) — DOM-lohko piilossa */
-  #landerData {
-    display:none;
-    position:absolute; left:calc(50% + 105px); bottom:3.6%;
-    color:#9fd8ff; font-family:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size:12px; line-height:1.75;
-    text-shadow:0 0 6px rgba(80,170,255,0.45);
-  }
-  #landerData .val { font-size:16px; font-weight:700; }
-  #ldTitle { color:#ffd27f; letter-spacing:2px; font-size:12px; margin-bottom:2px; }
-  #landerHint {
-    position:absolute; right:calc(50% + 105px); bottom:4.6%;
-    color:rgba(159,216,255,0.75); font-family:ui-monospace, Menlo, Consolas, monospace;
-    font-size:11px; text-align:right; max-width:340px; line-height:1.7;
-  }
+  /* kaikki matalalennon tiedot (keinohorisontti, korkeus/vauhti/kallistus,
+     ohjeet) piirretään 3D-kojelaudan näyttöihin (cockpit.js) — DOM-laatikot
+     piilossa */
+  #attWrap { display:none; }
+  #landerData { display:none; }
+  #landerHint { display:none; }
   #fadeBlack {
     position:fixed; inset:0; background:#000; opacity:0;
     pointer-events:none; z-index:65; transition:opacity 0.3s ease;
