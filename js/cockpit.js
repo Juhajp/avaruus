@@ -328,7 +328,7 @@ function drawPos(c, hue){
     const alt = sd.descentPos.y - sd.h(sd.descentPos.x, sd.descentPos.z);
     const roll = sd.roll();
     const pitchDeg = (S.pitch || 0) * 180 / Math.PI;
-    const cx = 128, cy = 104, R = 58;
+    const cx = 128, cy = 92, R = 50;
     // horisonttilevy: taivas/maa kallistuu -rollin mukaan, siirtyy pitchistä
     c.save();
     c.beginPath(); c.arc(cx, cy, R, 0, 7); c.clip();
@@ -360,9 +360,9 @@ function drawPos(c, hue){
     c.beginPath(); c.moveTo(cx - 28, cy); c.lineTo(cx - 9, cy); c.lineTo(cx, cy + 7); c.lineTo(cx + 9, cy); c.lineTo(cx + 28, cy); c.stroke();
     c.fillStyle = '#ffd27f'; c.beginPath(); c.arc(cx, cy, 2.5, 0, 7); c.fill();
     // korkeus
-    c.fillStyle = hue; c.font = '11px ' + MONO; c.fillText('KORKEUS', 12, 181);
-    c.fillStyle = '#ffffff'; c.font = '14px ' + MONO;
-    c.fillText(Math.max(0, Math.round(alt)) + ' m', 88, 181);
+    c.fillStyle = hue; c.font = '10px ' + MONO; c.fillText('KORKEUS', 12, 158);
+    c.fillStyle = '#ffffff'; c.font = '13px ' + MONO;
+    c.fillText(Math.max(0, Math.round(alt)) + ' m', 78, 158);
   }
 }
 
@@ -386,6 +386,17 @@ function drawSpd(c, hue){
     const tick = 12 + 232 * Math.min(1, (S.targetFrac || 0) / 0.99);
     c.fillStyle = '#ffffff';
     c.fillRect(tick - 1, 134, 2, 22);
+    // runkokuumennus (ilmakehäsyöksy) — näkyy vain kuumetessa
+    const hh = S.hullHeat || 0;
+    if (hh > 0.01) {
+      const hc = hh < 0.5 ? '#ffae42' : (hh < 0.85 ? '#ff5a1f' : '#ffffff');
+      c.font = '11px ' + MONO; c.fillStyle = hc;
+      c.fillText('RUNKO', 12, 167);
+      c.fillText(Math.round(hh * 100) + ' %', 202, 167);
+      c.globalAlpha = 0.35; c.strokeStyle = '#ffae42'; c.lineWidth = 1;
+      c.strokeRect(66, 158, 120, 9); c.globalAlpha = 1;
+      c.fillStyle = hc; c.fillRect(68, 160, 116 * Math.min(1, hh), 5);
+    }
     if (S.dragBody && S.dragWeight > 0.01) {
       c.fillStyle = '#aef7c1';
       c.font = '11px ' + MONO;
@@ -395,24 +406,24 @@ function drawSpd(c, hue){
     const sd = surfDebug();
     const v = sd.descentV();
     c.fillStyle = v <= 55 ? '#4dff88' : '#d4dde6';
-    c.font = '18px ' + MONO;
-    c.fillText(Math.round(v) + ' m/s', 12, 72);
+    c.font = '15px ' + MONO;
+    c.fillText(Math.round(v) + ' m/s', 12, 58);
     c.globalAlpha = 0.5;
     c.strokeStyle = hue; c.lineWidth = 1;
-    c.strokeRect(12, 100, 232, 14);
+    c.strokeRect(12, 72, 232, 12);
     c.globalAlpha = 1;
     c.fillStyle = hue;
-    c.fillRect(14, 102, 228 * Math.min(1, v / 450), 10);
+    c.fillRect(14, 74, 228 * Math.min(1, v / 450), 8);
     const mark = 12 + 232 * (55 / 450);
     c.fillStyle = '#4dff88';
-    c.fillRect(mark - 1, 96, 2, 22);
+    c.fillRect(mark - 1, 69, 2, 18);
     const rollDeg = sd.roll() * 180 / Math.PI;
     c.fillStyle = Math.abs(rollDeg) <= 2 ? '#4dff88' : '#ff7a5c';
-    c.font = '14px ' + MONO;
-    c.fillText('KALLISTUS ' + rollDeg.toFixed(1) + '°', 12, 148);
+    c.font = '12px ' + MONO;
+    c.fillText('KALLISTUS ' + rollDeg.toFixed(1) + '°', 12, 108);
     c.fillStyle = hue;
-    c.font = '11px ' + MONO;
-    c.fillText('lasku ≤ 55 m/s · ≤ 2°', 12, 178);
+    c.font = '10px ' + MONO;
+    c.fillText('lasku ≤ 55 m/s · ≤ 2°', 12, 130);
   }
 }
 
@@ -452,17 +463,17 @@ function drawTgt(c, hue){
     const v = sd.descentV();
     const rollDeg = Math.abs(sd.roll() * 180 / Math.PI);
     c.fillStyle = '#d4dde6';
-    c.font = '13px ' + MONO;
-    c.fillText((sd.body || '—') + ' · PINTA', 12, 56);
-    c.font = '13px ' + MONO;
+    c.font = '12px ' + MONO;
+    c.fillText((sd.body || '—') + ' · PINTA', 12, 50);
+    c.font = '12px ' + MONO;
     c.fillStyle = v <= 55 ? '#4dff88' : '#ff7a5c';
-    c.fillText('VAUHTI    ' + (v <= 55 ? 'OK' : 'LIIAN KOVA'), 12, 100);
+    c.fillText('VAUHTI    ' + (v <= 55 ? 'OK' : 'LIIAN KOVA'), 12, 76);
     c.fillStyle = rollDeg <= 2 ? '#4dff88' : '#ff7a5c';
-    c.fillText('KALLISTUS ' + (rollDeg <= 2 ? 'OK' : 'LIIKAA'), 12, 126);
+    c.fillText('KALLISTUS ' + (rollDeg <= 2 ? 'OK' : 'LIIKAA'), 12, 98);
     c.fillStyle = hue;
-    c.font = '11px ' + MONO;
-    c.fillText('W/S vauhti · A/D kallistus', 12, 156);
-    c.fillText('B = takaisin avaruuteen', 12, 174);
+    c.font = '10px ' + MONO;
+    c.fillText('W/S vauhti · A/D kallistus', 12, 120);
+    c.fillText('B = takaisin avaruuteen', 12, 136);
   }
 }
 
@@ -728,7 +739,7 @@ function buildCockpit(opts){
   // (vähemmän peittoa) ylempänä että kaikki tieto näkyy. Jokaisen näytön
   // yläreuna mukailee kojelaudan kaarta (arch), reunanäytöt viistottu.
   const ARC = opts.shuttle
-    ? { R: 3.0, angs: [-0.135, 0, 0.135], a: 0.24, tilt: -0.24, w: 0.40, h: 0.30, y: 0.12, arch: 0.05 }
+    ? { R: 3.0, angs: [-0.135, 0, 0.135], a: 0.24, tilt: -0.24, w: 0.40, h: 0.30, y: 0.17, arch: 0.05 }
     : { R: 1.45, angs: [-0.265, 0, 0.265], a: 0.40, tilt: -0.26, w: 0.32, h: 0.215, y: 0.19, arch: 0.05 };
   const scrY = dashY + ARC.y;
   const arcCz = dashZ + ARC.R;

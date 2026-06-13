@@ -13,6 +13,7 @@ export const S = {
   effFrac: 0,        // todellinen nopeus (osuus c:stä) lähialuetila huomioiden
   dragBody: null,    // kehysseurannan planeetta
   dragWeight: 0,     // kehysseurannan paino 0–1
+  hullHeat: 0,       // rungon kuumennus 0–1 (ilmakehäsyöksy) — näkyy kojelaudalla
   targetIdx: 8,      // Neptunus oletuskohteena
   keys: {},
 };

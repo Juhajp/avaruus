@@ -103,6 +103,7 @@ deathOverlay.addEventListener('click', () => {
 export function hideReentryFx(){
   plasmaGroup.visible = false;
   heatRow.style.display = 'none';
+  S.hullHeat = 0;
 }
 
 export function destroyShip(reason){
@@ -208,6 +209,7 @@ export function updateReentry(dt){
   } else {
     heatRow.style.display = 'none';
   }
+  S.hullHeat = heat;   // 3D-kojelaudan näyttöä varten (cockpit.js)
 }
 
 // debug-koukkua varten

@@ -250,6 +250,7 @@ function makeRingMaterial(innerR, outerR, planetR){
   u.uInner = { value: innerR };
   u.uOuter = { value: outerR };
   u.uPlanetR = { value: planetR };
+  u.uFade = { value: 0 };   // lähellä (< 80 r) himmenee usvaksi, partikkelit ottavat vallan
   return registerMat(new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -278,6 +279,7 @@ function makeRingMaterial(innerR, outerR, planetR){
     uniform vec3 uSunPos;
     uniform float uTime;
     uniform float uInner; uniform float uOuter; uniform float uPlanetR;
+    uniform float uFade;
     ` + NOISE_GLSL + /* glsl */`
     void main(){
       float t = clamp((vR - uInner) / (uOuter - uInner), 0.0, 1.0);
@@ -300,10 +302,104 @@ function makeRingMaterial(innerR, outerR, planetR){
       vec3 base = vec3(0.78, 0.69, 0.54);
       vec3 col = base * (0.45 + 0.65 * bands);
       col *= 0.04 + 0.96 * shadow;
-      gl_FragColor = vec4(col, alpha * 0.9);
+      // lähellä himmennetään pyörivien pikkukivipartikkelien usvaksi
+      gl_FragColor = vec4(col, alpha * 0.9 * mix(1.0, 0.4, uFade));
       #include <logdepthbuf_fragment>
     }`,
   }));
+}
+
+/* Renkaiden pikkukivipartikkelit (lähikuva, < 80 r): stateless GPU-järjestelmä
+   — kiertoradat lasketaan vertex-shaderissa siemenestä (säde/peruskulma) + uTime,
+   CPU päivittää vain uniformit, joten ruudunpäivitys ei juuri kärsi. Differentiaali-
+   kierto (sisempi nopeampi, ω ∝ r^-1.5) antaa todellisen leikkautuvan liikkeen. */
+function makeRingParticles(inner, outer, planetR){
+  const N = 70000;
+  const pos = new Float32Array(N * 3);   // x=säde, y=paksuusjitter, z=peruskulma
+  const bright = new Float32Array(N);
+  const size = new Float32Array(N);      // 3 kokoluokkaa (enimmäkseen pieniä)
+  const SIZES = [0.6, 1.0, 1.5];
+  let i = 0, guard = 0;
+  while (i < N && guard < N * 4) {
+    guard++;
+    const r = Math.sqrt(inner * inner + Math.random() * (outer * outer - inner * inner));   // pinta-alatasainen
+    const t = (r - inner) / (outer - inner);
+    if (t > 0.53 && t < 0.59) continue;   // Cassinin rako jätetään tyhjäksi
+    pos[i * 3] = r;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * planetR * 0.012;   // ohut kiekko
+    pos[i * 3 + 2] = Math.random() * Math.PI * 2;
+    bright[i] = 0.45 + Math.random() * 0.55;
+    const s = Math.random();
+    size[i] = s < 0.55 ? SIZES[0] : (s < 0.85 ? SIZES[1] : SIZES[2]);
+    i++;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, i * 3), 3));
+  g.setAttribute('aBright', new THREE.BufferAttribute(bright.subarray(0, i), 1));
+  g.setAttribute('aSize', new THREE.BufferAttribute(size.subarray(0, i), 1));
+  const u = baseUniforms();   // uSunPos (origo), uTime
+  u.uOmega = { value: 0.09 };
+  u.uRefR = { value: inner };
+  u.uSize = { value: 150.0 };
+  u.uOpacity = { value: 0 };
+  u.uPlanetR = { value: planetR };
+  u.uColor = { value: new THREE.Color(0.95, 0.85, 0.66) };
+  const mat = registerMat(new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    uniforms: u,
+    vertexShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    attribute float aBright;
+    attribute float aSize;
+    uniform float uTime, uOmega, uRefR, uSize, uPlanetR;
+    uniform vec3 uSunPos;
+    varying float vB;
+    varying vec2 vDir;   // kiertotangentti ruutuavaruudessa → motion blur -venytys
+    void main(){
+      float r = position.x;
+      float ang = position.z + uTime * uOmega * pow(uRefR / r, 1.5);   // differentiaalikierto
+      vec3 p = vec3(cos(ang) * r, position.y, sin(ang) * r);
+      vec4 wp = modelMatrix * vec4(p, 1.0);
+      vec3 center = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+      vec3 S = normalize(uSunPos - wp.xyz);
+      vec3 rp = wp.xyz - center;
+      float t0 = dot(-rp, S);
+      float sh = 1.0;
+      if (t0 > 0.0) { vec3 cl = rp + S * t0; sh = smoothstep(uPlanetR * 0.95, uPlanetR * 1.12, length(cl)); }
+      vB = aBright * (0.06 + 0.94 * sh);
+      vec4 mv = viewMatrix * wp;
+      gl_Position = projectionMatrix * mv;
+      // liikesuunnan (kiertotangentin) projektio ruudulle motion bluria varten
+      vec3 tanW = mat3(modelMatrix) * vec3(-sin(ang), 0.0, cos(ang));
+      vec4 clipB = projectionMatrix * (viewMatrix * vec4(wp.xyz + tanW * (r * 0.02), 1.0));
+      vDir = normalize((clipB.xy / clipB.w) - (gl_Position.xy / gl_Position.w) + vec2(1e-5));
+      gl_PointSize = clamp(uSize * aSize / -mv.z, 1.0, 6.0);
+      #include <logdepthbuf_vertex>
+    }`,
+    fragmentShader: /* glsl */`
+    #include <common>
+    #include <logdepthbuf_pars_fragment>
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    varying float vB;
+    varying vec2 vDir;
+    void main(){
+      vec2 d = gl_PointCoord - 0.5;
+      float al = dot(d, vDir);                      // liikkeen suunta
+      float pe = dot(d, vec2(-vDir.y, vDir.x));     // kohtisuora
+      // lievästi venytetty ellipsi (0,5 vs 0,33 puoliakselit) = hitunen motion bluria
+      float rr = sqrt(al * al / 0.25 + pe * pe / 0.109);
+      float a = smoothstep(1.0, 0.5, rr) * uOpacity;
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(uColor * vB, a);
+      #include <logdepthbuf_fragment>
+    }`,
+  }));
+  const pts = new THREE.Points(g, mat);
+  pts.frustumCulled = false;   // kiertopaikat lasketaan shaderissa → bounding sphere ei päde
+  pts.visible = false;
+  return pts;
 }
 
 /* ---------------- Tähtitaivas ---------------- */
@@ -356,7 +452,7 @@ for (const def of BODIES) {
   group.add(tiltGroup);
   if (def.tilt) tiltGroup.rotation.z = def.tilt * DEG;
 
-  let mesh, clouds = null;
+  let mesh, clouds = null, ringMesh = null, ringParts = null;
   const segs = def.r > 15 ? [128, 96] : [96, 64];
 
   if (def.type === 'sun') {
@@ -395,10 +491,12 @@ for (const def of BODIES) {
   if (def.rings) {
     const inner = def.r * def.rings.inner;
     const outer = def.r * def.rings.outer;
-    const ring = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 256, 8),
+    ringMesh = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 256, 8),
       makeRingMaterial(inner, outer, def.r));
-    ring.rotation.x = -Math.PI / 2;
-    tiltGroup.add(ring);
+    ringMesh.rotation.x = -Math.PI / 2;
+    tiltGroup.add(ringMesh);
+    ringParts = makeRingParticles(inner, outer, def.r);   // lähikuvan pikkukivet
+    tiltGroup.add(ringParts);
   }
 
   // kiertoradan viiva
@@ -423,7 +521,7 @@ for (const def of BODIES) {
 
   scene.add(group);
   bodies.push({
-    def, group, mesh, clouds, label,
+    def, group, mesh, clouds, ringMesh, ringParts, label,
     angVel: def.a > 0 ? (2 * Math.PI) / (ORBIT_BASE_PERIOD * Math.pow(def.a, 1.5)) : 0,
     spinVel: def.spinP ? (2 * Math.PI) / def.spinP : 0.02,
   });
@@ -649,6 +747,20 @@ function updatePlanetLOD(dt){
   }
 }
 
+/* Renkaiden pikkukivipartikkelit häivytetään sisään < 80 r ja ulos > 80 r;
+   flat-rengas himmenee samalla usvaksi (uFade). Pelkkä uniformien lerppaus. */
+function updateRingParticles(dt){
+  for (const b of bodies) {
+    if (!b.ringParts) continue;
+    const d = camera.position.distanceTo(b.group.position) - b.def.r;
+    const target = d < b.def.r * 80 ? 1 : 0;
+    const pu = b.ringParts.material.uniforms, ru = b.ringMesh.material.uniforms;
+    pu.uOpacity.value += (target - pu.uOpacity.value) * Math.min(1, dt * 2.0);
+    ru.uFade.value = pu.uOpacity.value;
+    b.ringParts.visible = pu.uOpacity.value > 0.01;
+  }
+}
+
 export function updateBodies(dt){
   for (const b of bodies) {
     bodyPosition(b, S.simTime, b.group.position);
@@ -656,4 +768,5 @@ export function updateBodies(dt){
     if (b.clouds) b.clouds.rotation.y += b.spinVel * 1.25 * dt;
   }
   updatePlanetLOD(dt);
+  updateRingParticles(dt);
 }
