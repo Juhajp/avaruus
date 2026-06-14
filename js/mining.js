@@ -32,11 +32,49 @@ const ORE = [
 ];
 function pickOre(){ const r = Math.random(); let a = 0; for (const o of ORE) { a += o.w; if (r < a) return o; } return ORE[0]; }
 
-const COUNT = 22, NEAR = 8, FAR = 70;
+const COUNT = 12, NEAR = 16, FAR = 70;
 const MINE_TIME = 1.2, REACH = 14, AIM_COS = 0.975;   // louhinta-aika (s), kantama (m, 3D), tähtäyskartio ~13°
+const COLLIDE_R = 1.5;                                 // esiintymän törmäyssäde (ei voi kävellä läpi)
+const _col = [0, 0];
 let deposits = [];
 let scene = null, heightFn = null, active = false;
-let oreGeo = null, oreMats = null;   // luodaan per pintakäynti (scene-dispose hävittää)
+let oreGeo = null, oreMats = null, oreShellMats = null;   // luodaan per pintakäynti (scene-dispose hävittää)
+let mineralEnv = null;               // taivaan IBL-kartta heijastuksiin (surface.js asettaa)
+
+// kidemäisen mineraalin reunahohto: fresnel-kuori (additiivinen) → "raytracing"-tyyppinen
+// reuna­heijastus/taittuma kiteen ympärillä
+function makeOreShell(color){
+  return new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(color) } },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    vertexShader: `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec3 vN; varying vec3 vV;
+      void main(){
+        vN = normalize(normalMatrix * normal);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vV = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv;
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      uniform vec3 uColor; varying vec3 vN; varying vec3 vV;
+      void main(){
+        #include <logdepthbuf_fragment>
+        float f = pow(1.0 - clamp(dot(vN, vV), 0.0, 1.0), 2.2);
+        gl_FragColor = vec4(uColor * f * 1.8, f * 0.85);
+      }`,
+  });
+}
+
+// surface.js kutsuu kun taivaan ympäristökartta on valmis → mineraalit heijastavat sitä
+export function setMineralEnv(tex){
+  mineralEnv = tex;
+  if (oreMats) for (const k in oreMats) { oreMats[k].envMap = tex; oreMats[k].needsUpdate = true; }
+}
 // murtumispurske: pieni pooli kivensiruja, jotka sinkoutuvat mineraalin värissä
 const BURST_POOL = 30, BURST_PER = 14, BURST_G = 8;
 let bursts = [], burstGeo = null;
@@ -53,28 +91,20 @@ const TOOL_ROT = new THREE.Vector3(-0.30, 0.62, 0.35);
 let swingT = 0, swingAmt = 0;
 function buildTool(){
   const g = new THREE.Group();
-  const dark = new THREE.MeshStandardMaterial({ color: 0x33373d, roughness: 0.5, metalness: 0.85 });
-  const steel = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.32, metalness: 0.95 });
-  const glow = new THREE.MeshBasicMaterial({ color: 0x6fe0ff });
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.62, 0.045), dark);
-  handle.position.set(0, -0.12, 0);
-  g.add(handle);
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.18, 0.05), steel);
-  grip.position.set(0, -0.36, 0);
-  g.add(grip);
-  // hakun pää: viistetty poikkipalkki + kaksi kärkeä
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.07, 0.07), steel);
-  head.position.set(0, 0.19, 0); head.rotation.z = 0.16;
+  const wood = new THREE.MeshStandardMaterial({ color: 0x5b3a22, roughness: 0.9, metalness: 0.0 });
+  // himmeä, karhea metalli — ei peilimäisiä kirkkaita heijastuksia (ei "loista")
+  const steel = new THREE.MeshStandardMaterial({ color: 0x70777f, roughness: 0.72, metalness: 0.35, envMapIntensity: 0.35 });
+  // varsi (puu) + teräskaulus
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.025, 0.6, 10), wood);
+  handle.position.set(0, -0.1, 0); g.add(handle);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.04, 0.07, 10), steel);
+  collar.position.set(0, 0.18, 0); g.add(collar);
+  // pää: kaksipäinen teräskärki poikittain varteen nähden (klassinen hakku)
+  const head = new THREE.Mesh(new THREE.OctahedronGeometry(0.5, 0), steel);
+  head.scale.set(0.78, 0.1, 0.12);            // pitkä X-suunnassa, ohut → kaksi kärkeä
+  head.position.set(0, 0.205, 0.015);
+  head.rotation.set(0.22, Math.PI / 2 - 0.35, 0);   // 90° − 20° (käännetty -40° edellisestä), kallistus eteen-alas
   g.add(head);
-  for (const s of [-1, 1]) {
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 4), steel);
-    tip.position.set(s * 0.2, 0.19 + s * 0.03, 0);
-    tip.rotation.z = (s > 0 ? -Math.PI / 2 : Math.PI / 2) + 0.16;
-    g.add(tip);
-  }
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.015, 0.02), glow);   // energiakärki
-  edge.position.set(0, 0.215, 0.035); edge.rotation.z = 0.16;
-  g.add(edge);
   g.position.copy(TOOL_POS);
   g.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z);
   g.visible = false;
@@ -83,36 +113,67 @@ function buildTool(){
 }
 const tool = buildTool();
 function updateTool(dt, swinging){
-  swingAmt += ((swinging ? 1 : 0) - swingAmt) * Math.min(1, dt * 12);
-  if (swinging || swingAmt > 0.02) swingT += dt;
-  const c = Math.sin(((swingT * 3.0) % 1) * Math.PI);   // ~3 iskua/s, 0→1→0 kaari
-  const k = c * swingAmt;
-  tool.position.set(TOOL_POS.x, TOOL_POS.y - k * 0.10, TOOL_POS.z - k * 0.16);
-  tool.rotation.set(TOOL_ROT.x - k * 1.15, TOOL_ROT.y, TOOL_ROT.z + k * 0.55);
+  swingAmt += ((swinging ? 1 : 0) - swingAmt) * Math.min(1, dt * 10);
+  swingT += dt;
+  // epäsymmetrinen isku: windup (nosto taakse) → nopea isku alas → palautus, ~2,6 iskua/s
+  const ph = (swingT * 2.6) % 1;
+  let strike;
+  if (ph < 0.34)      strike = -(ph / 0.34) * 0.45;            // windup taakse/ylös
+  else if (ph < 0.5)  strike = -0.45 + ((ph - 0.34) / 0.16) * 1.45;   // nopea isku → +1
+  else                strike = 1 - (ph - 0.5) / 0.5;           // palautus 1→0
+  const k = strike * swingAmt;
+  const idle = (1 - swingAmt);   // joutilaana kevyt hengitysmäinen huojunta
+  tool.position.set(
+    TOOL_POS.x + Math.sin(swingT * 1.3) * 0.006 * idle,
+    TOOL_POS.y - Math.max(0, k) * 0.13 + Math.sin(swingT * 1.7) * 0.007 * idle,
+    TOOL_POS.z - Math.max(0, k) * 0.18
+  );
+  tool.rotation.set(
+    TOOL_ROT.x - k * 1.3,
+    TOOL_ROT.y + Math.sin(swingT * 1.3) * 0.02 * idle,
+    TOOL_ROT.z + k * 0.5
+  );
 }
 
 function makeDeposit(){
   const g = new THREE.Group();
-  for (let i = 0; i < 3; i++) {                 // pieni kivenlohkareklusteri
+  // kideklusteri: useita pitkänomaisia teräväkärkisiä kiteitä, jotka kasvavat
+  // ulospäin tyvestä eri kulmiin (kuten luonnon kristallidruusi)
+  const nShards = 5 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < nShards; i++) {
     const m = new THREE.Mesh(oreGeo, oreMats.rauta);
-    const s = 0.5 + Math.random() * 0.75;
-    m.scale.setScalar(s);
-    m.position.set((Math.random() - 0.5) * 1.7, s * 0.45, (Math.random() - 0.5) * 1.7);
-    m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+    const tall = 1.0 + Math.random() * 1.3;       // pituus
+    const thin = 0.32 + Math.random() * 0.28;     // ohuus
+    m.scale.set(thin, tall, thin);
+    const ang = Math.random() * Math.PI * 2;
+    const tilt = Math.random() * 0.7;             // kallistus ulospäin
+    m.rotation.set(Math.cos(ang) * tilt, Math.random() * Math.PI, Math.sin(ang) * tilt);
+    const rad = Math.random() * 0.7;
+    // alaosa selkeästi maan alle (tyvi maaston sisään) → kasvaa kalliosta
+    m.position.set(Math.cos(ang) * rad, tall * 0.18, Math.sin(ang) * rad);
     m.castShadow = true; m.receiveShadow = true;
+    const shell = new THREE.Mesh(oreGeo, oreShellMats.rauta);   // fresnel-reunahohto
+    shell.scale.setScalar(1.06);
+    m.add(shell);
     g.add(m);
   }
   return { mesh: g, type: 'rauta', x: 0, z: 0, y: 0, pop: 1 };
 }
 function setOre(d, ore){
   d.type = ore.type;
-  for (const m of d.mesh.children) m.material = oreMats[ore.type];
+  for (const m of d.mesh.children) {
+    m.material = oreMats[ore.type];
+    if (m.children[0]) m.children[0].material = oreShellMats[ore.type];
+  }
 }
 function relocate(d, px, pz){
-  const ang = Math.random() * Math.PI * 2;
+  // syntyy pelaajan TAKAPUOLELLE/sivuille (ei näkyvään etukenttään) → ilmestymistä ei näe
+  camera.getWorldDirection(_fwd);
+  const behind = Math.atan2(_fwd.x, _fwd.z) + Math.PI;
+  const ang = behind + (Math.random() - 0.5) * Math.PI * 1.1;   // ±99° taakse/sivulle
   const dist = NEAR + Math.random() * (FAR - NEAR);
-  d.x = px + Math.cos(ang) * dist;
-  d.z = pz + Math.sin(ang) * dist;
+  d.x = px + Math.sin(ang) * dist;
+  d.z = pz + Math.cos(ang) * dist;
   d.y = heightFn ? heightFn(d.x, d.z) : 0;
   d.mesh.position.set(d.x, d.y, d.z);
   setOre(d, pickOre());
@@ -125,10 +186,15 @@ export function initMining(sc, name, hFn){
   clearMining();
   if (name !== 'Mars') { renderHud(); return; }
   scene = sc; heightFn = hFn; active = true;
-  oreGeo = new THREE.IcosahedronGeometry(0.85, 0);
-  oreMats = {};
-  for (const o of ORE) oreMats[o.type] = new THREE.MeshStandardMaterial({
-    color: o.col, emissive: o.emis, roughness: 0.6, metalness: 0.25, flatShading: true });
+  oreGeo = new THREE.OctahedronGeometry(0.7, 0);   // teräväkärkinen bipyramidi → kidemäinen
+  oreMats = {}; oreShellMats = {};
+  for (const o of ORE) {
+    oreMats[o.type] = new THREE.MeshStandardMaterial({
+      color: o.col, emissive: o.emis, emissiveIntensity: 0.6,
+      roughness: 0.12, metalness: 0.6, envMapIntensity: 1.5, flatShading: true });
+    if (mineralEnv) oreMats[o.type].envMap = mineralEnv;
+    oreShellMats[o.type] = makeOreShell(o.col);
+  }
   for (let i = 0; i < COUNT; i++) {
     const d = makeDeposit();
     relocate(d, 0, 0);
@@ -137,7 +203,7 @@ export function initMining(sc, name, hFn){
     sc.add(d.mesh);
   }
   // murtumispurskeen sirupooli
-  burstGeo = new THREE.IcosahedronGeometry(0.13, 0);
+  burstGeo = new THREE.OctahedronGeometry(0.13, 0);   // kidemäiset sirut
   bursts = [];
   for (let i = 0; i < BURST_POOL; i++) {
     const m = new THREE.Mesh(burstGeo, oreMats.rauta);
@@ -177,7 +243,7 @@ function updateBursts(dt){
   }
 }
 export function clearMining(){
-  deposits = []; scene = null; heightFn = null; active = false; oreGeo = null; oreMats = null;
+  deposits = []; scene = null; heightFn = null; active = false; oreGeo = null; oreMats = null; oreShellMats = null;
   bursts = []; burstGeo = null;
   _lmb = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
@@ -196,6 +262,18 @@ function renderMineBar(){
    edistymä kasvaa MINE_TIME-ajan, kappale tärisee ja kutistuu, lopulta murtuu
    ja saalis siirtyy varastoon. Pelkkä päälle käveleminen ei riitä. */
 export function setMining(on){ _lmb = on; }
+// törmäys: työnnä pelaaja ulos esiintymästä (ei voi kävellä mineraalin läpi)
+export function resolveCollision(x, z){
+  if (active) for (const d of deposits) {
+    if (d.pop < 0.6) continue;
+    const dx = x - d.x, dz = z - d.z, dist = Math.hypot(dx, dz);
+    if (dist < COLLIDE_R) {
+      if (dist > 1e-4) { x = d.x + dx / dist * COLLIDE_R; z = d.z + dz / dist * COLLIDE_R; }
+      else x = d.x + COLLIDE_R;
+    }
+  }
+  _col[0] = x; _col[1] = z; return _col;
+}
 function restoreMesh(d){ d.mesh.position.set(d.x, d.y, d.z); d.mesh.scale.setScalar(d.pop); }
 function aimedDeposit(){
   camera.getWorldDirection(_fwd);

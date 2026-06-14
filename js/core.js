@@ -95,7 +95,7 @@ export function setHeatShimmer(amp, time){
   heatPass.enabled = amp > 0.00005;
 }
 
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.65, 0.5, 1.0);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.5, 1.08);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 

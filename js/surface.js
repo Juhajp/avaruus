@@ -5,7 +5,8 @@ import { bodies, placeNearBody } from './bodies.js';
 import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
 import { makeSky } from './sky.js';
-import { initMining, updateMining, clearMining } from './mining.js';
+import { NOISE_GLSL } from './shaders.js';
+import { initMining, updateMining, clearMining, setMineralEnv, resolveCollision } from './mining.js';
 import { S } from './state.js';
 
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
@@ -101,6 +102,7 @@ function updateDaylight(){
       if (d.envRT) d.envRT.dispose();
       d.envRT = rt;
       for (const m of d.envMats) m.envMap = rt.texture;
+      setMineralEnv(rt.texture);   // mineraalit heijastavat taivasta (raytracing-tyyppinen heijastus)
     }
   }
 
@@ -131,6 +133,182 @@ function updateDaylight(){
   // ilmakehällisten yötähdet häivytetään sisään pimeällä (neliöllisesti —
   // muuten tähdet erottuvat jo iltapäivän kirkkaalla taivaalla)
   if (d.starsMat && d.cfg.nightStars) d.starsMat.opacity = 0.7 * (1 - dayF) * (1 - dayF);
+
+  // kypärävalo: pinnalla yöksi automaattisesti päälle (silmien yläpuolelta
+  // kohti maata). Voimakkuus kasvaa pimeyden mukaan, sammuu päivällä.
+  if (helmetLight) {
+    const dark = 1 - dayF;
+    helmetLight.intensity = (S.mode === 'surface') ? dark * dark * HELMET_INT : 0;
+  }
+}
+
+/* ---- kypärävalo: kameran lapsi, valo silmien yläpuolelta alaviistoon ----
+   Kapea, tarkennettu valokeila ympäröivään pimeyteen. Käänteisneliövaimennus
+   ja maltillinen voimakkuus, ettei maasto/objektit hehku puhki. */
+const HELMET_INT = 62;
+let helmetLight = null;
+(function initHelmetLight(){
+  helmetLight = new THREE.SpotLight(0xffe9c4, 0, 120, 0.40, 0.45, 2);
+  helmetLight.position.set(0, 0.5, 0.1);        // hieman silmien yläpuolella
+  helmetLight.target.position.set(0, -2.2, -7); // alaviistoon eteen (hieman ylempänä), kohti maata
+  camera.add(helmetLight);
+  camera.add(helmetLight.target);
+})();
+
+/* ---- hiekkamyrsky (Mars): 40 % todennäköisyys per aurinkovuorokausi ----
+   Huonontaa näkyvyyttä (tihentää sumua, värjää taivaan pölyiseksi), työntää
+   pelaajaa tuulen mukana (kävely vastaan kumoaa) ja lennättää vaakasuoria
+   pölyjuovia pelaajan ympärillä. */
+const STORM_PROB = 0.40;     // todennäköisyys per sol
+const STORM_PUSH = 5.5;      // tuulen työntö (yks/s) täydellä voimakkuudella (< kävelyvauhti 9)
+const STORM_SPEED = 150;     // pölyjuovien vaakavauhti (yks/s)
+const STORM_APPROACH = 11;   // rintaman saapumisaika (s): pölyseinä lähestyy kaukaa
+const storm = { intens: 0, windX: 1, windZ: 0, startT: -1, endT: -1, lastSol: null, scX: 0, scZ: 0 };
+let stormFx = null;          // { seg, wall, pos, seed, n, BX, BY, BZ, baseFar, baseNear, dustCol }
+
+function _sm(a, b, x){ const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+
+// lähestyvä pölyseinä (rintama): leveä shader-taso, joka billoaa pölyä ja saapuu
+// kaukaa pelaajaa kohti tuulen suunnasta
+function makeDustWall(cfg){
+  const u = { uTime: { value: 0 }, uOpacity: { value: 0 },
+    uColor: { value: new THREE.Color(cfg.fog ? cfg.fog.color : cfg.sky) } };
+  return new THREE.ShaderMaterial({
+    uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), u),
+    transparent: true, depthWrite: false, fog: true, side: THREE.DoubleSide,
+    vertexShader: `
+      #include <common>
+      #include <fog_pars_vertex>
+      #include <logdepthbuf_pars_vertex>
+      varying vec2 vUv;
+      void main(){
+        vUv = uv;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mv;
+        #include <fog_vertex>
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: NOISE_GLSL + `
+      #include <common>
+      #include <fog_pars_fragment>
+      #include <logdepthbuf_pars_fragment>
+      uniform float uTime; uniform float uOpacity; uniform vec3 uColor;
+      varying vec2 vUv;
+      void main(){
+        #include <logdepthbuf_fragment>
+        vec2 p = vec2(vUv.x * 7.0 - uTime * 0.06, vUv.y * 3.0 - uTime * 0.02);
+        float n = snoise(p) * 0.5 + snoise(p * 2.3 + 11.0) * 0.32 + snoise(p * 5.0 + 3.0) * 0.18 + 0.5;
+        n = clamp(n, 0.0, 1.0);
+        float vert = smoothstep(1.0, 0.02, vUv.y);     // tiheämpi alhaalla, häipyy ylös
+        float a = vert * (0.12 + 0.88 * n) * uOpacity;  // pölläytetty: voimakas kohinakontrasti
+        gl_FragColor = vec4(uColor * (0.55 + 0.5 * n), a);
+        #include <fog_fragment>
+      }`,
+  });
+}
+
+function buildStorm(sc, cfg){
+  const n = 5200, BX = 720, BY = 200, BZ = 720;
+  const pos = new Float32Array(n * 6);   // 2 vertexiä per juova (head, tail)
+  const col = new Float32Array(n * 6);   // per-vertex väri (osa vaalea, osa tumma → kontrasti taustasta riippumatta)
+  const seed = new Float32Array(n * 3);
+  const dust = new THREE.Color(cfg.fog ? cfg.fog.color : cfg.sky);
+  const _cb = new THREE.Color();
+  for (let i = 0; i < n; i++){
+    seed[i * 3]     = (hash2(i, 11) - 0.5) * BX;
+    seed[i * 3 + 1] = hash2(i, 12) * BY - BY * 0.32;   // painottuen matalalle
+    seed[i * 3 + 2] = (hash2(i, 13) - 0.5) * BZ;
+    // vuorotellen vaalea (näkyy tummaa maata vasten) ja tumma (näkyy kirkasta usvaa vasten)
+    _cb.copy(dust).lerp(hash2(i, 14) < 0.5 ? _cWhite : _cBlack, 0.45 + hash2(i, 15) * 0.3);
+    const j = i * 6;
+    col[j] = col[j + 3] = _cb.r; col[j + 1] = col[j + 4] = _cb.g; col[j + 2] = col[j + 5] = _cb.b;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const mat = new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0,
+    depthWrite: false, blending: THREE.NormalBlending, fog: true,
+  });
+  const seg = new THREE.LineSegments(g, mat);
+  seg.frustumCulled = false; seg.visible = false;
+  sc.add(seg);
+  // pölyseinä (rintama)
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(3600, 640), makeDustWall(cfg));
+  wall.frustumCulled = false; wall.visible = false;
+  sc.add(wall);
+  stormFx = { seg, wall, pos, seed, n, BX, BY, BZ,
+    baseFar: cfg.fog ? cfg.fog.far : 900,
+    baseNear: cfg.fog ? cfg.fog.near : 40,
+    dustCol: new THREE.Color(cfg.fog ? cfg.fog.color : cfg.sky).lerp(_cWhite, 0.12) };
+  storm.intens = 0; storm.startT = -1; storm.endT = -1; storm.lastSol = null;
+}
+
+const _wrap = (v, c, B) => { let dd = v - c + B * 0.5; dd -= Math.floor(dd / B) * B; return c - B * 0.5 + dd; };
+
+function updateStorm(dt){
+  if (!stormFx || !daylight) return;
+  const fx = stormFx, sc = surfaceScene;
+  // ajoitus: kerran per sol arvotaan 40 % myrsky
+  const sol = Math.floor(sunPhase() / (Math.PI * 2));
+  if (storm.lastSol === null) storm.lastSol = sol;
+  else if (sol !== storm.lastSol) {
+    storm.lastSol = sol;
+    if (Math.random() < STORM_PROB && S.simTime > storm.endT) {
+      storm.startT = S.simTime;
+      storm.endT = S.simTime + daylight.cfg.dayLength * (0.3 + Math.random() * 0.35);
+      const a = Math.random() * Math.PI * 2;
+      storm.windX = Math.cos(a); storm.windZ = Math.sin(a);
+    }
+  }
+  const active = S.simTime < storm.endT;
+  // rintaman saapuminen: 0 = kaukana, 1 = pelaajan kohdalla, >1 ohittanut
+  const approach = active ? (S.simTime - storm.startT) / STORM_APPROACH : 1.3;
+  // voimakkuus nousee kun rintama saapuu (approach 0,55→1), laskee myrskyn loppuessa
+  const targetIntens = active ? _sm(0.5, 1.0, approach) : 0;
+  storm.intens += (targetIntens - storm.intens) * (1 - Math.exp(-dt * 0.6));
+  const vis = storm.intens;
+
+  // pölyseinä (rintama) lähestyy tuulen suunnasta ja ohittaa pelaajan
+  const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+  if (active && approach < 1.08) {
+    fx.wall.visible = true;
+    const D = 800 - 950 * Math.min(1.05, approach);             // etäisyys upwind-suunnassa, lähestyy/ohittaa (näkyvissä sumun rajoissa)
+    fx.wall.position.set(cx - storm.windX * D, cy + 150, cz - storm.windZ * D);
+    fx.wall.rotation.set(0, Math.atan2(storm.windX, storm.windZ), 0);   // tasonormaali kohti pelaajaa
+    const wu = fx.wall.material.uniforms;
+    wu.uTime.value = S.simTime;
+    wu.uOpacity.value = 0.8 * _sm(0.08, 0.5, approach) * (1 - _sm(0.9, 1.08, approach));
+  } else {
+    fx.wall.visible = false;
+  }
+
+  // näkyvyys: sumu tihenee voimakkaasti ja värjäytyy, taivas pölyyntyy
+  if (sc && sc.fog) {
+    sc.fog.far = fx.baseFar * (1 - 0.93 * vis);
+    sc.fog.near = fx.baseNear * (1 - 0.75 * vis);
+    sc.fog.color.lerp(fx.dustCol, vis * 0.85);
+    if (sc.background && sc.background.isColor) sc.background.lerp(fx.dustCol, vis * 0.6);
+  }
+
+  if (vis < 0.004) { fx.seg.visible = false; return; }
+  fx.seg.visible = true;
+  fx.seg.material.opacity = vis * 0.75;
+  storm.scX += storm.windX * STORM_SPEED * dt;
+  storm.scZ += storm.windZ * STORM_SPEED * dt;
+  const pos = fx.pos, seed = fx.seed, n = fx.n;
+  const wx = storm.windX, wz = storm.windZ, BX = fx.BX, BY = fx.BY, BZ = fx.BZ;
+  for (let i = 0; i < n; i++){
+    const s0 = seed[i * 3], s1 = seed[i * 3 + 1], s2 = seed[i * 3 + 2];
+    const len = (7 + ((s0 + s2) * 0.5 % 16 + 16) % 16) * (0.4 + vis);   // juovan pituus
+    const hx = _wrap(s0 + storm.scX, cx, BX);
+    const hz = _wrap(s2 + storm.scZ, cz, BZ);
+    const hy = cy + s1 + Math.sin((storm.scX + s0) * 0.01) * 4;          // kevyt pystyväreily
+    const j = i * 6;
+    pos[j] = hx;            pos[j + 1] = hy; pos[j + 2] = hz;
+    pos[j + 3] = hx - wx * len; pos[j + 4] = hy; pos[j + 5] = hz - wz * len;
+  }
+  fx.seg.geometry.attributes.position.needsUpdate = true;
 }
 
 // 2D-kohina maastoa varten
@@ -378,8 +556,8 @@ export const SURFACE_CONFIGS = {
     pbr: { base: 'gravelly_sand', second: 'rocks_ground_05', rock: 'rock_boulder_dry',
            baseScale: 6, secondScale: 0.45, rockScale: 16, tint: 0.5, bright: 1.3 },
     dayLength: 42230,   // aurinkovuorokausi ~176 vrk → käytännössä paikallaan
-    sun: { color: [4.0, 4.0, 3.9], size: 260, intensity: 2.4 },
-    hemi: [0x101010, 0x201d16, 0.3], stars: true,
+    sun: { color: [4.0, 4.0, 3.9], size: 260, intensity: 1.7 },
+    hemi: [0x101010, 0x201d16, 0.22], stars: true,
     // todistetusti: tiheä kraatteröinti ja Rupes-jyrkänteet
     features: { craters: 16, scarp: true },
   },
@@ -394,8 +572,8 @@ export const SURFACE_CONFIGS = {
     dayLength: 28020,   // aurinkovuorokausi ~117 vrk; vain usvan kirkkaus elää
     skyNight: 0x140a02,
     sun: null,
-    dirLight: { color: 0xffb060, intensity: 0.8, dir: [0.3, 0.8, -0.4] },
-    hemi: [0xd08a40, 0x4a3014, 0.9],
+    dirLight: { color: 0xffb060, intensity: 0.55, dir: [0.3, 0.8, -0.4] },
+    hemi: [0xd08a40, 0x4a3014, 0.68],
     // todistetusti: kilpitulivuoria ja repeämälaaksoja, vain vähän kraattereita
     features: {
       craters: 3,
@@ -414,9 +592,9 @@ export const SURFACE_CONFIGS = {
     dayLength: 240,     // 24 h → 4 min
     skyNight: 0x060a13, twilight: 0xff8a50, nightStars: true,
     // fysikaalinen taivas: Maan Rayleigh-oletukset (sininen taivas, punainen rusko)
-    scatter: { turbidity: 2.5, rayleigh: 2.0, mie: 0.006, mieG: 0.8, gain: 0.28 },
-    sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.9 },
-    hemi: [0x9ec8ee, 0x4a5a35, 0.6],
+    scatter: { turbidity: 2.5, rayleigh: 2.0, mie: 0.006, mieG: 0.8, gain: 0.22 },
+    sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.35 },
+    hemi: [0x9ec8ee, 0x4a5a35, 0.45],
     features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true, roads: true, towns: true,
                 rocks: false, clouds: true, grass: true },
   },
@@ -432,9 +610,9 @@ export const SURFACE_CONFIGS = {
     skyNight: 0x080605, twilight: 0x8898c8, nightStars: true,   // Marsin rusko on sinertävä
     // pölysironta: punainen siroaa sinistä enemmän → voinkeltainen taivas, sininen rusko
     scatter: { betaR: [2.6e-5, 1.2e-5, 0.45e-5], turbidity: 5, rayleigh: 1.4,
-               mie: 0.012, mieG: 0.76, mieTint: [1.0, 0.8, 0.62], gain: 0.3 },
-    sun: { color: [2.6, 2.5, 2.3], size: 65, intensity: 1.9 },
-    hemi: [0xc89a6e, 0x5a3520, 0.62],
+               mie: 0.012, mieG: 0.76, mieTint: [1.0, 0.8, 0.62], gain: 0.24 },
+    sun: { color: [2.6, 2.5, 2.3], size: 65, intensity: 1.35 },
+    hemi: [0xc89a6e, 0x5a3520, 0.46],
     // todistetusti: Valles Marineris -kanjonit, Olympus Mons, kraatterit ja dyynit
     features: {
       craters: 7,
@@ -760,6 +938,7 @@ function initTerrain(sc, cfg, name){
 }
 const _cAsphalt = new THREE.Color(0x232326);
 const _cWhite = new THREE.Color(0xffffff);
+const _cBlack = new THREE.Color(0x000000);
 const ROAD_W = 11;   // tiekaistan leveys
 
 /* tiekaistat: laattaan kuuluvat ohuet meshit, jotka myötäilevät maastoa
@@ -1225,7 +1404,7 @@ function buildSurfaceScene(name){
     }
 
     // pikkukivet lähimaisemaan: pieni solu pitää ne aina kameran lähellä
-    addScatter(sc, makeRockGeo(57), rocksMat,
+    const pebbles = addScatter(sc, makeRockGeo(57), rocksMat,
       1300, 480, (i, x, z, m4, rq, re, rs) => {
         const s = (0.4 + hash2(i, 13) * 1.5) * 0.22;
         re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
@@ -1233,6 +1412,7 @@ function buildSurfaceScene(name){
         rs.set(s, s * 0.7, s);
         m4.compose(_vp.set(x, surfHeightFn(x, z) + 0.05, z), rq, rs);
       });
+    pebbles.castShadow = true;
   }
 
   // puut (Maa): kuusia ja lehtipuita vertex-värein; instanssiväri vain
@@ -1346,6 +1526,7 @@ function buildSurfaceScene(name){
       sc.add(m);
       dust.push({ m, ph: k * 2.3, w: 11 + k * 5, h: 75 + k * 28 });
     }
+    buildStorm(sc, cfg);   // hiekkamyrsky (Mars)
   }
 
   // rakennukset: kaupungit teiden risteyksissä (Maa)
@@ -1418,11 +1599,12 @@ function buildSurfaceScene(name){
     // varjot: kartta seuraa pelaajaa (paikat päivitetään updateDaylightissa)
     dl.castShadow = true;
     dl.shadow.mapSize.set(2048, 2048);
-    dl.shadow.camera.left = -300; dl.shadow.camera.right = 300;
-    dl.shadow.camera.top = 300; dl.shadow.camera.bottom = -300;
+    // tiukempi varjokamera → enemmän tarkkuutta pelaajan lähelle (näkyvämmät kivien/mineraalien varjot)
+    dl.shadow.camera.left = -140; dl.shadow.camera.right = 140;
+    dl.shadow.camera.top = 140; dl.shadow.camera.bottom = -140;
     dl.shadow.camera.near = 100; dl.shadow.camera.far = 1700;
     dl.shadow.bias = -0.0004;
-    dl.shadow.normalBias = 0.8;
+    dl.shadow.normalBias = 0.45;   // varjot lähempänä objektia (terävämpi kontakti)
   }
   sc.add(dl);
   sc.add(dl.target);
@@ -1527,6 +1709,8 @@ function leaveSurfaceScene(){
   surfaceBody = null;
   terrain = null;
   scatters = [];
+  stormFx = null; storm.intens = 0; storm.startT = -1; storm.endT = -1; storm.lastSol = null;
+  if (helmetLight) helmetLight.intensity = 0;
 }
 
 function enterSurface(b){
@@ -1566,6 +1750,14 @@ export function updateSurface(dt){
     surfX += (Math.cos(S.yaw) * mx + Math.sin(S.yaw) * mz) * inv * sp * dt;
     surfZ += (-Math.sin(S.yaw) * mx + Math.cos(S.yaw) * mz) * inv * sp * dt;
   }
+  // hiekkamyrsky työntää tuulen mukana — kävely vastaan kumoaa, koska liike
+  // lisätään surfX/Z:hen samalla tavalla
+  if (storm.intens > 0.01) {
+    surfX += storm.windX * STORM_PUSH * storm.intens * dt;
+    surfZ += storm.windZ * STORM_PUSH * storm.intens * dt;
+  }
+  // törmäys mineraaliesiintymiin: ei voi kävellä läpi
+  const col = resolveCollision(surfX, surfZ); surfX = col[0]; surfZ = col[1];
   updateTerrain(surfX, surfZ);
   updateScatter(surfX, surfZ);
   updateMining(dt, surfX, surfZ);
@@ -1584,6 +1776,7 @@ export function updateSurface(dt){
     surfHeightFn(surfX, surfZ) + 2.4 + bobY,
     surfZ + rZ * sway
   );
+  updateStorm(dt);   // myrskyn ajoitus, näkyvyys ja pölyjuovat (kameran ympärillä)
 }
 
 /* ---- matalalento: hidas lähestyminen vie pintalentoon ----
@@ -1791,5 +1984,7 @@ export function surfDebug(){
     setDescentV(v){ descentV = v; },
     roll: () => descRoll,
     setRoll(r){ descRoll = r; },
+    storm: () => ({ intens: storm.intens, active: S.simTime < storm.endT, approach: (S.simTime - storm.startT) / STORM_APPROACH, windX: storm.windX, windZ: storm.windZ }),
+    setStorm(on){ if (on) { storm.startT = S.simTime; storm.endT = S.simTime + 1e9; const a = Math.random() * 6.283; storm.windX = Math.cos(a); storm.windZ = Math.sin(a); } else { storm.endT = -1; } },
   };
 }
