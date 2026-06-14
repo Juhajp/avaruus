@@ -50,7 +50,7 @@ function updateDaylight(){
     // valo ja varjokamera seuraavat pelaajaa, mutta keskus napsautetaan
     // varjokartan tekseliruudukkoon → varjot eivät uimari/savua kävellessä,
     // vaan liikkuvat vain auringon suunnan mukana (ja tekseliaskelin)
-    const texel = 400 / 2048;                       // frustumin leveys / kartan koko
+    const texel = 400 / 4096;                       // frustumin leveys / kartan koko
     const sx = Math.round(camera.position.x / texel) * texel;
     const sy = Math.round(camera.position.y / texel) * texel;
     const sz = Math.round(camera.position.z / texel) * texel;
@@ -1612,9 +1612,9 @@ function buildSurfaceScene(name){
   if (cfg.sun) {
     // varjot: kartta seuraa pelaajaa (paikat päivitetään updateDaylightissa)
     dl.castShadow = true;
-    // laajempi kate (kaikki näkyvät kivet heittävät varjon), mutta 2048-kartta
-    // pidetään fps-syistä. 400/2048 ≈ 0,195 yks/teksel — tarkempi kuin alkup. ±300
-    dl.shadow.mapSize.set(2048, 2048);
+    // laaja kate (kaikki näkyvät kivet heittävät varjon) + iso 4096-kartta →
+    // terävä reuna. 400/4096 ≈ 0,098 yks/teksel
+    dl.shadow.mapSize.set(4096, 4096);
     dl.shadow.camera.left = -200; dl.shadow.camera.right = 200;
     dl.shadow.camera.top = 200; dl.shadow.camera.bottom = -200;
     dl.shadow.camera.near = 100; dl.shadow.camera.far = 1700;

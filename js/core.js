@@ -54,7 +54,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 renderer.shadowMap.enabled = true;                  // varjot pintamoodissa; avaruudessa ei heittäjiä
-renderer.shadowMap.type = THREE.PCFShadowMap;   // tarkkarajaisemmat varjot (vähemmän "savumaista" pehmennystä)
+renderer.shadowMap.type = THREE.PCFShadowMap;   // kevyt 4-tap PCF → siisti, terävä reuna (ei aliasoituva mössö, ei leveä sumennus)
 document.getElementById('app').appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();
