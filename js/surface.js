@@ -50,7 +50,7 @@ function updateDaylight(){
     // valo ja varjokamera seuraavat pelaajaa, mutta keskus napsautetaan
     // varjokartan tekseliruudukkoon → varjot eivät uimari/savua kävellessä,
     // vaan liikkuvat vain auringon suunnan mukana (ja tekseliaskelin)
-    const texel = 400 / 4096;                       // frustumin leveys / kartan koko
+    const texel = 200 / 4096;                       // frustumin leveys / kartan koko
     const sx = Math.round(camera.position.x / texel) * texel;
     const sy = Math.round(camera.position.y / texel) * texel;
     const sz = Math.round(camera.position.z / texel) * texel;
@@ -1087,8 +1087,9 @@ function buildQueuedTile(){
   let mesh = t.pool[lod].pop();
   if (!mesh) {
     mesh = new THREE.Mesh(makeTileGeo(LOD_SEGS[lod]), t.mat);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.castShadow = false;   // maasto ei heitä varjoa itseensä → ei kahlaavan kulman aknea;
+    mesh.receiveShadow = true;  // vain kivet/esiintymät heittävät varjon, ne pysyvät kiinni
+
   }
   if (!mesh.parent) t.sc.add(mesh);
   mesh.visible = true;
@@ -1411,7 +1412,11 @@ function buildSurfaceScene(name){
           re.set(hash2(i, 4) * 3.14, hash2(i + vr, 5) * 6.28, hash2(i, 6) * 3.14);
           rq.setFromEuler(re);
           rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
-          m4.compose(_vp.set(x, surfHeightFn(x, z) + s * 0.25, z), rq, rs);
+          // upota jalanjäljen ALIMPAAN maastopisteeseen → ei kellu rinteessä
+          const rr = s * 0.6;
+          const hl = Math.min(surfHeightFn(x, z), surfHeightFn(x - rr, z), surfHeightFn(x + rr, z),
+                              surfHeightFn(x, z - rr), surfHeightFn(x, z + rr));
+          m4.compose(_vp.set(x, hl + s * 0.12, z), rq, rs);
         }, vr * 1000 + 1);
       rocks.castShadow = true;
       rocks.receiveShadow = true;
@@ -1617,9 +1622,18 @@ function buildSurfaceScene(name){
     dl.shadow.mapSize.set(4096, 4096);
     dl.shadow.camera.left = -200; dl.shadow.camera.right = 200;
     dl.shadow.camera.top = 200; dl.shadow.camera.bottom = -200;
-    dl.shadow.camera.near = 100; dl.shadow.camera.far = 1700;
-    dl.shadow.bias = -0.0004;
-    dl.shadow.normalBias = 0.45;   // varjot lähempänä objektia (terävämpi kontakti)
+    // tiukka kate (±100) keskittää 4096 tekseliä pelaajan lähelle → ~0,049 yks/teksel,
+    // terävä reuna lähikiviin (kauempana olevat eivät heitä varjoa, mutta ne ovat pieniä)
+    dl.shadow.camera.left = -100; dl.shadow.camera.right = 100;
+    dl.shadow.camera.top = 100; dl.shadow.camera.bottom = -100;
+    // valo on aina 800 yks päässä pelaajasta → tiukka near/far pakkaa syvyystarkkuuden
+    // → poistaa kahlaavan kulman akne ("pulppuava mössö")
+    dl.shadow.camera.near = 480; dl.shadow.camera.far = 1180;
+    // maasto ei kasta → ei tarvita isoa biasta. Pieni → varjo pysyy kiinni kivessä
+    // (ei "peter-panning"-rakoa); kivien takapinnat renderöityvät varjokarttaan
+    // (three.js oletus) → ei oma-aknea
+    dl.shadow.bias = -0.0003;
+    dl.shadow.normalBias = 0.02;
   }
   sc.add(dl);
   sc.add(dl.target);

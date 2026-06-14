@@ -163,6 +163,12 @@ function relocate(d, px, pz){
   d.z = pz + Math.cos(ang) * dist;
   d.y = heightFn ? heightFn(d.x, d.z) : 0;
   d.mesh.position.set(d.x, d.y, d.z);
+  // ankkuroi jokainen lohkare PAIKALLISEEN maastoon (ei kellu rinteessä); keskus
+  // hieman maaston yläpuolella → tyvi upoksissa mutta lohkare näkyy
+  if (heightFn) for (const m of d.mesh.children) {
+    const s = m.scale.x;
+    m.position.y = heightFn(d.x + m.position.x, d.z + m.position.z) - d.y + s * 0.15;
+  }
   setOre(d, pickOre());
   d.pop = 0;                                    // kasvaa 0→1 (ilmestymisanimaatio)
   d.mesh.scale.setScalar(0.001);
