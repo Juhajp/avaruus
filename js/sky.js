@@ -143,7 +143,7 @@ export function makeSky(scatter){
       uBetaR: { value: new THREE.Vector3(...(scatter.betaR ?? [5.8e-6, 1.356e-5, 3.027e-5])) },
       uMieTint: { value: new THREE.Vector3(...(scatter.mieTint ?? [1, 1, 1])) },
       uGain: { value: scatter.gain ?? 1.0 },
-      uSunGlow: { value: 1 },
+      uSunGlow: { value: 0.4 },   // himmeämpi aurinkokiekko → taivas ei pala puhki
       sunPosition: { value: new THREE.Vector3(0, 1, 0) },
       up: { value: new THREE.Vector3(0, 1, 0) },
     },

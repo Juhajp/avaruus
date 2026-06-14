@@ -6,7 +6,7 @@ import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
 import { makeSky } from './sky.js';
 import { NOISE_GLSL } from './shaders.js';
-import { initMining, updateMining, clearMining, setMineralEnv, resolveCollision } from './mining.js';
+import { initMining, updateMining, clearMining, setMineralEnv, setMineralRock, resolveCollision } from './mining.js';
 import { S } from './state.js';
 
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
@@ -47,9 +47,15 @@ function updateDaylight(){
   const tw = d.twilight ? Math.max(0, 1 - Math.abs(elev) / 0.35) * sstep(-0.22, -0.04, elev) : 0;
 
   if (d.cfg.sun) {
-    // valo ja varjokamera seuraavat pelaajaa
-    d.dl.position.copy(camera.position).addScaledVector(_sunDir, 800);
-    d.dl.target.position.copy(camera.position);
+    // valo ja varjokamera seuraavat pelaajaa, mutta keskus napsautetaan
+    // varjokartan tekseliruudukkoon → varjot eivät uimari/savua kävellessä,
+    // vaan liikkuvat vain auringon suunnan mukana (ja tekseliaskelin)
+    const texel = 400 / 2048;                       // frustumin leveys / kartan koko
+    const sx = Math.round(camera.position.x / texel) * texel;
+    const sy = Math.round(camera.position.y / texel) * texel;
+    const sz = Math.round(camera.position.z / texel) * texel;
+    d.dl.target.position.set(sx, sy, sz);
+    d.dl.position.set(sx, sy, sz).addScaledVector(_sunDir, 800);
     d.dl.target.updateMatrixWorld();
   }
   d.dl.intensity = d.baseInt * (d.cfg.sun ? dayF : 0.2 + 0.8 * dayF);
@@ -139,6 +145,7 @@ function updateDaylight(){
   if (helmetLight) {
     const dark = 1 - dayF;
     helmetLight.intensity = (S.mode === 'surface') ? dark * dark * HELMET_INT : 0;
+    helmetLight.castShadow = helmetLight.intensity > 4;   // varjot vain kun valo selvästi päällä (yöllä)
   }
 }
 
@@ -151,6 +158,13 @@ let helmetLight = null;
   helmetLight = new THREE.SpotLight(0xffe9c4, 0, 120, 0.40, 0.45, 2);
   helmetLight.position.set(0, 0.5, 0.1);        // hieman silmien yläpuolella
   helmetLight.target.position.set(0, -2.2, -7); // alaviistoon eteen (hieman ylempänä), kohti maata
+  // kypärävalo heittää myös varjot (päällä vain yöllä, ks. updateDaylight)
+  helmetLight.castShadow = false;
+  helmetLight.shadow.mapSize.set(1024, 1024);
+  helmetLight.shadow.camera.near = 1;
+  helmetLight.shadow.camera.far = 80;
+  helmetLight.shadow.bias = -0.0006;
+  helmetLight.shadow.normalBias = 0.4;
   camera.add(helmetLight);
   camera.add(helmetLight.target);
 })();
@@ -592,7 +606,7 @@ export const SURFACE_CONFIGS = {
     dayLength: 240,     // 24 h → 4 min
     skyNight: 0x060a13, twilight: 0xff8a50, nightStars: true,
     // fysikaalinen taivas: Maan Rayleigh-oletukset (sininen taivas, punainen rusko)
-    scatter: { turbidity: 2.5, rayleigh: 2.0, mie: 0.006, mieG: 0.8, gain: 0.22 },
+    scatter: { turbidity: 2.5, rayleigh: 2.0, mie: 0.006, mieG: 0.8, gain: 0.16 },
     sun: { color: [3.4, 3.3, 3.0], size: 100, intensity: 1.35 },
     hemi: [0x9ec8ee, 0x4a5a35, 0.45],
     features: { mountains: { amp: 60, maskF: 0.0007 }, trees: true, roads: true, towns: true,
@@ -610,7 +624,7 @@ export const SURFACE_CONFIGS = {
     skyNight: 0x080605, twilight: 0x8898c8, nightStars: true,   // Marsin rusko on sinertävä
     // pölysironta: punainen siroaa sinistä enemmän → voinkeltainen taivas, sininen rusko
     scatter: { betaR: [2.6e-5, 1.2e-5, 0.45e-5], turbidity: 5, rayleigh: 1.4,
-               mie: 0.012, mieG: 0.76, mieTint: [1.0, 0.8, 0.62], gain: 0.24 },
+               mie: 0.012, mieG: 0.76, mieTint: [1.0, 0.8, 0.62], gain: 0.17 },
     sun: { color: [2.6, 2.5, 2.3], size: 65, intensity: 1.35 },
     hemi: [0xc89a6e, 0x5a3520, 0.46],
     // todistetusti: Valles Marineris -kanjonit, Olympus Mons, kraatterit ja dyynit
@@ -1385,8 +1399,8 @@ function buildSurfaceScene(name){
       roughness: 1, envMapIntensity: 0.25,
     });
     if (cfg.pbr) {
-      loadPH(cfg.pbr.rock, 'diff', true).then(t => { if (t) { rocksMat.map = t; rocksMat.needsUpdate = true; } });
-      loadPH(cfg.pbr.rock, 'nor_gl', false).then(t => { if (t) { rocksMat.normalMap = t; rocksMat.needsUpdate = true; } });
+      loadPH(cfg.pbr.rock, 'diff', true).then(t => { if (t) { rocksMat.map = t; rocksMat.needsUpdate = true; setMineralRock(t, null); } });
+      loadPH(cfg.pbr.rock, 'nor_gl', false).then(t => { if (t) { rocksMat.normalMap = t; rocksMat.needsUpdate = true; setMineralRock(null, t); } });
     }
     envMats.push(rocksMat);
     for (let vr = 0; vr < 3; vr++) {
@@ -1598,10 +1612,11 @@ function buildSurfaceScene(name){
   if (cfg.sun) {
     // varjot: kartta seuraa pelaajaa (paikat päivitetään updateDaylightissa)
     dl.castShadow = true;
+    // laajempi kate (kaikki näkyvät kivet heittävät varjon), mutta 2048-kartta
+    // pidetään fps-syistä. 400/2048 ≈ 0,195 yks/teksel — tarkempi kuin alkup. ±300
     dl.shadow.mapSize.set(2048, 2048);
-    // tiukempi varjokamera → enemmän tarkkuutta pelaajan lähelle (näkyvämmät kivien/mineraalien varjot)
-    dl.shadow.camera.left = -140; dl.shadow.camera.right = 140;
-    dl.shadow.camera.top = 140; dl.shadow.camera.bottom = -140;
+    dl.shadow.camera.left = -200; dl.shadow.camera.right = 200;
+    dl.shadow.camera.top = 200; dl.shadow.camera.bottom = -200;
     dl.shadow.camera.near = 100; dl.shadow.camera.far = 1700;
     dl.shadow.bias = -0.0004;
     dl.shadow.normalBias = 0.45;   // varjot lähempänä objektia (terävämpi kontakti)

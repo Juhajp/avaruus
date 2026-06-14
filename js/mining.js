@@ -25,10 +25,12 @@ const RAW = ['rauta', 'silikaatti', 'jaa'];
 const MADE = ['teras', 'komposiitti', 'happi', 'paneeli'];
 
 // esiintymätyypit: väri, emissio (hehku) ja suhteellinen yleisyys
+// kivimäisiä esiintymiä: sama tekstuuri kuin tavallisilla kivillä, mutta hillitty
+// tunnusväri (kerrotaan kivitekstuurilla) erottaa lajit toisistaan ja kivistä
 const ORE = [
-  { type: 'rauta',      col: 0x8a3414, emis: 0x431706, w: 0.42 },
-  { type: 'silikaatti', col: 0x9a8e74, emis: 0x2a2418, w: 0.38 },
-  { type: 'jaa',        col: 0x9fd6ee, emis: 0x214a5c, w: 0.20 },
+  { type: 'rauta',      col: 0xc86a42, w: 0.42 },   // ruosteenpunainen vivahde
+  { type: 'silikaatti', col: 0xbcbcae, w: 0.38 },   // vaalean harmaa
+  { type: 'jaa',        col: 0x9ec6de, w: 0.20 },    // sinertävä
 ];
 function pickOre(){ const r = Math.random(); let a = 0; for (const o of ORE) { a += o.w; if (r < a) return o; } return ORE[0]; }
 
@@ -38,42 +40,39 @@ const COLLIDE_R = 1.5;                                 // esiintymän törmäyss
 const _col = [0, 0];
 let deposits = [];
 let scene = null, heightFn = null, active = false;
-let oreGeo = null, oreMats = null, oreShellMats = null;   // luodaan per pintakäynti (scene-dispose hävittää)
+let oreGeo = null, oreMats = null;   // luodaan per pintakäynti (scene-dispose hävittää)
 let mineralEnv = null;               // taivaan IBL-kartta heijastuksiin (surface.js asettaa)
-
-// kidemäisen mineraalin reunahohto: fresnel-kuori (additiivinen) → "raytracing"-tyyppinen
-// reuna­heijastus/taittuma kiteen ympärillä
-function makeOreShell(color){
-  return new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Color(color) } },
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-    vertexShader: `
-      #include <common>
-      #include <logdepthbuf_pars_vertex>
-      varying vec3 vN; varying vec3 vV;
-      void main(){
-        vN = normalize(normalMatrix * normal);
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vV = normalize(-mv.xyz);
-        gl_Position = projectionMatrix * mv;
-        #include <logdepthbuf_vertex>
-      }`,
-    fragmentShader: `
-      #include <common>
-      #include <logdepthbuf_pars_fragment>
-      uniform vec3 uColor; varying vec3 vN; varying vec3 vV;
-      void main(){
-        #include <logdepthbuf_fragment>
-        float f = pow(1.0 - clamp(dot(vN, vV), 0.0, 1.0), 2.2);
-        gl_FragColor = vec4(uColor * f * 1.8, f * 0.85);
-      }`,
-  });
-}
+let rockMap = null, rockNor = null;  // planeetan kivitekstuuri + normaalikartta (surface.js asettaa)
 
 // surface.js kutsuu kun taivaan ympäristökartta on valmis → mineraalit heijastavat sitä
 export function setMineralEnv(tex){
   mineralEnv = tex;
   if (oreMats) for (const k in oreMats) { oreMats[k].envMap = tex; oreMats[k].needsUpdate = true; }
+}
+
+// surface.js kutsuu kun kivitekstuuri on ladattu → esiintymät käyttävät sitä
+export function setMineralRock(diff, nor){
+  if (diff) rockMap = diff;
+  if (nor) rockNor = nor;
+  if (oreMats) for (const k in oreMats) {
+    if (diff) oreMats[k].map = diff;
+    if (nor) oreMats[k].normalMap = nor;
+    oreMats[k].needsUpdate = true;
+  }
+}
+
+// kivimäinen epäsäännöllinen lohkare (ikosaedri + paikkahash-siirtymä, kuten kivet)
+function makeOreRockGeo(){
+  const g = new THREE.IcosahedronGeometry(0.8, 1);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const h = Math.abs(Math.sin(x * 12.9 + y * 78.2 + z * 37.7) * 43758.5) % 1;
+    const s = 1 + (h - 0.5) * 0.4;
+    p.setXYZ(i, x * s, y * s, z * s);
+  }
+  g.computeVertexNormals();
+  return g;
 }
 // murtumispurske: pieni pooli kivensiruja, jotka sinkoutuvat mineraalin värissä
 const BURST_POOL = 30, BURST_PER = 14, BURST_G = 8;
@@ -137,34 +136,22 @@ function updateTool(dt, swinging){
 
 function makeDeposit(){
   const g = new THREE.Group();
-  // kideklusteri: useita pitkänomaisia teräväkärkisiä kiteitä, jotka kasvavat
-  // ulospäin tyvestä eri kulmiin (kuten luonnon kristallidruusi)
-  const nShards = 5 + Math.floor(Math.random() * 3);
-  for (let i = 0; i < nShards; i++) {
+  // kivimäinen lohkareklusteri (kuten tavalliset kivet), tyvi osin maan alle
+  const n = 2 + Math.floor(Math.random() * 2);    // 2–3 lohkaretta
+  for (let i = 0; i < n; i++) {
     const m = new THREE.Mesh(oreGeo, oreMats.rauta);
-    const tall = 1.0 + Math.random() * 1.3;       // pituus
-    const thin = 0.32 + Math.random() * 0.28;     // ohuus
-    m.scale.set(thin, tall, thin);
-    const ang = Math.random() * Math.PI * 2;
-    const tilt = Math.random() * 0.7;             // kallistus ulospäin
-    m.rotation.set(Math.cos(ang) * tilt, Math.random() * Math.PI, Math.sin(ang) * tilt);
-    const rad = Math.random() * 0.7;
-    // alaosa selkeästi maan alle (tyvi maaston sisään) → kasvaa kalliosta
-    m.position.set(Math.cos(ang) * rad, tall * 0.18, Math.sin(ang) * rad);
+    const s = 0.55 + Math.random() * 0.7;
+    m.scale.setScalar(s);
+    m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+    m.position.set((Math.random() - 0.5) * 1.5, s * 0.2, (Math.random() - 0.5) * 1.5);
     m.castShadow = true; m.receiveShadow = true;
-    const shell = new THREE.Mesh(oreGeo, oreShellMats.rauta);   // fresnel-reunahohto
-    shell.scale.setScalar(1.06);
-    m.add(shell);
     g.add(m);
   }
   return { mesh: g, type: 'rauta', x: 0, z: 0, y: 0, pop: 1 };
 }
 function setOre(d, ore){
   d.type = ore.type;
-  for (const m of d.mesh.children) {
-    m.material = oreMats[ore.type];
-    if (m.children[0]) m.children[0].material = oreShellMats[ore.type];
-  }
+  for (const m of d.mesh.children) m.material = oreMats[ore.type];
 }
 function relocate(d, px, pz){
   // syntyy pelaajan TAKAPUOLELLE/sivuille (ei näkyvään etukenttään) → ilmestymistä ei näe
@@ -186,14 +173,15 @@ export function initMining(sc, name, hFn){
   clearMining();
   if (name !== 'Mars') { renderHud(); return; }
   scene = sc; heightFn = hFn; active = true;
-  oreGeo = new THREE.OctahedronGeometry(0.7, 0);   // teräväkärkinen bipyramidi → kidemäinen
-  oreMats = {}; oreShellMats = {};
+  oreGeo = makeOreRockGeo();
+  oreMats = {};
   for (const o of ORE) {
+    // kuin kivi: sama kivitekstuuri + normaalikartta, väri vain hillitty tunnusvivahde
     oreMats[o.type] = new THREE.MeshStandardMaterial({
-      color: o.col, emissive: o.emis, emissiveIntensity: 0.6,
-      roughness: 0.12, metalness: 0.6, envMapIntensity: 1.5, flatShading: true });
+      color: o.col, roughness: 1, metalness: 0, envMapIntensity: 0.25 });
+    if (rockMap) oreMats[o.type].map = rockMap;
+    if (rockNor) oreMats[o.type].normalMap = rockNor;
     if (mineralEnv) oreMats[o.type].envMap = mineralEnv;
-    oreShellMats[o.type] = makeOreShell(o.col);
   }
   for (let i = 0; i < COUNT; i++) {
     const d = makeDeposit();
@@ -243,7 +231,7 @@ function updateBursts(dt){
   }
 }
 export function clearMining(){
-  deposits = []; scene = null; heightFn = null; active = false; oreGeo = null; oreMats = null; oreShellMats = null;
+  deposits = []; scene = null; heightFn = null; active = false; oreGeo = null; oreMats = null;
   bursts = []; burstGeo = null;
   _lmb = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
