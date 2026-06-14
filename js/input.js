@@ -47,6 +47,15 @@ renderer.domElement.addEventListener('mousedown', (e) => {
 addEventListener('mouseup', () => { dragging = false; setMining(false); });
 addEventListener('blur', () => { dragging = false; setMining(false); });
 
+// Katseen päivitys: yaw aina sama, pitch käännetään lennossa (avaruusalus/sukkula)
+// lentosimulaattorin tapaan — liike ylös → nokka alas. Kävelyssä (surface) normaali.
+function applyLook(dx, dy){
+  const pitchSign = (S.mode === 'surface') ? -1 : 1;
+  S.yaw   -= dx * 0.0021;
+  S.pitch += pitchSign * dy * 0.0021;
+  S.pitch = Math.max(-1.553, Math.min(1.553, S.pitch));
+}
+
 document.addEventListener('mousemove', (e) => {
   const locked = document.pointerLockElement === renderer.domElement;
   let dx, dy;
@@ -59,13 +68,77 @@ document.addEventListener('mousemove', (e) => {
   } else {
     return;
   }
-  S.yaw   -= dx * 0.0021;
-  S.pitch -= dy * 0.0021;
-  S.pitch = Math.max(-1.553, Math.min(1.553, S.pitch));
+  applyLook(dx, dy);
 });
 addEventListener('wheel', (e) => {
   S.targetFrac = clamp01(S.targetFrac - Math.sign(e.deltaY) * 0.02);
 }, { passive: true });
+
+/* ---------------- Mobiiliohjaus (kosketus) ----------------
+   Yksi sormi = katselu (kuten hiiren veto). Kaksi sormea pystysuunnassa =
+   kaasu: ylös kiihdyttää, alas hidastaa. */
+const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+if (IS_TOUCH) {
+  document.body.classList.add('touch');
+  setHint('Mobiili: 1 sormi = katsele · 2 sormea ylös/alas = kaasu · napit alhaalla');
+}
+
+let touchLookActive = false;       // yhden sormen katselu käynnissä
+let touchLX = 0, touchLY = 0;
+let twoFingerY = null;             // kahden sormen pystykeskiö (kaasusäätö)
+
+function avgY(touches){
+  let s = 0; for (const t of touches) s += t.clientY; return s / touches.length;
+}
+
+const canvas = renderer.domElement;
+canvas.addEventListener('touchstart', (e) => {
+  if (e.touches.length >= 2) {
+    // kaksi sormea = kaasu; ei katselua/louhintaa
+    twoFingerY = avgY(e.touches);
+    touchLookActive = false;
+    setMining(false);
+  } else if (e.touches.length === 1) {
+    const t = e.touches[0];
+    touchLookActive = true;
+    touchLX = t.clientX; touchLY = t.clientY;
+    twoFingerY = null;
+    if (S.mode === 'surface') setMining(true);   // pinnalla sormi pohjassa = louhi (tähtää esiintymään)
+  }
+  e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  if (e.touches.length >= 2) {
+    const y = avgY(e.touches);
+    if (twoFingerY !== null) {
+      const dy = y - twoFingerY;                 // ylös = negatiivinen → kiihdytä
+      S.targetFrac = clamp01(S.targetFrac - dy * 0.003);
+    }
+    twoFingerY = y;
+  } else if (e.touches.length === 1 && touchLookActive) {
+    const t = e.touches[0];
+    const dx = t.clientX - touchLX, dy = t.clientY - touchLY;
+    touchLX = t.clientX; touchLY = t.clientY;
+    applyLook(dx, dy);
+  }
+  e.preventDefault();
+}, { passive: false });
+
+function endTouch(e){
+  if (e.touches.length === 0) {
+    touchLookActive = false; twoFingerY = null; setMining(false);
+  } else if (e.touches.length === 1) {
+    // kahdesta yhteen sormeen — vaihda katseluun, nollaa perustaso ettei nykäise
+    const t = e.touches[0];
+    touchLookActive = true;
+    touchLX = t.clientX; touchLY = t.clientY;
+    twoFingerY = null;
+    if (S.mode === 'surface') setMining(true);
+  }
+}
+canvas.addEventListener('touchend', endTouch);
+canvas.addEventListener('touchcancel', endTouch);
 
 addEventListener('keydown', (e) => {
   S.keys[e.code] = true;
