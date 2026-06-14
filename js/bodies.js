@@ -629,6 +629,8 @@ function makeTexturedEarthMaterial(day, night, radius){
         float det = snoise(vOP * 170.0) * 0.5 + snoise(vOP * 520.0) * 0.32 + snoise(vOP * 1400.0) * 0.18;
         day *= 1.0 + det * 0.11 * nd;
       }
+      // sinertävä ilmakehäfiltteri: viileä globaali sävy → realistisempi avaruudesta
+      day *= vec3(0.86, 0.95, 1.14);
       vec3 night = texture2D(uNight, vUv).rgb;
       vec3 N = normalize(vN);
       vec3 S = sunDirAt(vWP);
@@ -641,6 +643,8 @@ function makeTexturedEarthMaterial(day, night, radius){
       // sininen reunakajo päiväpuolella
       float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.5);
       vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.5;
+      // reunoja kohti voimistuva sironta sekoittaa albedon kohti taivaansineä
+      day = mix(day, vec3(0.30, 0.52, 0.88), rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.35);
       vec3 lit = day * (diff * 1.15 + 0.01) + lights + atmo;
       gl_FragColor = vec4(lit, 1.0);
       #include <logdepthbuf_fragment>
