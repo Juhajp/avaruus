@@ -1114,13 +1114,14 @@ function updateExtFit(){
       const d = camera.position.distanceTo(b.group.position) - b.def.r;
       if (d < dmin) dmin = d;
     }
-    target = Math.min(1, Math.max(0.06, dmin * 0.12));
+    target = Math.min(1, Math.max(0.04, dmin * 0.09));
   } else {
     const sd = surfDebug();
     const alt = sd.descentPos.y - sd.h(sd.descentPos.x, sd.descentPos.z);
-    target = Math.min(1, Math.max(0.15, alt * 0.07));
+    target = Math.min(1, Math.max(0.12, alt * 0.06));
   }
-  _extFit += (target - _extFit) * 0.25;
+  // kutistu heti pinnan lähestyessä (ei leikkaa planeettaan), kasva pehmeästi
+  _extFit += (target - _extFit) * (target < _extFit ? 1.0 : 0.2);
   falconExt.position.copy(FALCON_POS).multiplyScalar(_extFit);
   falconExt.scale.setScalar(FALCON_SCALE * _extFit);
   shuttleExt.position.copy(SHUTTLE_POS).multiplyScalar(_extFit);
