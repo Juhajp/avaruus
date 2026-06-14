@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { AU, C, DEG, camera } from './core.js';
 import { bodies } from './bodies.js';
-import { S, clamp01 } from './state.js';
+import { S, clampSpeed } from './state.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -12,13 +12,16 @@ const UP = new THREE.Vector3(0, 1, 0);
 const _vX = new THREE.Vector3(1, 0, 0);
 
 export function updateFlight(dt){
-  // nopeuden säätö näppäimillä
+  // nopeuden säätö näppäimillä (tavoitenopeus voi mennä negatiiviseksi → peruutus)
   const rate = (S.keys.ShiftLeft || S.keys.ShiftRight) ? 1.2 : 0.30;
-  if (S.keys.KeyW || S.keys.ArrowUp)   S.targetFrac = clamp01(S.targetFrac + rate * dt);
-  if (S.keys.KeyS || S.keys.ArrowDown) S.targetFrac = clamp01(S.targetFrac - rate * dt);
+  if (S.keys.KeyW || S.keys.ArrowUp)   S.targetFrac = clampSpeed(S.targetFrac + rate * dt);
+  if (S.keys.KeyS || S.keys.ArrowDown) S.targetFrac = clampSpeed(S.targetFrac - rate * dt);
   if (S.keys.KeyQ) S.roll += 1.4 * dt;
   if (S.keys.KeyE) S.roll -= 1.4 * dt;
-  S.speedFrac += (S.targetFrac - S.speedFrac) * (1 - Math.exp(-dt * 3.5));
+  // inertia: nopeus liukuu tavoitteeseen. Kiihdytys vastaa ripeämmin kuin
+  // hidastus/coast, joten vauhdin pudottaminen tai nollaan tulo tuntuu massalta.
+  const k = (Math.abs(S.targetFrac) > Math.abs(S.speedFrac)) ? 2.5 : 1.1;
+  S.speedFrac += (S.targetFrac - S.speedFrac) * (1 - Math.exp(-dt * k));
   if (Math.abs(S.speedFrac - S.targetFrac) < 0.0004) S.speedFrac = S.targetFrac;
 
   // käänny kohti kohdetta (F)
@@ -34,7 +37,8 @@ export function updateFlight(dt){
 
   // liike — vyöhykkeen sisällä paikallinen nopeustila: säädin kattaa 0.01–0.1 c
   const vGlobal = S.speedFrac;
-  const vLocal = S.speedFrac > 0.001 ? 0.01 + 0.09 * (S.speedFrac / 0.99) : 0;
+  const aLocal = Math.abs(S.speedFrac);
+  const vLocal = aLocal > 0.001 ? Math.sign(S.speedFrac) * (0.01 + 0.09 * (aLocal / 0.99)) : 0;
   S.effFrac = vGlobal * (1 - S.dragWeight) + vLocal * S.dragWeight;
   const fwd = _v.set(0, 0, -1).applyQuaternion(camera.quaternion);
   camera.position.addScaledVector(fwd, S.effFrac * C * dt);

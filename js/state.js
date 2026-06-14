@@ -20,3 +20,7 @@ export const S = {
 };
 
 export function clamp01(v){ return Math.max(0, Math.min(0.99, v)); }
+
+// nopeuden rajaus: peruutus/jarrutus sallitaan enintään -5 % c
+export const SPEED_MIN = -0.05;
+export function clampSpeed(v){ return Math.max(SPEED_MIN, Math.min(0.99, v)); }

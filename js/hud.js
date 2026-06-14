@@ -32,7 +32,7 @@ export function updateSpaceHUD(){
   hud.pct.textContent = (S.effFrac * 100).toFixed(S.effFrac < 0.105 ? 2 : 1);
   hud.kms.textContent = Math.round(S.effFrac * C_KMS).toLocaleString('fi-FI');
   hud.gamma.textContent = (1 / Math.sqrt(1 - S.effFrac * S.effFrac)).toFixed(2);
-  hud.bar.style.width = `${(S.effFrac / 0.99) * 100}%`;
+  hud.bar.style.width = `${Math.max(0, S.effFrac / 0.99) * 100}%`;
   const fd = document.getElementById('frameDrag');
   if (S.dragBody && S.dragWeight > 0.01) {
     fd.style.display = 'block';

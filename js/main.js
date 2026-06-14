@@ -10,7 +10,7 @@ import { updateFlight } from './flight.js';
 import { updateCockpit } from './cockpit.js';
 import { updateSpaceHUD } from './hud.js';
 import { setTarget } from './input.js';
-import { S, clamp01 } from './state.js';
+import { S, clampSpeed } from './state.js';
 
 // aloituspaikka: Maan lähellä, katse kohti Maata
 placeNearBody(3);
@@ -55,7 +55,7 @@ animate();
 // testikoukku kehitystä varten
 window.__sim = {
   goto(idx, distMult = 3.5){ placeNearBody(idx, distMult); },
-  setSpeed(f){ S.targetFrac = clamp01(f); S.speedFrac = S.targetFrac; },
+  setSpeed(f){ S.targetFrac = clampSpeed(f); S.speedFrac = S.targetFrac; },
   state(){ return { simTime: S.simTime, speedFrac: S.speedFrac, mode: S.mode, pos: camera.position.toArray() }; },
   beam(i){ S.targetFrac = 0; S.speedFrac = 0; setTarget(i); placeNearBody(i, 6); tryBeamDown(); },
   beamUp(){ exitSurface(); },

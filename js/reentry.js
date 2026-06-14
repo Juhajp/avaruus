@@ -133,10 +133,10 @@ export function updateReentry(dt){
     const d = camera.position.distanceTo(b.group.position);
     if (b.def.type === 'sun') {
       if (d < b.def.r * 1.2) { destroyShip('Alus höyrystyi Auringon koronassa.'); return; }
-    } else if (d < b.def.r * 1.16 && S.effFrac > IMPACT_MAX) {
+    } else if (d < b.def.r * 1.16 && Math.abs(S.effFrac) > IMPACT_MAX) {
       destroyShip(b.def.type === 'gas'
         ? `Paine murskasi aluksen syvällä kohteen ${b.def.name} pilvikerroksissa.`
-        : `Alus törmäsi pintaan ${Math.round(S.effFrac * C_KMS).toLocaleString('fi-FI')} km/s vauhdissa (${b.def.name}).`);
+        : `Alus törmäsi pintaan ${Math.round(Math.abs(S.effFrac) * C_KMS).toLocaleString('fi-FI')} km/s vauhdissa (${b.def.name}).`);
       return;
     }
   }
@@ -154,7 +154,7 @@ export function updateReentry(dt){
     }
   }
 
-  const speedNorm = Math.min(1, S.effFrac / 0.1);   // lähialueella nopeusalue on 1–10 % c
+  const speedNorm = Math.min(1, Math.abs(S.effFrac) / 0.1);   // lähialueella nopeusalue on 1–10 % c
   const q = density * speedNorm * speedNorm;        // dynaaminen paine / kitkakuumennus
   lastQ = q; lastDensity = density;
 
@@ -163,10 +163,13 @@ export function updateReentry(dt){
     const drag = Math.exp(-dt * DRAG_K * density * (0.25 + speedNorm));
     const before = S.speedFrac;
     S.speedFrac *= drag;
-    S.targetFrac = Math.min(S.targetFrac, S.speedFrac);
+    // estä kaasua kiihdyttämästä takaisin jarrutuksen jälkeen (kumpaankin suuntaan)
+    S.targetFrac = S.speedFrac >= 0
+      ? Math.min(S.targetFrac, S.speedFrac)
+      : Math.max(S.targetFrac, S.speedFrac);
     // jarrutuksessa ilmaan luovutettu liike-energia kuumentaa runkoa (∝ v·dv)
     // lähialueella effFrac = 0.01 + (0.09/0.99)·speedFrac, normalisoitu 0.1:een
-    const dvNorm = (before - S.speedFrac) * (0.09 / 0.99) / 0.1;
+    const dvNorm = Math.abs(before - S.speedFrac) * (0.09 / 0.99) / 0.1;
     heat += BRAKE_HEAT * speedNorm * dvNorm;
   }
 

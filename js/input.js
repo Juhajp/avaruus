@@ -4,7 +4,7 @@ import { bodies, orbitLines, placeNearBody } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent } from './surface.js';
 import { toggleShipView, nearParkedShuttle } from './cockpit.js';
 import { toggleCraft, craftRecipe, isCraftOpen, setMining } from './mining.js';
-import { S, clamp01 } from './state.js';
+import { S, clampSpeed } from './state.js';
 
 let started = false;
 let lockFailed = false;
@@ -71,7 +71,7 @@ document.addEventListener('mousemove', (e) => {
   applyLook(dx, dy);
 });
 addEventListener('wheel', (e) => {
-  S.targetFrac = clamp01(S.targetFrac - Math.sign(e.deltaY) * 0.02);
+  S.targetFrac = clampSpeed(S.targetFrac - Math.sign(e.deltaY) * 0.02);
 }, { passive: true });
 
 /* ---------------- Mobiiliohjaus (kosketus) ----------------
@@ -113,7 +113,7 @@ canvas.addEventListener('touchmove', (e) => {
     const y = avgY(e.touches);
     if (twoFingerY !== null) {
       const dy = y - twoFingerY;                 // ylös = negatiivinen → kiihdytä
-      S.targetFrac = clamp01(S.targetFrac - dy * 0.003);
+      S.targetFrac = clampSpeed(S.targetFrac - dy * 0.003);
     }
     twoFingerY = y;
   } else if (e.touches.length === 1 && touchLookActive) {

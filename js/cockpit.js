@@ -382,8 +382,8 @@ function drawSpd(c, hue){
     c.strokeStyle = hue; c.lineWidth = 1;
     c.strokeRect(12, 138, 232, 14);
     c.globalAlpha = 1;
-    c.fillRect(14, 140, 228 * Math.min(1, eff / 0.99), 10);
-    const tick = 12 + 232 * Math.min(1, (S.targetFrac || 0) / 0.99);
+    c.fillRect(14, 140, 228 * Math.max(0, Math.min(1, eff / 0.99)), 10);
+    const tick = 12 + 232 * Math.max(0, Math.min(1, (S.targetFrac || 0) / 0.99));
     c.fillStyle = '#ffffff';
     c.fillRect(tick - 1, 134, 2, 22);
     // runkokuumennus (ilmakehäsyöksy) — näkyy vain kuumetessa
