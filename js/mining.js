@@ -12,15 +12,17 @@ export const ITEM_NAMES = {
   rauta: 'Rautaoksidi', silikaatti: 'Silikaatit', jaa: 'Vesijää',
   teras: 'Teräs', happi: 'Happisäiliö', komposiitti: 'Komposiitti', paneeli: 'Runkopaneeli',
 };
-// jalostusreseptit: kuluttaa varastosta in-osat, tuottaa out-tuotteen
+// jalostusreseptit: kuluttaa varastosta in-osat, tuottaa out-tuotteen varastoon.
+// Happisäiliö ja Runkopaneeli ovat käyttötuotteita: ne varastoidaan ja käytetään
+// erikseen (J/K tai HUD-napit, resources.js) aluksen hapen/rungon täyttöön.
 export const RECIPES = [
   { out: 'teras',       in: { rauta: 3 } },
-  { out: 'happi',       in: { jaa: 2 } },
   { out: 'komposiitti', in: { silikaatti: 3 } },
+  { out: 'happi',       in: { jaa: 2 } },
   { out: 'paneeli',     in: { teras: 2, komposiitti: 1 } },
 ];
 const RAW = ['rauta', 'silikaatti', 'jaa'];
-const MADE = ['teras', 'happi', 'komposiitti', 'paneeli'];
+const MADE = ['teras', 'komposiitti', 'happi', 'paneeli'];
 
 // esiintymätyypit: väri, emissio (hehku) ja suhteellinen yleisyys
 const ORE = [

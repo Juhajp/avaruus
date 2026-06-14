@@ -110,6 +110,7 @@ export function destroyShip(reason){
   destroyed = true;
   heat = 0;
   S.targetFrac = 0; S.speedFrac = 0;
+  S.hull = 1; S.oxygen = 1;   // uusi alus paluun jälkeen — täysi runko ja happi
   plasmaGroup.visible = false;
   heatRow.style.display = 'none';
   document.getElementById('deathReason').textContent = reason;
@@ -162,11 +163,7 @@ export function updateReentry(dt){
   if (density > 0) {
     const drag = Math.exp(-dt * DRAG_K * density * (0.25 + speedNorm));
     const before = S.speedFrac;
-    S.speedFrac *= drag;
-    // estä kaasua kiihdyttämästä takaisin jarrutuksen jälkeen (kumpaankin suuntaan)
-    S.targetFrac = S.speedFrac >= 0
-      ? Math.min(S.targetFrac, S.speedFrac)
-      : Math.max(S.targetFrac, S.speedFrac);
+    S.speedFrac *= drag;   // ilmanvastus pienentää todellista nopeutta (työntövipu ennallaan)
     // jarrutuksessa ilmaan luovutettu liike-energia kuumentaa runkoa (∝ v·dv)
     // lähialueella effFrac = 0.01 + (0.09/0.99)·speedFrac, normalisoitu 0.1:een
     const dvNorm = Math.abs(before - S.speedFrac) * (0.09 / 0.99) / 0.1;
@@ -176,11 +173,9 @@ export function updateReentry(dt){
   // tasainen kitkakuumennus kerryttää; jäähtyminen kunnolla vasta ohuessa ilmassa
   heat += dt * HEAT_RATE * Math.max(0, q - HEAT_Q0);
   if (q < HEAT_Q0) heat -= dt * (density < 0.05 ? COOL_RATE : SOAK_COOL);
-  heat = Math.max(0, heat);
-  if (heat >= 1) {
-    destroyShip(`Kitkakuumennus ylitti rungon sietokyvyn (${inBody ? inBody.def.name : '?'}).`);
-    return;
-  }
+  heat = Math.max(0, Math.min(1, heat));
+  // huom: kuumuus ei enää tuhoa alusta välittömästi — se vaurioittaa rungon
+  // kestävyyttä (resources.js), jonka voi korjata. Tuho vasta kun kestävyys = 0.
 
   // tärinä: dynaamisen paineen tahdissa, kuumana rajumpi
   if (q > 0.002) {

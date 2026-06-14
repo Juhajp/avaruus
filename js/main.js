@@ -8,6 +8,7 @@ import { updateReentry, reentryDebug } from './reentry.js';
 import { updateSurface, updateDescent, checkDescentEntry, tryBeamDown, exitSurface, surfDebug } from './surface.js';
 import { updateFlight } from './flight.js';
 import { updateCockpit } from './cockpit.js';
+import { updateResources } from './resources.js';
 import { updateSpaceHUD } from './hud.js';
 import { setTarget } from './input.js';
 import { S, clampSpeed } from './state.js';
@@ -39,6 +40,7 @@ function animate(){
   for (const m of shaderMats) m.uniforms.uTime.value = S.simTime;
 
   updateCockpit(dt);
+  updateResources(dt);   // happi kuluu + runkovaurio kaikissa tiloissa
 
   if (S.mode === 'space') updateSpaceHUD();
 
@@ -61,6 +63,9 @@ window.__sim = {
   beamUp(){ exitSurface(); },
   surf(){ return surfDebug(); },
   reentry(){ return reentryDebug(); },
+  res(){ return { hull: S.hull, oxygen: S.oxygen, hullHeat: S.hullHeat }; },
+  setHull(v){ S.hull = Math.max(0, Math.min(1, v)); },
+  setOxygen(v){ S.oxygen = Math.max(0, Math.min(1, v)); },
   pause(){   // P-näppäin poistettu — tauko vain testikoukkuna
     S.paused = !S.paused;
     document.getElementById('pausedTag').style.display = S.paused ? 'block' : 'none';

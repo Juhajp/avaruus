@@ -295,7 +295,7 @@
   <div class="big"><span id="speedPct">0.0</span> % c</div>
   <div class="row"><span id="speedKms">0</span> km/s &nbsp;·&nbsp; γ = <span id="gamma">1.00</span></div>
   <div id="speedBarWrap"><div id="speedBar"></div></div>
-  <input id="speedSlider" type="range" min="-0.05" max="0.99" step="0.001" value="0">
+  <input id="speedSlider" type="range" min="-0.05" max="1.0" step="0.01" value="0">
   <div class="row" id="frameDrag" style="display:none; color:#aef7c1;"></div>
   <div class="row" id="heatRow" style="display:none">⚠ kitkakuumennus · runkolämpö <span id="heatPct">0</span> %
     <div id="heatBarWrap"><div id="heatBar"></div></div>
@@ -340,9 +340,9 @@
     <h2>U.S.S. Enterprise NCC-1701-D · matka Neptunukseen 0.99 c ≈ 5 min</h2>
     <table>
       <tr><td>Hiiri</td><td>katselusuunta (hiirilukko, tai vedä nappi pohjassa)</td></tr>
-      <tr><td>W / S &nbsp;tai rulla</td><td>nopeus + / − (Shift = nopeampi säätö)</td></tr>
+      <tr><td>W / S &nbsp;tai rulla</td><td>kaasuvipu eteen / taakse (Shift = nopeampi säätö) — alus jatkaa vauhdilla kun vipu keskellä (inertia)</td></tr>
       <tr><td>Q / E</td><td>kallistus (roll)</td></tr>
-      <tr><td>X &nbsp;/&nbsp; M</td><td>pysäytä / täysi vauhti (0.99 c)</td></tr>
+      <tr><td>X &nbsp;/&nbsp; M</td><td>kaasu nollaan (liu'u) / täysi työntö eteen</td></tr>
       <tr><td>0 – 8</td><td>valitse kohde (0 = Aurinko … 8 = Neptunus)</td></tr>
       <tr><td>F (pidä)</td><td>käänny kohti kohdetta</td></tr>
       <tr><td>O</td><td>kiertoradat näkyviin/pois</td></tr>
@@ -351,7 +351,10 @@
       <tr><td>G</td><td>laskeudu pinnalle (kiviplaneetan kiertoradalla)</td></tr>
       <tr><td>Matalalento</td><td>hidas lasku pintarajan alle vie laskeutumisalukseen — tuuli pyörittää, vastaohjaa A/D; lasku ≤ 55 m/s ja kallistus ≤ 2°</td></tr>
       <tr><td>B</td><td>palaa alukselle — pinnalla vain pysäköidyn sukkulan vierestä</td></tr>
-      <tr><td>Lähialue</td><td>planeetan lähellä nopeus skaalautuu välille 1–10 % c</td></tr>
+      <tr><td>Lähialue</td><td>planeetan lähellä nopeus skaalautuu välille 0–10 % c</td></tr>
+      <tr><td>J / K</td><td>käytä happisäiliö (täytä happi) / runkopaneeli (korjaa runko) — mittarit oikealla ALUS-näytöllä</td></tr>
+      <tr><td>Happi</td><td>kuluu avaruudessa — jalosta vesijäästä happisäiliöitä (Marsilla, C) varastoon ja käytä J:llä ennen kuin loppuu</td></tr>
+      <tr><td>Runko</td><td>vaurioituu ilmakehäsyöksyn kuumuudesta — jalosta runkopaneeleita (Marsilla, C) ja korjaa K:lla</td></tr>
     </table>
     <div class="go" id="bootStatus">Ladataan (Three.js)…</div>
   </div>

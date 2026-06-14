@@ -36,7 +36,7 @@ export function updateSpaceHUD(){
   const fd = document.getElementById('frameDrag');
   if (S.dragBody && S.dragWeight > 0.01) {
     fd.style.display = 'block';
-    fd.textContent = `⊕ kehysseuranta: ${S.dragBody.def.name} ${Math.round(S.dragWeight * 100)} % · nopeusalue 1–10 % c`;
+    fd.textContent = `⊕ kehysseuranta: ${S.dragBody.def.name} ${Math.round(S.dragWeight * 100)} % · nopeusalue 0–10 % c`;
   } else {
     fd.style.display = 'none';
   }

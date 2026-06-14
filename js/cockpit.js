@@ -10,7 +10,7 @@
    kamerassa = aluksen rungossa (lento kääntää alusta). */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { scene, camera, AU, C, C_KMS } from './core.js';
+import { scene, camera, AU, C_KMS } from './core.js';
 import { loadPH, surfDebug } from './surface.js';
 import { bodies } from './bodies.js';
 import { S } from './state.js';
@@ -258,13 +258,6 @@ let falconGlow = null;   // avaruusaluksen moottorihehkun materiaali (ajetaan va
 const _dir = new THREE.Vector3();
 const MONO = 'ui-monospace, Menlo, Consolas, monospace';
 
-function fmtTime(s){
-  if (!isFinite(s)) return '—';
-  s = Math.round(s);
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
-  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
-}
 
 function scrHead(c, hue, title){
   // tumma metallinen reunus (sulautuu kojelautaan) + sisään upotettu ruutu:
@@ -290,8 +283,9 @@ function scrHead(c, hue, title){
 function drawPos(c, hue){
   scrHead(c, hue, S.mode === 'space' ? 'SIJAINTI' : 'ASENTO');
   if (S.mode === 'space') {
-    const cx = 128, cy = 108;
-    const rOf = (au) => 13 + 60 * Math.log10(1 + au * 3) / Math.log10(1 + 30.07 * 3);
+    // kartta hieman pienempänä ja ylempänä, jotta kohdetiedot mahtuvat alle
+    const cx = 128, cy = 84;
+    const rOf = (au) => 11 + 44 * Math.log10(1 + au * 3) / Math.log10(1 + 30.07 * 3);
     c.fillStyle = '#ffd27f';
     c.beginPath(); c.arc(cx, cy, 3, 0, 7); c.fill();
     for (let i = 1; i < bodies.length; i++) {
@@ -319,9 +313,16 @@ function drawPos(c, hue){
     c.fillStyle = '#ffffff';
     c.beginPath(); c.moveTo(7, 0); c.lineTo(-4, 4.5); c.lineTo(-4, -4.5); c.closePath(); c.fill();
     c.restore();
-    c.fillStyle = hue;
-    c.font = '12px ' + MONO;
-    c.fillText('r ' + sAU.toFixed(2) + ' AU', 12, 184);
+    // kohdetiedot kartan alla (siirretty entisestä KOHDE-näytöstä; ei ETA:a)
+    const tgt = bodies[S.targetIdx];
+    const distU = camera.position.distanceTo(tgt.group.position) - tgt.def.r;
+    const distAU = distU / AU;
+    c.fillStyle = '#aef7c1'; c.font = '13px ' + MONO;
+    c.fillText('▸ ' + tgt.def.name, 12, 158);
+    c.fillStyle = hue; c.font = '12px ' + MONO;
+    c.fillText(distAU >= 0.01
+      ? distAU.toFixed(2) + ' AU · ' + Math.round(distAU * 149.6).toLocaleString('fi-FI') + ' milj. km'
+      : Math.max(0, Math.round(distU * 149600)).toLocaleString('fi-FI') + ' km', 12, 178);
   } else {
     // matalalento: keinohorisontti + korkeus näytölle (DOM-overlayt poistettu)
     const sd = surfDebug();
@@ -366,26 +367,49 @@ function drawPos(c, hue){
   }
 }
 
-// keskinäyttö: nopeus — avaruudessa % c / km/s / gamma, matalalennossa m/s
+// keskinäyttö: nopeus — avaruudessa % c / km/s / pystymittari, matalalennossa m/s
 function drawSpd(c, hue){
   scrHead(c, hue, 'NOPEUS');
   if (S.mode === 'space') {
     const eff = S.effFrac || 0;
-    c.fillStyle = '#d4dde6';
+    const tgt = S.targetFrac || 0;
+    // lukemat vasemmalla (peruutus → oranssi)
+    c.fillStyle = eff < -0.0005 ? '#ffae42' : '#d4dde6';
     c.font = '16px ' + MONO;
-    c.fillText((eff * 100).toFixed(eff < 0.105 ? 2 : 1) + ' % c', 12, 64);
+    c.fillText((eff * 100).toFixed(Math.abs(eff) < 0.105 ? 2 : 1) + ' % c', 12, 64);
     c.fillStyle = hue;
     c.font = '14px ' + MONO;
     c.fillText(Math.round(eff * C_KMS).toLocaleString('fi-FI') + ' km/s', 12, 98);
-    c.fillText('γ = ' + (1 / Math.sqrt(1 - eff * eff)).toFixed(2), 12, 120);
-    c.globalAlpha = 0.5;
-    c.strokeStyle = hue; c.lineWidth = 1;
-    c.strokeRect(12, 138, 232, 14);
+    // kaasun (throttle) numeerinen voimakkuus -5..99
+    const thr = Math.round(tgt * 100);
+    c.fillStyle = hue; c.font = '11px ' + MONO;
+    c.fillText('KAASU', 12, 130);
+    c.fillStyle = thr < 0 ? '#ffae42' : '#cfe6d6';
+    c.font = '20px ' + MONO;
+    c.fillText(String(thr), 72, 132);
+    // pystysuora nopeusmittari oikealla: nollataso + negatiivinen (peruutus) alue
+    const bx = 214, bw = 20, bTop = 48, bBot = 176, bH = bBot - bTop;
+    const vMin = -0.05, vMax = 1.0, span = vMax - vMin;   // kaasumerkki ulottuu 100 %:iin
+    const yOf = (v) => bBot - Math.max(0, Math.min(1, (v - vMin) / span)) * bH;
+    const zeroY = yOf(0);
+    c.globalAlpha = 0.5; c.strokeStyle = hue; c.lineWidth = 1;
+    c.strokeRect(bx, bTop, bw, bH);
+    c.globalAlpha = 0.25;
+    for (const v of [0.25, 0.5, 0.75]) { const y = yOf(v); c.beginPath(); c.moveTo(bx, y); c.lineTo(bx + bw, y); c.stroke(); }
     c.globalAlpha = 1;
-    c.fillRect(14, 140, 228 * Math.max(0, Math.min(1, eff / 0.99)), 10);
-    const tick = 12 + 232 * Math.max(0, Math.min(1, (S.targetFrac || 0) / 0.99));
-    c.fillStyle = '#ffffff';
-    c.fillRect(tick - 1, 134, 2, 22);
+    // täyttö: positiivinen nollasta ylös (hue), negatiivinen nollasta alas (oranssi)
+    const yV = yOf(eff);
+    if (eff >= 0) { c.fillStyle = hue; c.fillRect(bx + 1, yV, bw - 2, zeroY - yV); }
+    else { c.fillStyle = '#ff7a3c'; c.fillRect(bx + 1, zeroY, bw - 2, yV - zeroY); }
+    // nollataso korostettuna + merkinnät
+    c.strokeStyle = '#d4dde6'; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(bx - 4, zeroY); c.lineTo(bx + bw, zeroY); c.stroke();
+    c.fillStyle = '#9fb4c8'; c.font = '9px ' + MONO;
+    c.fillText('0', bx - 13, zeroY + 3);
+    c.fillText('c', bx - 13, bTop + 8);
+    // tavoitemerkki (valkoinen viiva mittarin yli)
+    const yT = yOf(tgt);
+    c.fillStyle = '#ffffff'; c.fillRect(bx - 3, yT - 1, bw + 6, 2);
     // runkokuumennus (ilmakehäsyöksy) — näkyy vain kuumetessa
     const hh = S.hullHeat || 0;
     if (hh > 0.01) {
@@ -396,11 +420,6 @@ function drawSpd(c, hue){
       c.globalAlpha = 0.35; c.strokeStyle = '#ffae42'; c.lineWidth = 1;
       c.strokeRect(66, 158, 120, 9); c.globalAlpha = 1;
       c.fillStyle = hc; c.fillRect(68, 160, 116 * Math.min(1, hh), 5);
-    }
-    if (S.dragBody && S.dragWeight > 0.01) {
-      c.fillStyle = '#aef7c1';
-      c.font = '11px ' + MONO;
-      c.fillText('⊕ ' + S.dragBody.def.name + ' ' + Math.round(S.dragWeight * 100) + ' %', 12, 178);
     }
   } else {
     const sd = surfDebug();
@@ -427,37 +446,26 @@ function drawSpd(c, hue){
   }
 }
 
-// oikea näyttö: kohteen tiedot — nimi, etäisyys ja ETA kuten HUD:ssa
+// oikea näyttö: aluksen resurssit — runko + happi mittarit ja varastot
 function drawTgt(c, hue){
-  scrHead(c, hue, 'KOHDE');
+  scrHead(c, hue, S.mode === 'space' ? 'ALUS' : 'KOHDE');
   if (S.mode === 'space') {
-    const tgt = bodies[S.targetIdx];
-    const distU = camera.position.distanceTo(tgt.group.position) - tgt.def.r;
-    const distAU = distU / AU;
-    c.fillStyle = '#d4dde6';
-    c.font = '14px ' + MONO;
-    c.fillText(tgt.def.name, 12, 58);
-    c.fillStyle = hue;
-    c.font = '15px ' + MONO;
-    if (distAU >= 0.01) {
-      c.fillText(distAU.toFixed(2) + ' AU', 12, 96);
-      c.font = '12px ' + MONO;
-      c.fillText('(' + Math.round(distAU * 149.6).toLocaleString('fi-FI') + ' milj. km)', 12, 116);
-    } else {
-      c.fillText(Math.max(0, Math.round(distU * 149600)).toLocaleString('fi-FI') + ' km', 12, 96);
-    }
-    const v = (S.effFrac || 0) * C;
-    c.font = '14px ' + MONO;
-    c.fillText('ETA ' + (v > 0.5 ? fmtTime(distU / v) : '—'), 12, 144);
-    // tähtäyskehikko koristeena
-    c.strokeStyle = hue; c.globalAlpha = 0.5; c.lineWidth = 1.5;
-    c.beginPath();
-    c.moveTo(196, 60); c.lineTo(186, 60); c.lineTo(186, 70);
-    c.moveTo(236, 60); c.lineTo(246, 60); c.lineTo(246, 70);
-    c.moveTo(196, 110); c.lineTo(186, 110); c.lineTo(186, 100);
-    c.moveTo(236, 110); c.lineTo(246, 110); c.lineTo(246, 100);
-    c.stroke();
-    c.globalAlpha = 1;
+    const hullCol = v => v > 0.5 ? '#4dff88' : v > 0.25 ? '#ffd24d' : '#ff5a4d';
+    const oxyCol  = v => v > 0.5 ? '#5fd2ff' : v > 0.25 ? '#ffd24d' : '#ff5a4d';
+    const drawRes = (label, val, y, col, stock, sLbl) => {
+      c.fillStyle = '#d4dde6'; c.font = '13px ' + MONO;
+      c.fillText(label, 12, y);
+      c.fillStyle = col(val); c.font = '13px ' + MONO;
+      c.fillText(Math.round(val * 100) + ' %', 198, y);
+      c.globalAlpha = 0.5; c.strokeStyle = hue; c.lineWidth = 1;
+      c.strokeRect(12, y + 8, 232, 13); c.globalAlpha = 1;
+      c.fillStyle = col(val);
+      c.fillRect(14, y + 10, 228 * Math.max(0, Math.min(1, val)), 9);
+      c.fillStyle = hue; c.font = '11px ' + MONO;
+      c.fillText(sLbl + ' ×' + stock, 12, y + 38);
+    };
+    drawRes('RUNKO', S.hull || 0,   60, hullCol, S.inv.paneeli || 0, 'paneeli');
+    drawRes('HAPPI', S.oxygen || 0, 122, oxyCol,  S.inv.happi || 0,  'säiliö');
   } else {
     const sd = surfDebug();
     const v = sd.descentV();

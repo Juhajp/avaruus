@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { AU, C, DEG, camera } from './core.js';
 import { bodies } from './bodies.js';
-import { S, clampSpeed } from './state.js';
+import { S, clampThrottle } from './state.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -14,15 +14,42 @@ const _vX = new THREE.Vector3(1, 0, 0);
 export function updateFlight(dt){
   // nopeuden säätö näppäimillä (tavoitenopeus voi mennä negatiiviseksi → peruutus)
   const rate = (S.keys.ShiftLeft || S.keys.ShiftRight) ? 1.2 : 0.30;
-  if (S.keys.KeyW || S.keys.ArrowUp)   S.targetFrac = clampSpeed(S.targetFrac + rate * dt);
-  if (S.keys.KeyS || S.keys.ArrowDown) S.targetFrac = clampSpeed(S.targetFrac - rate * dt);
+  if (S.keys.KeyW || S.keys.ArrowUp)   S.targetFrac = clampThrottle(S.targetFrac + rate * dt);
+  if (S.keys.KeyS || S.keys.ArrowDown) S.targetFrac = clampThrottle(S.targetFrac - rate * dt);
   if (S.keys.KeyQ) S.roll += 1.4 * dt;
   if (S.keys.KeyE) S.roll -= 1.4 * dt;
-  // inertia: nopeus liukuu tavoitteeseen. Kiihdytys vastaa ripeämmin kuin
-  // hidastus/coast, joten vauhdin pudottaminen tai nollaan tulo tuntuu massalta.
-  const k = (Math.abs(S.targetFrac) > Math.abs(S.speedFrac)) ? 2.5 : 1.1;
-  S.speedFrac += (S.targetFrac - S.speedFrac) * (1 - Math.exp(-dt * k));
-  if (Math.abs(S.speedFrac - S.targetFrac) < 0.0004) S.speedFrac = S.targetFrac;
+  // Liikemäärämalli (Newtonin inertia): targetFrac on KAASUVIPU (työntö), EI
+  // tavoitenopeus. Vipu keskellä (0) = ei työntöä → alus jatkaa vauhdillaan
+  // (coast, ei jarruta). Eteen = kiihdytys, taakse = jarrutus/peruutustyöntö.
+  // speedFrac (todellinen nopeus) integroituu työnnöstä, rajataan
+  // [-0.05, 0.99]:een. Siksi täsmälleen nopeuteen 0 pysähtyminen on vaikeaa:
+  // työntö on nollattava juuri oikealla hetkellä, muuten ylittää nollan.
+  // Nopeusmittari näyttää speedFracin (todellisen), kaasumerkki targetFracin.
+  const lever = S.targetFrac;
+  const DEAD = 0.004;
+  let thrust = 0;
+  if (lever > DEAD)       thrust = lever;           // eteen 0..1 (täysi kaasu 1.0 = täysi työntö)
+  else if (lever < -DEAD) thrust = lever / 0.05;    // taakse 0..-1 (täysi -0.05 → -1)
+  // inertia vahvempi lähellä planeettaa: kiihtyvyys laskee kehysseurannan painon
+  // mukaan (kaukana 0.14/s → pinnan tuntumassa ~0.07/s). Lähivyöhykkeen
+  // nopeuskartoitus puristaa jo itsessään ~10× (0.99→0.10 c), joten kerroin
+  // pidetään maltillisena ettei ohjaus jähmety
+  const ACCEL = 0.14 * (1 - 0.5 * S.dragWeight);
+  // easing kohti nollaa: kun työntö JARRUTTAA (vastakkainen nopeudelle), pehmennä
+  // sitä nopeuden lähestyessä nollaa → sulava pysähtyminen, ei nykäystä nollassa
+  const braking = thrust !== 0 && Math.sign(thrust) === -Math.sign(S.speedFrac);
+  let ease = 1;
+  if (braking) {
+    const x = Math.min(1, Math.abs(S.speedFrac) / 0.04);
+    // pehmennys nollan lähellä, mutta ei jähmety nollaan (alaraja 0.35) ettei
+    // pysähdys veny asymptoottiseksi mateluksi
+    ease = 0.35 + 0.65 * (x * x * (3 - 2 * x));
+  }
+  let nv = S.speedFrac + thrust * ACCEL * ease * dt;
+  // jarruttaessa asetu täsmälleen nollaan (ei ylitystä; easingin asymptootti
+  // katkaistaan, jotta peruutus voi sitten alkaa nollasta)
+  if (braking && (Math.abs(nv) < 0.0015 || Math.sign(nv) !== Math.sign(S.speedFrac))) nv = 0;
+  S.speedFrac = Math.max(-0.05, Math.min(0.99, nv));
 
   // käänny kohti kohdetta (F)
   if (S.keys.KeyF) {
@@ -35,10 +62,12 @@ export function updateFlight(dt){
 
   camera.rotation.set(S.pitch, S.yaw, S.roll, 'YXZ');
 
-  // liike — vyöhykkeen sisällä paikallinen nopeustila: säädin kattaa 0.01–0.1 c
+  // liike — vyöhykkeen sisällä paikallinen nopeustila: säädin kattaa 0–0.1 c
   const vGlobal = S.speedFrac;
   const aLocal = Math.abs(S.speedFrac);
-  const vLocal = aLocal > 0.001 ? Math.sign(S.speedFrac) * (0.01 + 0.09 * (aLocal / 0.99)) : 0;
+  // jatkuva kartoitus 0→0.10 c (ei 1 % c lattiaa) → effFrac liukuu pehmeästi
+  // nollaan jarruttaessa lähellä planeettaa, ei äkkipysähdystä
+  const vLocal = Math.sign(S.speedFrac) * 0.10 * (aLocal / 0.99);
   S.effFrac = vGlobal * (1 - S.dragWeight) + vLocal * S.dragWeight;
   const fwd = _v.set(0, 0, -1).applyQuaternion(camera.quaternion);
   camera.position.addScaledVector(fwd, S.effFrac * C * dt);
