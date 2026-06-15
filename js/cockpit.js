@@ -619,15 +619,18 @@ function buildCockpit(opts){
 
   // kehys/rivat/tummat pinnat: kulunut paneloitu metalli (Poly Haven),
   // canvas-sävy jää varalle kunnes lataus valmistuu
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x383c42, roughness: 0.55, metalness: 0.7, flatShading: true });
-  applyPH(frameMat, 'metal_plate_02', [1.1, 1.3, 1.65], [2, 1]);
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x202329, roughness: 0.75, metalness: 0.4 });
-  applyPH(darkMat, 'metal_plate_02', [0.65, 0.75, 0.95], [1, 1]);
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0x26282c, roughness: 0.8, metalness: 0.45 });
-  applyPH(floorMat, 'metal_plate', [1.7, 1.7, 1.75], [3, 3]);   // kyynelpeltilattia
+  // avaruusaluksen kehikko sinisävyiseksi (yhtenäinen sinisen kojelaudan kanssa);
+  // sukkula säilyttää lämpimän/neutraalin metallisävynsä
+  const blue = !opts.shuttle;
+  const frameMat = new THREE.MeshStandardMaterial({ color: blue ? 0x2b3340 : 0x383c42, roughness: 0.55, metalness: 0.7, flatShading: true });
+  applyPH(frameMat, 'metal_plate_02', blue ? [0.6, 0.92, 1.9] : [1.1, 1.3, 1.65], [2, 1]);
+  const darkMat = new THREE.MeshStandardMaterial({ color: blue ? 0x1a2230 : 0x202329, roughness: 0.75, metalness: 0.4 });
+  applyPH(darkMat, 'metal_plate_02', blue ? [0.5, 0.72, 1.3] : [0.65, 0.75, 0.95], [1, 1]);
+  const floorMat = new THREE.MeshStandardMaterial({ color: blue ? 0x20242c : 0x26282c, roughness: 0.8, metalness: 0.45 });
+  applyPH(floorMat, 'metal_plate', blue ? [1.3, 1.5, 1.95] : [1.7, 1.7, 1.75], [3, 3]);   // kyynelpeltilattia
   const panelT = makePanelTex();
   const wallMat = new THREE.MeshStandardMaterial({
-    map: panelT, roughness: 0.92, metalness: 0.12, side: THREE.DoubleSide,
+    map: panelT, color: blue ? 0x6f829c : 0xffffff, roughness: 0.92, metalness: 0.12, side: THREE.DoubleSide,
     bumpMap: panelT, bumpScale: 0.5,
   });
   const con = makeConsoleTex(opts.accentCss);
@@ -647,8 +650,8 @@ function buildCockpit(opts){
     roughness: 0.55, metalness: 0.22, side: THREE.DoubleSide, depthWrite: false,
   });
   const seatMat = new THREE.MeshStandardMaterial({ color: opts.seat, roughness: 0.95, metalness: 0.05 });
-  const pipeMat = new THREE.MeshStandardMaterial({ color: 0x4c5056, roughness: 0.45, metalness: 0.8, flatShading: true });
-  applyPH(pipeMat, 'metal_plate_02', [0.95, 1.1, 1.4], [1, 2]);
+  const pipeMat = new THREE.MeshStandardMaterial({ color: blue ? 0x39414f : 0x4c5056, roughness: 0.45, metalness: 0.8, flatShading: true });
+  applyPH(pipeMat, 'metal_plate_02', blue ? [0.6, 0.92, 1.75] : [0.95, 1.1, 1.4], [1, 2]);
   // kaarevan näyttöpaneelin taustakehys (DoubleSide → sisäpinta näkyy pelaajalle)
   const bezelMat = new THREE.MeshStandardMaterial({ color: 0x23262c, roughness: 0.7, metalness: 0.5, side: THREE.DoubleSide });
   applyPH(bezelMat, 'metal_plate_02', [0.7, 0.78, 0.95], [3, 1]);
@@ -727,17 +730,17 @@ function buildCockpit(opts){
   // kaarevaan näyttöpaneeliin — kolme ruutua kiertävät jaettua kaarta ja
   // yhtenäinen kaareva taustakehys sitoo ne yhdeksi kojelaudaksi. Nopeus ja
   // kohde himmeämmällä emissiolla ettei teksti heku bloomissa.
-  const makeLiveScreen = (kind, intensity) => {
+  const makeLiveScreen = (kind, intensity, matte) => {
     const cv = document.createElement('canvas');
     cv.width = 256; cv.height = 192;
     const emissiveMap = new THREE.CanvasTexture(cv);
     emissiveMap.colorSpace = THREE.SRGBColorSpace;
     emissiveMap.anisotropy = 8;
     _live.push({ kind, ctx: cv.getContext('2d'), tex: emissiveMap, hue: opts.screenCss, group: g });
-    return new THREE.MeshStandardMaterial({
-      color: 0x000000, emissive: 0xffffff, emissiveMap,
-      emissiveIntensity: intensity, roughness: 0.3,
-    });
+    const p = { color: 0x000000, emissive: 0xffffff, emissiveMap, emissiveIntensity: intensity };
+    // matte = ei spekulaariheijastusta (Lambert ilman kiiltoa), muuten kiiltävä Standard
+    return matte ? new THREE.MeshLambertMaterial(p)
+                 : new THREE.MeshStandardMaterial({ ...p, roughness: 0.3 });
   };
   // sukkulalla kallistuksen näyttö (keinohorisontti = 'pos'/ASENTO) keskelle
   const SCR = opts.shuttle
@@ -749,20 +752,65 @@ function buildCockpit(opts){
   const ARC = opts.shuttle
     ? { R: 3.0, angs: [-0.135, 0, 0.135], a: 0.24, tilt: -0.24, w: 0.40, h: 0.30, y: 0.17, arch: 0.05 }
     : { R: 1.45, angs: [-0.265, 0, 0.265], a: 0.40, tilt: -0.26, w: 0.32, h: 0.215, y: 0.19, arch: 0.05 };
-  const scrY = dashY + ARC.y;
-  const arcCz = dashZ + ARC.R;
-  // tumma metallikonsoli näyttöjen takana aivan kiinni (gap ~1 cm) → ruudut
-  // upotettuina, eivät kellu. Reunus jää näyttöjen ympärille kehykseksi.
-  arcBezel(dash, bezelMat, arcCz, ARC.R + 0.022, scrY, ARC.h / 2 + 0.012, -ARC.a, ARC.a, ARC.arch, 26);
-  for (let i = 0; i < 3; i++) {
-    const th = ARC.angs[i];
-    const holder = new THREE.Group();
-    holder.position.set(ARC.R * Math.sin(th), scrY, arcCz - ARC.R * Math.cos(th));
-    holder.rotation.set(ARC.tilt, -th, 0);
-    dash.add(holder);
-    const sc = new THREE.Mesh(screenGeo(ARC.w, ARC.h, th, ARC.R, ARC.arch, ARC.a), makeLiveScreen(SCR[i][0], SCR[i][1]));
-    sc.position.z = 0.012;
-    holder.add(sc);
+  if (opts.shuttle) {
+    // laskeutumissukkula: kaareva panoraamapaneeli (ennallaan)
+    const scrY = dashY + ARC.y;
+    const arcCz = dashZ + ARC.R;
+    // tumma metallikonsoli näyttöjen takana aivan kiinni (gap ~1 cm) → ruudut
+    // upotettuina, eivät kellu. Reunus jää näyttöjen ympärille kehykseksi.
+    arcBezel(dash, bezelMat, arcCz, ARC.R + 0.022, scrY, ARC.h / 2 + 0.012, -ARC.a, ARC.a, ARC.arch, 26);
+    for (let i = 0; i < 3; i++) {
+      const th = ARC.angs[i];
+      const holder = new THREE.Group();
+      holder.position.set(ARC.R * Math.sin(th), scrY, arcCz - ARC.R * Math.cos(th));
+      holder.rotation.set(ARC.tilt, -th, 0);
+      dash.add(holder);
+      const sc = new THREE.Mesh(screenGeo(ARC.w, ARC.h, th, ARC.R, ARC.arch, ARC.a), makeLiveScreen(SCR[i][0], SCR[i][1]));
+      sc.position.z = 0.012;
+      holder.add(sc);
+    }
+  } else {
+    // avaruusalus: kojelauta = valmis bittikartta (assets/kojelauta.png),
+    // jonka näyttöaukkojen päälle ladotaan elävät näytöt 4-kulmaisina
+    // paneeleina (reunanäytöt ovat perspektiivissä = puolisuunnikkaita).
+    const IW = 3298, IH = 930;            // png-tekstuurin pikselikoko
+    const PW = 1.18, PH = PW * IH / IW;   // paneelin koko (kuvasuhde säilyy)
+    const panelY = dashY + 0.19, panelZ = dashZ, ptilt = -0.52;
+    const dashTex = new THREE.TextureLoader().load('assets/kojelauta.png');
+    dashTex.colorSpace = THREE.SRGBColorSpace; dashTex.anisotropy = 8;
+    const panelMat = new THREE.MeshStandardMaterial({
+      map: dashTex, emissiveMap: dashTex, emissive: 0xffffff, emissiveIntensity: 0.9,
+      transparent: false, alphaTest: 0.5, roughness: 0.6, metalness: 0.3,
+    });
+    const panelG = new THREE.Group();
+    panelG.position.set(0, panelY, panelZ);
+    panelG.rotation.x = ptilt;
+    dash.add(panelG);
+    panelG.add(new THREE.Mesh(new THREE.PlaneGeometry(PW, PH), panelMat));
+    g.userData.dashCrop = { panelG, PH };   // näkymän alarajausta varten
+    // png-pikseli → paneelin paikalliskoordinaatti
+    const P = (x, y, z) => [(x / IW - 0.5) * PW, (0.5 - y / IH) * PH, z];
+    // havaitut näyttöaukkojen kulmat (png-pikseleinä): vasen=pos, keski=spd, oikea=tgt
+    const SCRN = [
+      { c: { tl: [444, 184], tr: [1178, 117], br: [1155, 681], bl: [371, 753] }, kind: 'pos', int: 0.95 },
+      { c: { tl: [1339, 99], tr: [2000, 108], br: [2014, 658], bl: [1328, 661] }, kind: 'spd', int: 0.72 },
+      { c: { tl: [2161, 117], tr: [2870, 189], br: [2918, 739], bl: [2186, 679] }, kind: 'tgt', int: 0.72 },
+    ];
+    for (const s of SCRN) {
+      const z = 0.012, c = s.c;
+      let q = [P(...c.tl, z), P(...c.tr, z), P(...c.br, z), P(...c.bl, z)];
+      // 98 % koko: kutista kukin näyttö hieman kohti omaa keskipistettään
+      const mx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
+      const my = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
+      q = q.map(p => [mx + (p[0] - mx) * 0.98, my + (p[1] - my) * 0.98, p[2]]);
+      const [tl, tr, br, bl] = q;
+      const geo = new THREE.BufferGeometry();
+      // CCW edestä (+Z) → etupinta pelaajaa kohti
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([...tl, ...br, ...tr, ...tl, ...bl, ...br], 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0], 2));
+      geo.computeVertexNormals();
+      panelG.add(new THREE.Mesh(geo, makeLiveScreen(s.kind, s.int, s.kind === 'spd')));
+    }
   }
   blinker(dash, 0xffb340, -0.30, dashY + 0.06, dashZ + 0.20, 0.9, 0.4);
   blinker(dash, 0xff5340, 0.30, dashY + 0.06, dashZ + 0.20, 1.7, 1.3);
@@ -1163,6 +1211,19 @@ fillLight.position.set(0, 0.25, -0.45);
 camera.add(fillLight);
 
 let _lastDraw = -9;
+
+// näkymän alareunan rajaus: musta letterbox-palkki, jonka yläreuna seuraa
+// kojelaudan PNG:n alareunaa (projisoidaan paneelin alareuna ruudulle)
+const _cropV = new THREE.Vector3();
+let _cropEl = null;
+function dashCropEl(){
+  if (_cropEl) return _cropEl;
+  _cropEl = document.createElement('div');
+  _cropEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;background:#000;z-index:3;pointer-events:none;display:none;';
+  document.body.appendChild(_cropEl);
+  return _cropEl;
+}
+
 export function updateCockpit(dt = 0.016){
   // moodisiirtymät: pinnalle → pysäköi sukkula; pois pinnalta → scene
   // hävitti pysäköidyn mallin resursseineen, pudota viite
@@ -1176,6 +1237,20 @@ export function updateCockpit(dt = 0.016){
   falconExt.visible = S.mode === 'space' && extView;
   shuttleExt.visible = S.mode === 'descent' && extView;
   fillLight.visible = S.mode !== 'surface' && !extView;
+  // rajaa näkymä kojelaudan alareunaan: musta palkki PNG:n alalipan alapuolelle
+  const _crop = dashCropEl(), _dc = bridgeCockpit.userData.dashCrop;
+  if (bridgeCockpit.visible && _dc) {
+    camera.updateMatrixWorld();
+    _dc.panelG.updateWorldMatrix(true, false);
+    _cropV.set(0, -_dc.PH * 0.47, 0.02);          // PNG:n näkyvä alareuna paneelin lokaalikoordinaatistossa
+    _dc.panelG.localToWorld(_cropV);
+    _cropV.project(camera);
+    const yPx = (1 - (_cropV.y * 0.5 + 0.5)) * window.innerHeight;
+    _crop.style.display = 'block';
+    _crop.style.height = Math.max(0, Math.round(window.innerHeight - yPx)) + 'px';
+  } else if (_crop.style.display !== 'none') {
+    _crop.style.display = 'none';
+  }
   if (extView && S.mode !== 'surface') updateExtFit();
   updateSway(dt);
   // moottorihehku skaalautuu vauhdista: sammuksissa musta, kovassa vauhdissa

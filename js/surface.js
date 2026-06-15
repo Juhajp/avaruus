@@ -50,7 +50,7 @@ function updateDaylight(){
     // valo ja varjokamera seuraavat pelaajaa, mutta keskus napsautetaan
     // varjokartan tekseliruudukkoon → varjot eivät uimari/savua kävellessä,
     // vaan liikkuvat vain auringon suunnan mukana (ja tekseliaskelin)
-    const texel = 200 / 4096;                       // frustumin leveys / kartan koko
+    const texel = 140 / 4096;                       // frustumin leveys / kartan koko
     const sx = Math.round(camera.position.x / texel) * texel;
     const sy = Math.round(camera.position.y / texel) * texel;
     const sz = Math.round(camera.position.z / texel) * texel;
@@ -1429,7 +1429,16 @@ function buildSurfaceScene(name){
         re.set(hash2(i, 14) * 3.14, hash2(i, 15) * 6.28, 0);
         rq.setFromEuler(re);
         rs.set(s, s * 0.7, s);
-        m4.compose(_vp.set(x, surfHeightFn(x, z) + 0.05, z), rq, rs);
+        // maaston mesh interpoloi ~10 m kolmioilla, joten korkeusfunktio on
+        // konveksilla töyssyllä meshin yläpuolella → pieni kivi jäisi kellumaan.
+        // Naapurinäytteiden keskiarvo arvioi meshin korkeuden (konveksilla < keskus
+        // ≈ kolmion jänne); ota alempi keskuksesta/keskiarvosta + pieni upotus →
+        // kivi ei koskaan kellu, korkeintaan painuu hieman maahan
+        const rr = 5;
+        const hAvg = (surfHeightFn(x - rr, z) + surfHeightFn(x + rr, z)
+                    + surfHeightFn(x, z - rr) + surfHeightFn(x, z + rr)) * 0.25;
+        const hg = Math.min(surfHeightFn(x, z), hAvg);
+        m4.compose(_vp.set(x, hg - s * 0.04, z), rq, rs);
       });
     pebbles.castShadow = true;
   }
@@ -1622,10 +1631,11 @@ function buildSurfaceScene(name){
     dl.shadow.mapSize.set(4096, 4096);
     dl.shadow.camera.left = -200; dl.shadow.camera.right = 200;
     dl.shadow.camera.top = 200; dl.shadow.camera.bottom = -200;
-    // tiukka kate (±100) keskittää 4096 tekseliä pelaajan lähelle → ~0,049 yks/teksel,
-    // terävä reuna lähikiviin (kauempana olevat eivät heitä varjoa, mutta ne ovat pieniä)
-    dl.shadow.camera.left = -100; dl.shadow.camera.right = 100;
-    dl.shadow.camera.top = 100; dl.shadow.camera.bottom = -100;
+    // tiukka kate (±70) keskittää 4096 tekseliä pelaajan lähelle → ~0,034 yks/teksel,
+    // terävä reuna + vähemmän aknea/reunakohinaa lähikohteissa (kauempana olevat
+    // eivät heitä varjoa, mutta ne ovat pieniä)
+    dl.shadow.camera.left = -70; dl.shadow.camera.right = 70;
+    dl.shadow.camera.top = 70; dl.shadow.camera.bottom = -70;
     // valo on aina 800 yks päässä pelaajasta → tiukka near/far pakkaa syvyystarkkuuden
     // → poistaa kahlaavan kulman akne ("pulppuava mössö")
     dl.shadow.camera.near = 480; dl.shadow.camera.far = 1180;

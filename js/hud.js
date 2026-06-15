@@ -24,9 +24,9 @@ function fmtTime(s){
 }
 
 export function updateSpaceHUD(){
-  // FOV kasvaa nopeuden myötä
-  const fov = 60 + 24 * Math.pow(S.effFrac, 3);
-  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  // FOV pidetään vakiona: nopeus ei saa zoomata näkymää (ohjaamo on kameran
+  // lapsi, joten FOV:n muutos siirtäisi myös ohjaamoa). Vauhdin tuntu tulee warpista.
+  if (camera.fov !== 60) { camera.fov = 60; camera.updateProjectionMatrix(); }
 
   // HUD — näytetään todellinen nopeus (lähialuetila huomioiden)
   hud.pct.textContent = (S.effFrac * 100).toFixed(S.effFrac < 0.105 ? 2 : 1);

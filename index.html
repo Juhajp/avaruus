@@ -39,9 +39,11 @@
   #speedBar { height:100%; width:0%; background:linear-gradient(90deg,#1f6fb0,#5fd2ff,#fff); transition:width 0.08s linear; }
   #speedSlider { width:100%; margin-top:8px; accent-color:#5fd2ff; }
 
+  /* 0–8 planeettanapit piilotettu (toiminnallisuus säilyy numeronäppäimillä 0–8);
+     kohdetieto näkyy ohjaamon SIJAINTI-näytöllä */
   #bodyBar {
     bottom:16px; left:50%; transform:translateX(-50%);
-    display:flex; gap:6px; padding:8px 10px;
+    display:none; gap:6px; padding:8px 10px;
   }
   #bodyBar button {
     background:rgba(20,50,90,0.45);
