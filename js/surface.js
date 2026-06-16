@@ -1,7 +1,9 @@
 /* ---------------- Pintamoodi: teleporttaus planeetoille ---------------- */
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { renderer, scene, camera, renderPass, setHeatShimmer } from './core.js';
-import { bodies, placeNearBody } from './bodies.js';
+import { bodies, placeNearBody, makeNebula } from './bodies.js';
 import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
 import { makeSky } from './sky.js';
@@ -12,7 +14,7 @@ import { S } from './state.js';
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
 let pmrem = null;
 
-export const ROCKY = new Set(['Merkurius', 'Venus', 'Maa', 'Mars']);
+export const ROCKY = new Set(['Merkurius', 'Venus', 'Maa', 'Mars', 'Kuu']);
 let surfaceBody = null;
 let bridgeWasOn = true;
 let surfX = 0, surfZ = 0;
@@ -122,6 +124,14 @@ function updateDaylight(){
     d.sc.fog.color.copy(_c2);
   }
 
+  // Maa taivaalla (Kuu): vaihe kuun auringosta, akselipyörintä kuten avaruudessa
+  if (d.earthSky) {
+    const u = d.earthSky.material.uniforms;
+    u.uSun.value.copy(_sunDir);
+    u.uTime.value = S.simTime;
+    d.earthSky.rotation.y = S.simTime * 0.0263;   // ~Maan pyörähdys (sama tahti kuin radalla)
+  }
+
   // aurinkokiekko seuraa rataa ja värjäytyy ruskossa
   if (d.disc) {
     d.disc.visible = elev > -0.06;
@@ -139,6 +149,7 @@ function updateDaylight(){
   // ilmakehällisten yötähdet häivytetään sisään pimeällä (neliöllisesti —
   // muuten tähdet erottuvat jo iltapäivän kirkkaalla taivaalla)
   if (d.starsMat && d.cfg.nightStars) d.starsMat.opacity = 0.7 * (1 - dayF) * (1 - dayF);
+  if (d.nebula && d.cfg.nightStars) d.nebula.material.opacity = 0.6 * (1 - dayF) * (1 - dayF);
 
   // kypärävalo: pinnalla yöksi automaattisesti päälle (silmien yläpuolelta
   // kohti maata). Voimakkuus kasvaa pimeyden mukaan, sammuu päivällä.
@@ -454,14 +465,23 @@ function makeSplatMaterial(detail, p){
     sh.uniforms.uTexRock = uRock;
     sh.uniforms.uSecondScale = { value: p.secondScale };
     sh.uniforms.uRockScale = { value: p.rockScale };
+    sh.uniforms.uDesat = { value: p.desat ?? 0 };   // valokuvatekstuurin kylläisyyden lasku (Kuu → harmaa)
+    sh.uniforms.uDust = { value: p.dust ?? 0 };      // regoliittipölyn peittävyys (Kuu)
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>',
         '#include <common>\nattribute vec3 aSplat;\nvarying vec3 vSplat;\nvarying vec3 vWPos;\nvarying vec3 vWNorm;')
       .replace('#include <fog_vertex>',
         '#include <fog_vertex>\nvSplat = aSplat;\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNorm = normalize(mat3(modelMatrix) * objectNormal);');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>',
-        '#include <common>\nuniform sampler2D uTexSecond;\nuniform sampler2D uTexRock;\nuniform float uSecondScale;\nuniform float uRockScale;\nvarying vec3 vSplat;\nvarying vec3 vWPos;\nvarying vec3 vWNorm;')
+      .replace('#include <common>', [
+        '#include <common>',
+        'uniform sampler2D uTexSecond;\nuniform sampler2D uTexRock;\nuniform float uSecondScale;\nuniform float uRockScale;\nuniform float uDesat;\nuniform float uDust;',
+        'varying vec3 vSplat;\nvarying vec3 vWPos;\nvarying vec3 vWNorm;',
+        // halpa interpoloitu arvokohina (jauhemainen pölyrae)
+        'float dHash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }',
+        'float dNoise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); f=f*f*(3.0-2.0*f);',
+        '  return mix(mix(dHash(i),dHash(i+vec2(1.0,0.0)),f.x), mix(dHash(i+vec2(0.0,1.0)),dHash(i+vec2(1.0,1.0)),f.x), f.y); }',
+      ].join('\n'))
       .replace('#include <map_fragment>', [
         'vec3 splatCol = texture2D( map, vMapUv ).rgb * vSplat.x;',
         'splatCol += texture2D( uTexSecond, vMapUv * uSecondScale ).rgb * vSplat.y;',
@@ -471,7 +491,17 @@ function makeSplatMaterial(detail, p){
         'splatCol += (texture2D( uTexRock, rp.zy ).rgb * triW.x',
         '  + texture2D( uTexRock, rp.xz ).rgb * triW.y',
         '  + texture2D( uTexRock, rp.xy ).rgb * triW.z) * vSplat.z;',
+        // regoliittipöly: hieno jauhemainen kerros joka pehmentää kivisen kontrastin
+        // kohti pehmeää harmaata; kerääntyy enemmän tasaisille (pöly laskeutuu).
+        'if (uDust > 0.0) {',
+        '  float dLum = dot(splatCol, vec3(0.299,0.587,0.114));',
+        '  float dMask = mix(0.5, 1.0, clamp(vWNorm.y, 0.0, 1.0));',
+        '  float grain = (dNoise(vWPos.xz * 6.0) * 0.7 + dNoise(vWPos.xz * 22.0) * 0.3) - 0.5;',
+        '  vec3 dustCol = vec3(dLum * 1.12 + grain * 0.16);',   // jauhemainen, pinnan kirkkaudesta + rae
+        '  splatCol = mix(splatCol, dustCol, clamp(uDust * dMask, 0.0, 1.0));',
+        '}',
         'diffuseColor.rgb *= splatCol;',
+        'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.299,0.587,0.114))), uDesat);',
       ].join('\n'));
   };
   loadPH(p.base, 'diff', true).then(t => { if (t) { mat.map = t; mat.needsUpdate = true; } });
@@ -636,6 +666,21 @@ export const SURFACE_CONFIGS = {
       dunes: true,
       dust: true,
     },
+  },
+  Kuu: {
+    title: 'KUU — PINTA',
+    info: 'Ei kaasukehää: taivas on pikimusta keskelläkin päivää ja tähdet näkyvät. Painovoima 1/6 Maan. Harmaata regoliittia ja kraattereita. Maa näkyy taivaalla sinisenä kiekkona. Jäljellä Apollo-laskeutumispaikkojen kalustoa: laskeutumismoduulien alaosat, kuukulkijat ja Yhdysvaltain liput.',
+    sky: 0x000000, fog: null,
+    ground: 0x9a9896, ground2: 0x5c5b59, rock: 0x807e7c,
+    hScale: 22, freq: 0.0048,
+    pbr: { base: 'gravelly_sand', second: 'rocks_ground_05', rock: 'rock_boulder_dry',
+           baseScale: 6, secondScale: 0.45, rockScale: 16, tint: 0.6, bright: 1.1, desat: 0.72, dust: 0.75 },
+    dayLength: 360,    // sidotusti kytketty kiertoon: aurinko kiertää taivaan ja Maan vaihe muuttuu
+    sun: { color: [4.0, 4.0, 3.95], size: 95, intensity: 1.6 },
+    hemi: [0x0c0c0e, 0x161618, 0.14], stars: true,
+    earthInSky: true, apollo: true,
+    // todistetusti: tiheä kraatteröinti
+    features: { craters: 18 },
   },
 };
 
@@ -1314,6 +1359,244 @@ function makeGrassMaterial(fadeStart, fadeEnd){
   return mat;
 }
 
+/* ---- Kuu: Maa taivaalla + Apollo-laskeutumispaikan kalusto ---- */
+// putkimainen tukivarsi kahden pisteen välille (laskeutumisjalat ym.)
+function strut(parent, mat, a, b, r){
+  const dir = b.clone().sub(a), len = dir.length();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), mat);
+  m.position.copy(a).addScaledVector(dir, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+  parent.add(m); return m;
+}
+
+// Maa-tekstuurit (samat kuin avaruusaluksesta) — välimuistissa pintakäyntien yli
+const _WMC = 'https://upload.wikimedia.org/wikipedia/commons/';
+let _earthDayTex = null, _earthNightTex = null;
+function loadEarthSkyTex(mat){
+  const L = new THREE.TextureLoader();
+  if (_earthDayTex) mat.uniforms.uDay.value = _earthDayTex;
+  else L.load(_WMC + 'c/c3/Solarsystemscope_texture_2k_earth_daymap.jpg',
+    t => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; _earthDayTex = t; mat.uniforms.uDay.value = t; });
+  if (_earthNightTex) mat.uniforms.uNight.value = _earthNightTex;
+  else L.load(_WMC + '2/2f/Solarsystemscope_texture_2k_earth_nightmap.jpg',
+    t => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; _earthNightTex = t; mat.uniforms.uNight.value = t; });
+}
+/* Maa kuun taivaalla SAMANNÄKÖISENÄ kuin avaruusaluksesta: päivä/yö-kartat,
+   proseduraaliset pilvet, kaupunkien yövalot ja sininen ilmakehäreuna — valaistu
+   uSun-suunnalla (kuun pinnan aurinko), joten vaihe muuttuu kierron edetessä. */
+function makeSkyEarthMaterial(){
+  const u = { uDay: { value: null }, uNight: { value: null }, uSun: { value: new THREE.Vector3(0, 1, 0) }, uTime: { value: 0 } };
+  const mat = new THREE.ShaderMaterial({
+    uniforms: u,
+    vertexShader: /* glsl */`
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec2 vUv; varying vec3 vN; varying vec3 vWP; varying vec3 vOP;
+      void main(){
+        vUv = uv; vOP = normalize(position);
+        vN = normalize(mat3(modelMatrix) * normal);
+        vec4 wp = modelMatrix * vec4(position, 1.0); vWP = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */`
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      uniform sampler2D uDay; uniform sampler2D uNight; uniform vec3 uSun; uniform float uTime;
+      varying vec2 vUv; varying vec3 vN; varying vec3 vWP; varying vec3 vOP;
+      ` + NOISE_GLSL + /* glsl */`
+      void main(){
+        // sama himmennetty/desaturoitu albedo kuin avaruuden Maassa
+        vec3 day = texture2D(uDay, vUv).rgb * vec3(0.74, 0.81, 0.92);
+        day = mix(day, vec3(dot(day, vec3(0.299, 0.587, 0.114))), 0.16);
+        vec3 night = texture2D(uNight, vUv).rgb;
+        vec3 N = normalize(vN); vec3 S = normalize(uSun); vec3 V = normalize(cameraPosition - vWP);
+        float ndl = dot(N, S);
+        float diff = pow(clamp(ndl, 0.0, 1.0), 1.1);
+        float nightSide = smoothstep(0.05, -0.18, ndl);
+        vec3 lights = night * vec3(1.0, 0.88, 0.65) * nightSide * 1.1;
+        float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.5);
+        vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.10;  // hyvin hienovarainen
+        day = mix(day, vec3(0.30, 0.52, 0.88), rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.30);
+        // pilvet samalla logiikalla kuin avaruuden Maassa: rikkonaiset, pyörteiset,
+        // vaihteleva opasiteetti (~35 % peitto) → sama Maa näkyy kuun pinnalta
+        vec3 cp = vOP * 0.2 + vec3(uTime * 0.0012, 0.0, uTime * 0.0006);
+        vec3 cpw = cp * 0.5;
+        vec3 cq = vec3(fbm(cpw), fbm(cpw + vec3(4.1, 1.3, 7.2)), fbm(cpw + vec3(2.7, 8.3, 1.9)));
+        float cshape = fbm(cp + 5.0 * cq) * 0.40 + fbm(vOP * 1.8 + 3.0 * cq) * 0.26
+                     + fbm(vOP * 4.5 + 2.0 * cq) * 0.20 + fbm(vOP * 8.5 + 1.5 * cq) * 0.14;
+        float ca = smoothstep(-0.02, 0.12, cshape);
+        ca *= 0.45 + 0.55 * smoothstep(0.03, 0.24, fbm(vOP * 0.9 + 1.2 * cq));
+        vec3 cloudCol = vec3(1.0) * (diff * 0.85 + 0.04);
+        vec3 surf = day * (diff * 1.15 + 0.012) + lights;
+        vec3 col = mix(surf, cloudCol, ca * 0.92) + atmo;
+        gl_FragColor = vec4(col, 1.0);
+        #include <logdepthbuf_fragment>
+      }`,
+  });
+  loadEarthSkyTex(mat);
+  return mat;
+}
+function buildEarthInSky(sc){
+  // Kuu on sidotusti kääntynyt → Maa pysyy kiinteässä kohdassa taivasta; vaihe ja
+  // pyöriminen simuloituvat (uSun + akselipyörintä updateDaylightissa).
+  const dir = new THREE.Vector3(0.34, 0.46, 0.62).normalize();
+  const dist = 5200, R = 360;
+  const earth = new THREE.Mesh(new THREE.SphereGeometry(R, 64, 40), makeSkyEarthMaterial());
+  earth.position.copy(dir).multiplyScalar(dist);
+  sc.add(earth);
+  const atmo = new THREE.Mesh(new THREE.SphereGeometry(R * 1.03, 48, 32),
+    new THREE.MeshBasicMaterial({ color: 0x4d80d0, transparent: true, opacity: 0.054,
+      side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+  atmo.position.copy(earth.position);
+  sc.add(atmo);
+  return earth;
+}
+
+// Yhdysvaltain lippu canvas-tekstuurina (kansallislippu)
+let _usFlagTex = null;
+function usFlagTexture(){
+  if (_usFlagTex) return _usFlagTex;
+  const W = 190, H = 100, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const c = cv.getContext('2d');
+  for (let i = 0; i < 13; i++) { c.fillStyle = i % 2 === 0 ? '#b22234' : '#ffffff'; c.fillRect(0, i * H / 13, W, H / 13 + 1); }
+  const cw = W * 0.4, ch = H * 7 / 13; c.fillStyle = '#3c3b6e'; c.fillRect(0, 0, cw, ch);
+  c.fillStyle = '#fff';
+  for (let r = 0; r < 9; r++) {
+    const odd = r % 2, ny = odd ? 5 : 6, ox = odd ? cw / 12 : 0;
+    for (let s = 0; s < ny; s++) { c.beginPath(); c.arc(ox + (s + 0.5) * cw / 6, (r + 0.5) * ch / 9, 1.5, 0, 7); c.fill(); }
+  }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; _usFlagTex = t; return t;
+}
+
+function makeLanderModule(){
+  const g = new THREE.Group();
+  const foil   = new THREE.MeshStandardMaterial({ color: 0xc69a2e, metalness: 0.55, roughness: 0.45, flatShading: true });
+  const dark   = new THREE.MeshStandardMaterial({ color: 0x2a2a2c, metalness: 0.4, roughness: 0.7 });
+  const silver = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, metalness: 0.7, roughness: 0.4 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 1.7, 8), foil); body.position.y = 1.45; g.add(body);
+  const top  = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.7, 0.5, 8), dark); top.position.y = 2.5; g.add(top);
+  const noz  = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.0, 16), dark); noz.position.y = 0.35; noz.rotation.x = Math.PI; g.add(noz);
+  for (let i = 0; i < 4; i++) {
+    const a = i * Math.PI / 2 + Math.PI / 4, dx = Math.cos(a), dz = Math.sin(a);
+    const foot = new THREE.Vector3(dx * 3.4, 0.06, dz * 3.4);
+    strut(g, silver, new THREE.Vector3(dx * 1.5, 1.35, dz * 1.5), foot, 0.09);   // pääjalka
+    strut(g, silver, new THREE.Vector3(dx * 1.35, 0.65, dz * 1.35), foot, 0.05); // vinotuki
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.12, 12), silver); pad.position.copy(foot); g.add(pad);
+  }
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+function makeRover(){
+  const g = new THREE.Group();
+  const body = new THREE.MeshStandardMaterial({ color: 0xb4b8bc, metalness: 0.5, roughness: 0.5 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x26262a, roughness: 0.85 });
+  const gold = new THREE.MeshStandardMaterial({ color: 0xc8a23a, metalness: 0.5, roughness: 0.5 });
+  const ch = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.3, 1.6), body); ch.position.y = 0.85; g.add(ch);
+  for (const sx of [-1.2, 1.2]) for (const sz of [-0.78, 0.78]) {
+    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.42, 16), dark);
+    w.rotation.x = Math.PI / 2; w.position.set(sx, 0.55, sz); g.add(w);
+  }
+  for (const sz of [-0.42, 0.42]) {
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.1, 0.58), dark); seat.position.set(-0.2, 1.05, sz); g.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.66, 0.58), dark); back.position.set(-0.52, 1.38, sz); g.add(back);
+  }
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.5, 8), body); mast.position.set(1.2, 1.7, 0); g.add(mast);
+  const dish = new THREE.Mesh(new THREE.CircleGeometry(0.55, 20), gold); dish.position.set(1.2, 2.45, 0); dish.rotation.set(-0.7, 0, 0); g.add(dish);
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+function makeFlag(){
+  const g = new THREE.Group();
+  const metal = new THREE.MeshStandardMaterial({ color: 0xcfd2d6, metalness: 0.7, roughness: 0.4 });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 3.0, 8), metal); pole.position.y = 1.5; g.add(pole);
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.3, 8), metal); top.rotation.z = Math.PI / 2; top.position.set(0.62, 2.92, 0); g.add(top);
+  const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 0.66),
+    new THREE.MeshStandardMaterial({ map: usFlagTexture(), side: THREE.DoubleSide, roughness: 0.9, metalness: 0 }));
+  cloth.position.set(0.62, 2.59, 0); g.add(cloth);
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+/* Auringon kiekon pehmeä säteittäinen alpha (kirkas keskus → häipyvä reuna).
+   Ilman tätä kiekko on kovareunainen kirkas ympyrä, jonka UnrealBloom "neliöi":
+   karkein bloom-mip kattaa pienen kirkkaan lähteen ~yhdellä tekselillä ja
+   bilineaarinen ylösnäytteistys venyttää sen neliömäiseksi haloksi. Pehmeä
+   reuna antaa bloomille liukuvan gradientin → halo pyöristyy. */
+let _sunDiscTex = null;
+function sunDiscTexture(){
+  if (_sunDiscTex) return _sunDiscTex;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const c = cv.getContext('2d');
+  const g = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0.00, 'rgba(255,255,255,1)');
+  g.addColorStop(0.25, 'rgba(255,255,255,0.85)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.35)');
+  g.addColorStop(0.80, 'rgba(255,255,255,0.08)');
+  g.addColorStop(1.00, 'rgba(255,255,255,0)');
+  c.fillStyle = g; c.fillRect(0, 0, 128, 128);
+  _sunDiscTex = new THREE.CanvasTexture(cv);
+  return _sunDiscTex;
+}
+
+/* ---- Valmiit NASA-glTF-mallit (julkista omaisuutta) CDN:ltä ajonaikana ----
+   Ladataan jsdelivrin kautta (CORS ok, sama lähestymistapa kuin tekstuureilla).
+   Malli normalisoidaan: keskitetään xz, pohja maahan (bbox.min.y → 0) ja
+   skaalataan niin että suurin ulottuvuus = targetSize, varjot päälle.
+   Lataus on asynkroninen → kappale lisätään valmistuessa pidikkeeseen, joka on
+   jo paikallaan. Epäonnistuessa (offline) palautetaan null → proseduraalivara. */
+// raw.githubusercontent (CORS ok) — ei jsdelivrin 20 MB rajaa (SEV on 22 MB).
+// NASAn mallit ovat Draco-pakattuja → DRACOLoader purkaa (dekooderi CDN:ltä).
+const GLB_BASE = 'https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D Models/';
+const _draco = new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/');
+const _glbLoader = new GLTFLoader().setDRACOLoader(_draco);
+const _glbCache = {};   // url → ladattu gltf.scene (kloonataan käyttöön)
+
+function normalizeModel(root, targetSize){
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const center = new THREE.Vector3(); box.getCenter(center);
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  root.position.set(-center.x, -box.min.y, -center.z);   // keskitä xz, pohja nollaan
+  const g = new THREE.Group();
+  g.add(root);
+  g.scale.setScalar(targetSize / maxDim);
+  g.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = true; o.receiveShadow = true;
+    // Rikkinäinen normaalikartta (normalScale 0,0 + ei tangentteja geometriassa)
+    // tekee materiaalista pikimustan lähietäisyydellä — kaukaa mip-tasot
+    // keskiarvoistavat sen neutraaliksi, joten vika näkyy vain läheltä. Poista.
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (m && m.normalMap && m.normalScale && m.normalScale.x === 0 && m.normalScale.y === 0) {
+        m.normalMap = null; m.needsUpdate = true;
+      }
+    }
+  });
+  return g;
+}
+function loadGLBModel(file, targetSize, onReady){
+  const url = encodeURI(GLB_BASE + file);
+  if (_glbCache[url]) { onReady(normalizeModel(_glbCache[url].clone(true), targetSize)); return; }
+  _glbLoader.load(url,
+    (gltf) => { _glbCache[url] = gltf.scene; onReady(normalizeModel(gltf.scene.clone(true), targetSize)); },
+    undefined,
+    (err) => { console.warn('GLB-lataus epäonnistui, käytetään proseduraalimallia:', file, err); onReady(null); });
+}
+
+function buildApolloSite(sc){
+  const place = (o, x, z, ry) => { o.position.set(x, surfHeightFn(x, z), z); o.rotation.y = ry; sc.add(o); };
+  // Laskeutuja: NASAn oikea Apollo Lunar Module (glTF) — varalla proseduraalimalli
+  const lm = new THREE.Group(); place(lm, -15, -21, 0.6);
+  loadGLBModel('Apollo Lunar Module/Apollo Lunar Module.glb', 7, m => lm.add(m || makeLanderModule()));
+  // Mönkijä: NASAn Space Exploration Vehicle (glTF) — varalla proseduraalimalli
+  const rv = new THREE.Group(); place(rv, -7, -16, -0.8);
+  loadGLBModel('Space Exploration Vehicle/Space Exploration Vehicle.glb', 6, m => rv.add(m || makeRover()));
+  place(makeFlag(), -11, -13.5, 0.4);
+}
+
 function buildSurfaceScene(name){
   const cfg = SURFACE_CONFIGS[name];
   const sc = new THREE.Scene();
@@ -1402,6 +1685,22 @@ function buildSurfaceScene(name){
     if (cfg.pbr) {
       loadPH(cfg.pbr.rock, 'diff', true).then(t => { if (t) { rocksMat.map = t; rocksMat.needsUpdate = true; setMineralRock(t, null); } });
       loadPH(cfg.pbr.rock, 'nor_gl', false).then(t => { if (t) { rocksMat.normalMap = t; rocksMat.needsUpdate = true; setMineralRock(null, t); } });
+    }
+    if (cfg.pbr?.dust) {
+      // pölyn peittämät lohkareet: harmaannutetaan ja vaalennetaan ruskea
+      // kivitekstuuri, jotta ne sulautuvat pölyiseen regoliittiin
+      const rockDust = cfg.pbr.dust;
+      rocksMat.customProgramCacheKey = () => 'rockDust' + rockDust;
+      rocksMat.onBeforeCompile = (sh) => {
+        sh.uniforms.uRockDust = { value: rockDust };
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nuniform float uRockDust;')
+          .replace('#include <map_fragment>', [
+            '#include <map_fragment>',
+            'float rDl = dot(diffuseColor.rgb, vec3(0.299,0.587,0.114));',
+            'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(rDl * 1.06), uRockDust);',
+          ].join('\n'));
+      };
     }
     envMats.push(rocksMat);
     for (let vr = 0; vr < 3; vr++) {
@@ -1654,8 +1953,25 @@ function buildSurfaceScene(name){
   if (cfg.sun && !cfg.scatter) {
     disc = new THREE.Mesh(
       new THREE.CircleGeometry(cfg.sun.size, 48),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(...cfg.sun.color), fog: false })
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(...cfg.sun.color),
+        map: sunDiscTexture(), transparent: true, depthWrite: false, fog: false })
     );
+    disc.scale.setScalar(1.6);   // pehmeä kehä kattaa useita karkean bloom-mipin tekseleitä
+    // korona/hehku: kuten avaruuden aurinko — pehmeä säteittäinen sprite kiekon
+    // ympärille, jotta ilmakehättömänkin kappaleen aurinko näyttää aurinkomaiselta
+    const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+    const cc = cv.getContext('2d');
+    const grad = cc.createRadialGradient(128, 128, 0, 128, 128, 128);
+    grad.addColorStop(0.00, 'rgba(255,250,232,0.95)');
+    grad.addColorStop(0.14, 'rgba(255,238,196,0.55)');
+    grad.addColorStop(0.40, 'rgba(255,205,130,0.16)');
+    grad.addColorStop(1.00, 'rgba(255,175,90,0)');
+    cc.fillStyle = grad; cc.fillRect(0, 0, 256, 256);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(cv), color: 0xfff0d8,
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }));
+    glow.scale.setScalar(cfg.sun.size * 6.5);
+    disc.add(glow);   // seuraa kiekkoa; sprite kääntyy aina kameraan
     sc.add(disc);
   }
 
@@ -1676,9 +1992,20 @@ function buildSurfaceScene(name){
       opacity: cfg.stars ? 0.7 : 0, fog: false });   // fog söisi tähdet ilmakehällisillä
     sc.add(new THREE.Points(sg, starsMat));
   }
+  // tähtisumu Linnunradan kohdalle (häivytys vuorokauden mukaan updateDaylightissa)
+  let nebula = null;
+  if (cfg.stars || cfg.nightStars) {
+    nebula = makeNebula(7300, cfg.stars ? 0.6 : 0);
+    nebula.rotation.set(0.45, 0.2, 0.9);
+    sc.add(nebula);
+  }
+
+  // Kuu: Maa taivaalla + Apollo-laskeutumispaikan kalusto
+  const earthSky = cfg.earthInSky ? buildEarthInSky(sc) : null;
+  if (cfg.apollo) buildApolloSite(sc);
 
   daylight = {
-    sc, cfg, dl, hemi, disc, starsMat, bldgMat, cloudU, cloudSct, dust, dustFx,
+    sc, cfg, dl, hemi, disc, earthSky, starsMat, nebula, bldgMat, cloudU, cloudSct, dust, dustFx,
     skyMat, skyEnvScene, envMats, envRT: null, lastEnvElev: 99, lastEnvT: -99,
     baseInt: lightDef.intensity,
     baseHemi: cfg.hemi ? cfg.hemi[2] : 0,
@@ -2016,6 +2343,7 @@ export function updateDescent(dt){
 export function surfDebug(){
   return {
     scene: surfaceScene, h: surfHeightFn, x: surfX, z: surfZ,
+    setPos(x, z){ surfX = x; surfZ = z; },
     body: surfaceBody ? surfaceBody.def.name : null,
     dayPhase: daylight ? sunPhase() % (Math.PI * 2) : null,
     setDayPhase(p){ dayPhase0 = p; dayT0 = S.simTime; updateDaylight(); },

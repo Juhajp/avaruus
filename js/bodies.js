@@ -14,7 +14,7 @@ export const BODIES = [
     opts:{ c1:[0.93,0.80,0.55], c2:[0.83,0.66,0.40], c3:[0.97,0.91,0.74], bandFreq:1.6, turb:2.6, flow:0.020 },
     atmo:{ color:[1.0,0.85,0.55], intensity:0.55, power:3.2 } },
   { name:'Maa',       a:1.0,    r:5.0,  incl:0.0,  tilt:23.4, spinP:239.3, phase:0.30, type:'earth',
-    atmo:{ color:[0.30,0.55,1.0], intensity:0.9, power:3.0 } },
+    atmo:{ color:[0.30,0.55,1.0], intensity:0.3, power:3.6, scale:1.03 } },
   { name:'Mars',      a:1.524,  r:2.66, incl:1.85, tilt:25.2, spinP:246.2, phase:1.20, type:'rocky',
     opts:{ c1:[0.48,0.21,0.10], c2:[0.70,0.37,0.18], c3:[0.26,0.11,0.06], scale:4.0, rugged:0.8, polar:0.86 },
     atmo:{ color:[0.85,0.55,0.38], intensity:0.30, power:3.5 } },
@@ -32,6 +32,10 @@ export const BODIES = [
   { name:'Neptunus',  a:30.07,  r:17.5, incl:1.77, tilt:28.3, spinP:161.1, phase:0.65, type:'gas',
     opts:{ c1:[0.06,0.12,0.52], c2:[0.16,0.30,0.80], c3:[0.03,0.06,0.30], bandFreq:4.0, turb:0.8, flow:0.018 },
     atmo:{ color:[0.35,0.5,1.0], intensity:0.40, power:3.3 } },
+  // Kuu kiertää Maata (parent = indeksi 3). Ei `a`:ta → kiertää emoa moonDist/moonPeriod-
+  // arvoilla; sidottu pyöriminen (spinP = moonPeriod) → sama puoli Maahan päin.
+  { name:'Kuu', parent:3, moonDist:46, moonPeriod:180, moonIncl:18, r:1.5, tilt:6.7, spinP:180, phase:0.6, type:'rocky',
+    opts:{ c1:[0.30,0.29,0.28], c2:[0.56,0.55,0.53], c3:[0.16,0.16,0.15], scale:6.0, rugged:1.0, polar:2.0 } },
 ];
 
 /* ---------------- Aurinko ---------------- */
@@ -198,21 +202,40 @@ function makeEarthMaterial(){
 
 /* ---------------- Pilvet (Maa) ---------------- */
 function makeCloudMaterial(){
+  const u = baseUniforms();
+  u.uCloudCut = { value: -0.02 };  // peittokynnys, kalibroitu ~35 % pinta-alapeittoon
   return registerMat(new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    uniforms: baseUniforms(),
+    uniforms: u,
     vertexShader: PLANET_VERT,
     fragmentShader: FRAG_HEAD + /* glsl */`
+    uniform float uCloudCut;
     void main(){
-      vec3 p = vOP * 3.2 + vec3(uTime * 0.004, 0.0, uTime * 0.002);
-      float n = fbm(p) * 0.6 + 0.4 * fbm(p * 3.1);
-      float a = smoothstep(0.08, 0.55, n);
+      vec3 p = vOP * 0.2 + vec3(uTime * 0.0012, 0.0, uTime * 0.0006);  // erittäin matala taajuus → valtavat pilvisysteemit
+      // warp-kenttä puolella taajuudella → suuret pehmeät spiraalit jotka
+      // venyttävät massoja kierteille pilkkomatta niitä.
+      vec3 pw = p * 0.5;
+      vec3 q = vec3(fbm(pw), fbm(pw + vec3(4.1, 1.3, 7.2)), fbm(pw + vec3(2.7, 8.3, 1.9)));
+      // pilvitiheys: iso pyörteinen muoto + keskirakenne (molemmat piikikästä
+      // fbm:ää → arvot enimmäkseen matalia, harvat huiput). Matala, pehmeä
+      // kynnys antaa portaittaisen alphan: tiheät ytimet peittäviä, ympärillä
+      // läpikuultavaa → pilvien SISÄLLÄ läpinäkyviä alueita, ei umpiläiskiä.
+      // iso pyörteinen muoto + monta hienoa oktaavia → voimakas rikkonaisuus:
+      // pilvimassa hajoaa pieniin osiin ja niiden väliin jää läpinäkyviä aukkoja.
+      float shape = fbm(p + 5.0 * q) * 0.40 + fbm(vOP * 1.8 + 3.0 * q) * 0.26
+                  + fbm(vOP * 4.5 + 2.0 * q) * 0.20 + fbm(vOP * 8.5 + 1.5 * q) * 0.14;
+      // keskileveä ramppi → tiheys porrastaa opasiteettia (ohuet reunat, paksut ytimet)
+      float a = smoothstep(uCloudCut, uCloudCut + 0.14, shape);
+      // iso-mittakaavainen opasiteetin vaihtelu: osa pilvistä ohuita, osa paksuja
+      float opac = 0.45 + 0.55 * smoothstep(0.03, 0.24, fbm(vOP * 0.9 + 1.2 * q));
+      a *= opac;
       vec3 N = normalize(vN);
       vec3 S = sunDirAt(vWP);
       float diff = clamp(dot(N, S), 0.0, 1.0);
-      vec3 col = vec3(1.0) * (diff * 1.25 + 0.01);
-      gl_FragColor = vec4(col, a * 0.85);
+      // pidä kirkkaus bloom-kynnyksen (1.08) alapuolella → ei auringon glarea
+      vec3 col = vec3(1.0) * (diff * 0.85 + 0.04);
+      gl_FragColor = vec4(col, a * 0.92);
       #include <logdepthbuf_fragment>
     }`,
   }));
@@ -402,6 +425,60 @@ function makeRingParticles(inner, outer, planetR){
   return pts;
 }
 
+/* ---------------- Tähtisumu / Linnunrata ----------------
+   Proseduraalinen ekvirektangulaarinen Linnunrata-tekstuuri (pehmeä fraktaali-
+   nauha, pölyrailot, lämmin kirkkaampi ydin, sinivalkoinen sävy) additiivisella
+   takasivun pallokuvulla → jatkuva, valokuvamainen hohto eikä erillisiä möykkyjä.
+   Tekstuuri tehdään kerran ja välimuistitetaan (jaetaan avaruus- ja pintaskenelle). */
+let _mwTex = null;
+function milkyWayTexture(){
+  if (_mwTex) return _mwTex;
+  const W = 1024, H = 512;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H), d = img.data;
+  const ss = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const hash = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+  const vn = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const wx = xf * xf * (3 - 2 * xf), wy = yf * yf * (3 - 2 * yf);
+    const a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), e = hash(xi + 1, yi + 1);
+    return (a * (1 - wx) + b * wx) * (1 - wy) + (c * (1 - wx) + e * wx) * wy;
+  };
+  const fbm = (x, y, oct) => { let s = 0, a = 0.5, f = 1; for (let o = 0; o < oct; o++){ s += a * vn(x * f, y * f); a *= 0.5; f *= 2; } return s; };
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const u = x / W, v = y / H;
+      const wave = (fbm(u * 3 + 5, 2, 3) - 0.5) * 0.10;           // nauhan aaltoilu
+      const latC = (v - 0.5) + wave;
+      let band = Math.exp(-(latC * latC) / (2 * 0.020));          // leveä pehmeä nauha
+      const cloud = fbm(u * 10 + 1, v * 10 + 3, 5);
+      band *= 0.30 + 1.15 * cloud * cloud;                        // pilvimäinen rakenne
+      const dust = fbm(u * 6 + 20, v * 16 + 9, 4);                // tummat pölyrailot keskellä
+      band *= 1 - 0.9 * Math.exp(-(latC * latC) / (2 * 0.006)) * ss(0.52, 0.72, dust);
+      const core = Math.exp(-((u - 0.5) * (u - 0.5)) / (2 * 0.012)) * Math.exp(-(latC * latC) / (2 * 0.013));
+      band += core * 0.7 * cloud;                                 // kirkkaampi galaktinen ydin
+      band = Math.max(0, band);
+      const K = 125, i = (y * W + x) * 4;
+      d[i]     = Math.min(255, (band * 0.62 + core * 0.5 * cloud) * K);   // ydin lämpimämpi (pinkahtava)
+      d[i + 1] = Math.min(255, (band * 0.66 + core * 0.16 * cloud) * K);
+      d[i + 2] = Math.min(255, (band * 1.0) * K);                          // sinivalkoinen
+      d[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = THREE.RepeatWrapping; t.anisotropy = 4;
+  _mwTex = t; return t;
+}
+export function makeNebula(radius, intensity){
+  const mat = new THREE.MeshBasicMaterial({
+    map: milkyWayTexture(), blending: THREE.AdditiveBlending, side: THREE.BackSide,
+    depthWrite: false, transparent: true, opacity: intensity, fog: false });
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 32), mat);
+  dome.frustumCulled = false; dome.renderOrder = -1;
+  return dome;
+}
+
 /* ---------------- Tähtitaivas ---------------- */
 function makeStars(){
   const group = new THREE.Group();
@@ -436,6 +513,9 @@ function makeStars(){
   band.rotation.set(0.45, 0.2, 0.9);
   group.add(band);
   group.add(starField(350, 150000, 0, 3.2, 1.4));        // kirkkaat tähdet
+  const neb = makeNebula(148000, 0.62);                  // Linnunrata-hohto bandin kohdalle
+  neb.rotation.set(0.45, 0.2, 0.9);
+  group.add(neb);
   return group;
 }
 scene.add(makeStars());
@@ -485,7 +565,7 @@ for (const def of BODIES) {
   tiltGroup.add(mesh);
 
   if (def.atmo) {
-    const shell = new THREE.Mesh(new THREE.SphereGeometry(def.r * 1.055, 96, 64), makeAtmoMaterial(def.atmo));
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(def.r * (def.atmo.scale ?? 1.055), 96, 64), makeAtmoMaterial(def.atmo));
     tiltGroup.add(shell);
   }
   if (def.rings) {
@@ -523,6 +603,7 @@ for (const def of BODIES) {
   bodies.push({
     def, group, mesh, clouds, ringMesh, ringParts, label,
     angVel: def.a > 0 ? (2 * Math.PI) / (ORBIT_BASE_PERIOD * Math.pow(def.a, 1.5)) : 0,
+    moonAngVel: def.parent != null ? (2 * Math.PI) / def.moonPeriod : 0,
     spinVel: def.spinP ? (2 * Math.PI) / def.spinP : 0.02,
   });
 }
@@ -540,6 +621,7 @@ const PLANET_TEXTURES = {
   Saturnus:  WM + 'e/ea/Solarsystemscope_texture_2k_saturn.jpg',
   Uranus:    WM + '9/95/Solarsystemscope_texture_2k_uranus.jpg',
   Neptunus:  WM + '1/1e/Solarsystemscope_texture_2k_neptune.jpg',
+  Kuu:       WM + '2/26/Solarsystemscope_texture_2k_moon.jpg',   // Solar System Scope, CC BY 4.0 (NASA-pohjainen)
 };
 const EARTH_DAY   = WM + 'c/c3/Solarsystemscope_texture_2k_earth_daymap.jpg';
 const EARTH_NIGHT = WM + '2/2f/Solarsystemscope_texture_2k_earth_nightmap.jpg';
@@ -629,8 +711,10 @@ function makeTexturedEarthMaterial(day, night, radius){
         float det = snoise(vOP * 170.0) * 0.5 + snoise(vOP * 520.0) * 0.32 + snoise(vOP * 1400.0) * 0.18;
         day *= 1.0 + det * 0.11 * nd;
       }
-      // sinertävä ilmakehäfiltteri: viileä globaali sävy → realistisempi avaruudesta
-      day *= vec3(0.86, 0.95, 1.14);
+      // sinertävä ilmakehäfiltteri (hillitympi) + kevyt himmennys & desaturointi
+      // → mantereet ja meret eivät puhku liian kirkkaina/kylläisinä avaruudesta
+      day *= vec3(0.74, 0.81, 0.92);
+      day = mix(day, vec3(dot(day, vec3(0.299, 0.587, 0.114))), 0.16);
       vec3 night = texture2D(uNight, vUv).rgb;
       vec3 N = normalize(vN);
       vec3 S = sunDirAt(vWP);
@@ -642,7 +726,7 @@ function makeTexturedEarthMaterial(day, night, radius){
       vec3 lights = night * vec3(1.0, 0.88, 0.65) * nightSide * 1.1;
       // sininen reunakajo päiväpuolella
       float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.5);
-      vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.5;
+      vec3 atmo = vec3(0.25, 0.45, 0.95) * rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.12;
       // reunoja kohti voimistuva sironta sekoittaa albedon kohti taivaansineä
       day = mix(day, vec3(0.30, 0.52, 0.88), rim * clamp(ndl * 0.8 + 0.2, 0.0, 1.0) * 0.35);
       vec3 lit = day * (diff * 1.15 + 0.01) + lights + atmo;
@@ -675,6 +759,14 @@ for (const b of bodies) {
 }
 
 export function bodyPosition(b, t, out){
+  if (b.def.parent != null) {            // kuu: emon paikka + kiertorata sen ympäri
+    bodyPosition(bodies[b.def.parent], t, out);
+    const ang = (b.def.phase || 0) + b.moonAngVel * t;
+    const d = b.def.moonDist;
+    const v = new THREE.Vector3(Math.cos(ang) * d, 0, Math.sin(ang) * d);
+    if (b.def.moonIncl) v.applyAxisAngle(new THREE.Vector3(1, 0, 0), b.def.moonIncl * DEG);
+    return out.add(v);
+  }
   if (b.def.a === 0) return out.set(0, 0, 0);
   const ang = b.def.phase + b.angVel * t;
   const d = b.def.a * AU;

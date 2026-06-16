@@ -1,11 +1,12 @@
 /* ---------------- Avaruuslennon fysiikka (FPV) ---------------- */
 import * as THREE from 'three';
 import { AU, C, DEG, camera } from './core.js';
-import { bodies } from './bodies.js';
+import { bodies, bodyPosition } from './bodies.js';
 import { S, clampThrottle } from './state.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _p = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -76,15 +77,16 @@ export function updateFlight(dt){
   // jotta kappaleen vierellä voi leijua sen karkaamatta radallaan
   S.dragBody = null; S.dragWeight = 0;
   for (const b of bodies) {
-    if (b.def.a === 0) continue;
+    if (!(b.def.a > 0) && b.def.parent == null) continue;   // aurinkoa ei seurata
     const d = camera.position.distanceTo(b.group.position);
     const near = b.def.r * 8, far = b.def.r * 15;
     if (d < far) {
       const w = d < near ? 1 : 1 - (d - near) / (far - near);
-      const ang = b.def.phase + b.angVel * S.simTime;
-      const sp = b.def.a * AU * b.angVel;
-      _v2.set(-Math.sin(ang) * sp, 0, Math.cos(ang) * sp);
-      if (b.def.incl) _v2.applyAxisAngle(_vX, b.def.incl * DEG);
+      // kappaleen rataliike äärellisdifferenssinä (toimii myös kuulle, joka
+      // kiertää emoplaneettaa eikä Aurinkoa → ei analyyttistä a·angVel-kaavaa)
+      bodyPosition(b, S.simTime - 0.05, _v2);
+      bodyPosition(b, S.simTime + 0.05, _p);
+      _v2.subVectors(_p, _v2).multiplyScalar(10);   // yks/s (Δt = 0,1 s)
       camera.position.addScaledVector(_v2, w * dt);
       if (w > S.dragWeight) { S.dragWeight = w; S.dragBody = b; }
     }

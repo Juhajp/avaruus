@@ -173,7 +173,7 @@ addEventListener('keydown', (e) => {
   if (S.mode === 'space') {
     if (e.code === 'KeyR') quickTravel();
     if (e.code === 'KeyG') tryBeamDown();
-    if (/^Digit[0-8]$/.test(e.code)) setTarget(parseInt(e.code.slice(5), 10));
+    if (/^Digit[0-9]$/.test(e.code)) setTarget(parseInt(e.code.slice(5), 10));   // 9 = Kuu
   } else {
     if (e.code === 'KeyB') {
       if (S.mode === 'descent') abortDescent();
