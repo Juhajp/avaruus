@@ -67,7 +67,10 @@ export function updateSpaceHUD(){
   for (let i = 0; i < bodies.length; i++) {
     const b = bodies[i];
     _v2.copy(b.group.position).project(camera);
-    const onScreen = _v2.z < 1 && _v2.x > -1.05 && _v2.x < 1.05 && _v2.y > -1.05 && _v2.y < 1.05;
+    const syFrac = -_v2.y * 0.5 + 0.5;   // 0 = ylä, 1 = ala
+    // kojelauta peittää alaosan (kiinteä näkymässä) → ei nimilappuja sen päälle
+    const overDash = syFrac > 0.6;
+    const onScreen = _v2.z < 1 && _v2.x > -1.05 && _v2.x < 1.05 && _v2.y > -1.05 && _v2.y < 1.05 && !overDash;
     const dist = camera.position.distanceTo(b.group.position);
     if (onScreen && dist > b.def.r * 4) {
       b.label.style.display = 'block';

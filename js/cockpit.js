@@ -280,11 +280,115 @@ function scrHead(c, hue, title){
 
 // vasen näyttö: aurinkokuntakartta ylhäältä (log-skaalatut radat),
 // kohde korostettuna ja alus suuntakolmiona
+// lineaarinen väri (BODIES.opts) → sRGB-canvasväri
+function _l2s(v){ v = Math.max(0, v); return v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055; }
+function planetCol(arr, a = 1, mul = 1){
+  const f = v => Math.max(0, Math.min(255, Math.round(255 * _l2s(v * mul))));
+  return `rgba(${f(arr[0])},${f(arr[1])},${f(arr[2])},${a})`;
+}
+// sRGB 0..255 -kanava lineaarisesta
+function _s8(v){ return Math.max(0, Math.min(255, Math.round(255 * _l2s(v)))); }
+// tiilattava arvokohina (jaksollinen x:ssä → pintakartta kiertyy saumattomasti)
+function _h2(i, j){ const s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return s - Math.floor(s); }
+function _vn(x, y, P){
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const wx = xf * xf * (3 - 2 * xf), wy = yf * yf * (3 - 2 * yf);
+  const wp = i => ((i % P) + P) % P;
+  const a = _h2(wp(xi), yi), b = _h2(wp(xi + 1), yi), e = _h2(wp(xi), yi + 1), f = _h2(wp(xi + 1), yi + 1);
+  return (a * (1 - wx) + b * wx) * (1 - wy) + (e * (1 - wx) + f * wx) * wy;
+}
+function _fbm(x, y, P, oct){ let s = 0, a = 0.5, fr = 1; for (let o = 0; o < oct; o++){ s += a * _vn(x * fr, y * fr, P * fr); a *= 0.5; fr *= 2; } return s; }
+const _mixc = (A, B, t) => [A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t];
+
+/* planeetan ekvirektangulaarinen pintakartta (proseduraalinen kohina → mantereet,
+   vyöt, pilvet, jääkalotit) piirretään KERRAN per planeetta offscreen-canvasille
+   ja välimuistitetaan. Tiilattava x:ssä, joten se kiertyy saumattomasti. */
+const _stripCache = {};
+function planetStrip(body){
+  const def = body.def, key = def.name;
+  if (_stripCache[key]) return _stripCache[key];
+  const W = 180, H = 60, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H), d = img.data, o = def.opts || {};
+  let c1, c2, c3, kind;
+  if (def.type === 'sun')        { c1 = [1, 0.42, 0.08]; c2 = [1, 0.72, 0.25]; c3 = [1, 0.96, 0.72]; kind = 'sun'; }
+  else if (def.type === 'earth') { c1 = [0.10, 0.34, 0.12]; c2 = [0.03, 0.16, 0.40]; c3 = [0.92, 0.94, 0.98]; kind = 'earth'; }
+  else if (def.type === 'gas')   { c1 = o.c1 || [0.6, 0.5, 0.35]; c2 = o.c2 || [0.85, 0.78, 0.6]; c3 = o.c3 || [0.4, 0.3, 0.2]; kind = 'gas'; }
+  else                           { c1 = o.c1 || [0.4, 0.36, 0.32]; c2 = o.c2 || [0.6, 0.55, 0.5]; c3 = o.c3 || [0.25, 0.22, 0.2]; kind = 'rocky'; }
+  const P = 8;
+  for (let y = 0; y < H; y++){
+    const lat = (y / H - 0.5) * 2;                       // -1..1
+    for (let x = 0; x < W; x++){
+      const fx = x / W * P, fy = y / H * P; let col;
+      if (kind === 'gas'){
+        const warp = (_fbm(fx, fy, P, 3) - 0.5) * (o.turb || 1.5);
+        const t = 0.5 + 0.5 * Math.sin(lat * Math.PI * (o.bandFreq || 5) * 0.5 + warp * 4);
+        col = _mixc(_mixc(c3, c1, t), c2, _fbm(fx * 1.6 + 3, fy * 1.6, P, 2) * 0.45);
+        col = _mixc(col, c3, Math.max(0, _fbm(fx * 2 + 9, fy * 2, P, 2) - 0.62) * 0.7);
+        if (o.spot && Math.abs(lat - 0.25) < 0.13){       // Jupiterin punainen pilkku
+          const dl = ((x / W - 0.6 + 1) % 1) - 0.0; const dx = Math.min(Math.abs(x / W - 0.6), 1 - Math.abs(x / W - 0.6));
+          const sp = Math.max(0, 1 - Math.hypot(dx * 5, (lat - 0.25) * 8));
+          col = _mixc(col, o.spotColor || [0.78, 0.32, 0.18], sp * 0.85);
+        }
+      } else if (kind === 'rocky'){
+        const h = _fbm(fx, fy, P, 4);
+        col = h > 0.52 ? _mixc(c2, c1, (h - 0.52) * 2) : _mixc(c3, c1, h * 1.4);
+        col = _mixc(col, c3, Math.max(0, 0.34 - h) * 1.4);  // tummat kraatterit/altaat
+        if (o.polar && Math.abs(lat) > 0.84) col = _mixc(col, [0.88, 0.9, 0.95], (Math.abs(lat) - 0.84) / 0.16 * 0.85);
+      } else if (kind === 'earth'){
+        const h = _fbm(fx, fy, P, 4);
+        col = h > 0.55 ? _mixc(c1, [0.5, 0.42, 0.22], Math.max(0, h - 0.78) * 2)
+                       : _mixc(c2, [0.02, 0.09, 0.26], Math.max(0, 0.55 - h) * 1.3);
+        if (Math.abs(lat) > 0.82) col = _mixc(col, c3, (Math.abs(lat) - 0.82) / 0.18);   // jääkalotit
+        const cl = _fbm(fx * 1.3 + 20, fy * 1.3, P, 3);                                   // pilvet
+        if (cl > 0.6) col = _mixc(col, [0.95, 0.96, 1.0], Math.min(1, (cl - 0.6) * 3));
+      } else {                                            // aurinko: granulaatio
+        col = _mixc(c1, c3, _fbm(fx * 1.6, fy * 1.6, P, 3));
+        col = _mixc(col, c2, _fbm(fx * 3 + 7, fy * 3, P, 2) * 0.4);
+      }
+      const i = (y * W + x) * 4; d[i] = _s8(col[0]); d[i + 1] = _s8(col[1]); d[i + 2] = _s8(col[2]); d[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  _stripCache[key] = cv; return cv;
+}
+
+/* pyörivä planeetan lähikuva: ekvirektangulaarinen pintakartta projisoidaan
+   palloksi sarakkeittain (asin-projektio → oikea reunatiivistys), kierto skrollaa
+   karttaa. Ei ulkoista tekstuuria → ei canvasin tainttausta. */
+function drawPlanetOrb(c, ox, oy, R, body, t){
+  const def = body.def, isSun = def.type === 'sun';
+  const strip = planetStrip(body), SW = strip.width, SH = strip.height;
+  const phaseAng = t * (isSun ? 0.18 : 0.35);
+  c.save();
+  c.beginPath(); c.arc(ox, oy, R, 0, 7); c.clip();
+  c.fillStyle = '#000'; c.fillRect(ox - R, oy - R, 2 * R, 2 * R);
+  for (let x = -R; x <= R; x += 2){
+    const u = Math.max(-0.999, Math.min(0.999, x / R));
+    const lon = (Math.asin(u) + phaseAng) / (2 * Math.PI);
+    // kokonaislukusarake [0, SW-1] → 1 px:n lähde pysyy kuvan sisällä (ei
+    // läpinäkyvää/mustaa juovaa kun kierto ylittää tekstuurin sauman)
+    const sx = Math.min(SW - 1, Math.floor((lon - Math.floor(lon)) * SW));
+    const ch = Math.sqrt(Math.max(0, R * R - x * x));
+    c.drawImage(strip, sx, 0, 1, SH, ox + x, oy - ch, 2, 2 * ch);
+  }
+  let g;                                                 // valaistus / limbi
+  if (isSun) { g = c.createRadialGradient(ox, oy, R * 0.1, ox, oy, R); g.addColorStop(0, 'rgba(255,250,225,0.4)'); g.addColorStop(0.7, 'rgba(255,170,60,0)'); g.addColorStop(1, 'rgba(255,110,20,0.25)'); }
+  else { g = c.createRadialGradient(ox - R * 0.38, oy - R * 0.38, R * 0.1, ox, oy, R); g.addColorStop(0, 'rgba(255,255,255,0.18)'); g.addColorStop(0.5, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.62)'); }
+  c.fillStyle = g; c.fillRect(ox - R, oy - R, 2 * R, 2 * R);
+  c.restore();
+  if (def.rings) {                                       // Saturnuksen renkaat (tyylitelty)
+    c.save(); c.translate(ox, oy); c.scale(1, 0.34); c.strokeStyle = 'rgba(222,210,176,0.55)'; c.lineWidth = 2.4;
+    c.beginPath(); c.arc(0, 0, R * 1.55, 0, 7); c.stroke(); c.restore();
+  }
+  if (isSun) { c.strokeStyle = 'rgba(255,180,80,0.5)'; c.lineWidth = 2; c.beginPath(); c.arc(ox, oy, R + 1.5, 0, 7); c.stroke(); }
+  else if (def.atmo) { c.strokeStyle = planetCol(def.atmo.color, 0.45); c.lineWidth = 2.5; c.beginPath(); c.arc(ox, oy, R + 1.5, 0, 7); c.stroke(); }
+  c.strokeStyle = 'rgba(150,180,210,0.28)'; c.lineWidth = 1; c.beginPath(); c.arc(ox, oy, R, 0, 7); c.stroke();
+}
 function drawPos(c, hue){
   scrHead(c, hue, S.mode === 'space' ? 'SIJAINTI' : 'ASENTO');
   if (S.mode === 'space') {
-    // kartta hieman pienempänä ja ylempänä, jotta kohdetiedot mahtuvat alle
-    const cx = 128, cy = 84;
+    // kartta siirretty vasemmalle, jotta oikeaan yläkulmaan mahtuu planeetan lähikuva
+    const cx = 92, cy = 82;
     const rOf = (au) => 11 + 44 * Math.log10(1 + au * 3) / Math.log10(1 + 30.07 * 3);
     c.fillStyle = '#ffd27f';
     c.beginPath(); c.arc(cx, cy, 3, 0, 7); c.fill();
@@ -313,6 +417,18 @@ function drawPos(c, hue){
     c.fillStyle = '#ffffff';
     c.beginPath(); c.moveTo(7, 0); c.lineTo(-4, 4.5); c.lineTo(-4, -4.5); c.closePath(); c.fill();
     c.restore();
+    // valitun planeetan pyörivä lähikuva oikeaan yläkulmaan + kohdistinmerkit
+    const oX = 206, oY = 92, oR = 29;
+    drawPlanetOrb(c, oX, oY, oR, bodies[S.targetIdx], S.simTime);
+    const bs = oR + 8, cl = 9;
+    c.strokeStyle = hue; c.lineWidth = 1.5; c.globalAlpha = 0.7;
+    for (const sgx of [-1, 1]) for (const sgy of [-1, 1]) {
+      const px = oX + sgx * bs, py = oY + sgy * bs;
+      c.beginPath();
+      c.moveTo(px - sgx * cl, py); c.lineTo(px, py); c.lineTo(px, py - sgy * cl);
+      c.stroke();
+    }
+    c.globalAlpha = 1;
     // kohdetiedot kartan alla (siirretty entisestä KOHDE-näytöstä; ei ETA:a)
     const tgt = bodies[S.targetIdx];
     const distU = camera.position.distanceTo(tgt.group.position) - tgt.def.r;
@@ -509,13 +625,57 @@ function quad(parent, mat, a, b, c, d){
 
 // palkki kahden pisteen välille (oktagonipoikkileikkaus; fasetit erottuvat
 // materiaalin flatShadingilla)
-function bar(parent, mat, a, b, r){
+// viistetyt kulmat: octagonin 8 kulmaa katkaistaan → 16-kulmainen poikkileikkaus
+// (8 leveää sivua + 8 kapeaa viistepintaa), kavennettu päästä toiseen (rA→rB).
+// t = viisteen osuus särmästä (0…0,5). UV-attribuutti (nollat) jotta mergeStatic
+// yhdistää nämä CylinderGeometry-rimoihin samalla materiaalilla.
+function octaStrutGeo(rA, rB, len, t){
+  const N = 16, hy = len / 2, corner = [];
+  for (let k = 0; k < 8; k++){ const a = k * Math.PI / 4 + Math.PI / 8; corner.push([Math.cos(a), Math.sin(a)]); }
+  const cs = [];
+  for (let k = 0; k < 8; k++){
+    const P = corner[k], Pm = corner[(k + 7) % 8], Pp = corner[(k + 1) % 8];
+    cs.push([P[0] + (Pm[0] - P[0]) * t, P[1] + (Pm[1] - P[1]) * t]);
+    cs.push([P[0] + (Pp[0] - P[0]) * t, P[1] + (Pp[1] - P[1]) * t]);
+  }
+  const pos = [], idx = [];
+  for (const [x, z] of cs) pos.push(x * rA, -hy, z * rA);
+  for (const [x, z] of cs) pos.push(x * rB,  hy, z * rB);
+  for (let i = 0; i < N; i++){ const a = i, b = (i + 1) % N; idx.push(a, b, N + b, a, N + b, N + i); }
+  const cB = pos.length / 3; pos.push(0, -hy, 0); for (let i = 0; i < N; i++) idx.push(cB, (i + 1) % N, i);
+  const cT = pos.length / 3; pos.push(0,  hy, 0); for (let i = 0; i < N; i++) idx.push(cT, N + i, N + (i + 1) % N);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 2), 2));
+  g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3(), _bm = new THREE.Matrix4();
+function bar(parent, mat, a, b, r, r2 = r, flat = 1, nrm = null, bevel = 0){
   const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b);
   const dir = vb.clone().sub(va);
   const len = dir.length();
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8, 1, false, Math.PI / 8), mat);
+  // 8-kulmainen prisma; r (a-pää) → r2 (b-pää) kaventaa kärkeä, flat litistää.
+  // bevel > 0 → octagonin kulmat viistetään (octaStrutGeo)
+  const geo = bevel > 0 ? octaStrutGeo(r, r2, len, bevel)
+                        : new THREE.CylinderGeometry(r2, r, len, 8, 1, false, Math.PI / 8);
+  if (flat !== 1) geo.scale(1, 1, flat);
+  const m = new THREE.Mesh(geo, mat);
   m.position.copy(va).addScaledVector(dir, 0.5);
-  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  const y = _by.copy(dir).normalize();
+  if (nrm) {
+    // litistetty akseli (local z) pakotetaan rungon normaalin suuntaan, jotta
+    // litteä sivu makaa runkoa vasten (ohut säteen suunnassa, leveä tangentissa)
+    _bz.set(nrm[0], nrm[1], nrm[2]);
+    _bz.addScaledVector(y, -_bz.dot(y));   // poista pituusakselin komponentti
+    if (_bz.lengthSq() < 1e-8) _bz.set(1, 0, 0);
+    _bz.normalize();
+    _bx.crossVectors(y, _bz).normalize();
+    _bz.crossVectors(_bx, y).normalize();
+    m.quaternion.setFromRotationMatrix(_bm.makeBasis(_bx, y, _bz));
+  } else {
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), y);
+  }
   parent.add(m);
   return m;
 }
@@ -622,15 +782,15 @@ function buildCockpit(opts){
   // avaruusaluksen kehikko sinisävyiseksi (yhtenäinen sinisen kojelaudan kanssa);
   // sukkula säilyttää lämpimän/neutraalin metallisävynsä
   const blue = !opts.shuttle;
-  const frameMat = new THREE.MeshStandardMaterial({ color: blue ? 0x2b3340 : 0x383c42, roughness: 0.55, metalness: 0.7, flatShading: true });
-  applyPH(frameMat, 'metal_plate_02', blue ? [0.6, 0.92, 1.9] : [1.1, 1.3, 1.65], [2, 1]);
+  const frameMat = new THREE.MeshStandardMaterial({ color: blue ? 0x1f2f4a : 0x383c42, roughness: blue ? 0.5 : 0.55, metalness: blue ? 0.45 : 0.7, flatShading: true });
+  applyPH(frameMat, 'metal_plate_02', blue ? [0.26, 0.55, 2.15] : [1.1, 1.3, 1.65], [2, 1]);
   const darkMat = new THREE.MeshStandardMaterial({ color: blue ? 0x1a2230 : 0x202329, roughness: 0.75, metalness: 0.4 });
   applyPH(darkMat, 'metal_plate_02', blue ? [0.5, 0.72, 1.3] : [0.65, 0.75, 0.95], [1, 1]);
   const floorMat = new THREE.MeshStandardMaterial({ color: blue ? 0x20242c : 0x26282c, roughness: 0.8, metalness: 0.45 });
   applyPH(floorMat, 'metal_plate', blue ? [1.3, 1.5, 1.95] : [1.7, 1.7, 1.75], [3, 3]);   // kyynelpeltilattia
   const panelT = makePanelTex();
   const wallMat = new THREE.MeshStandardMaterial({
-    map: panelT, color: blue ? 0x6f829c : 0xffffff, roughness: 0.92, metalness: 0.12, side: THREE.DoubleSide,
+    map: panelT, color: blue ? 0x53709f : 0xffffff, roughness: 0.92, metalness: 0.12, side: THREE.DoubleSide,
     bumpMap: panelT, bumpScale: 0.5,
   });
   const con = makeConsoleTex(opts.accentCss);
@@ -650,8 +810,8 @@ function buildCockpit(opts){
     roughness: 0.55, metalness: 0.22, side: THREE.DoubleSide, depthWrite: false,
   });
   const seatMat = new THREE.MeshStandardMaterial({ color: opts.seat, roughness: 0.95, metalness: 0.05 });
-  const pipeMat = new THREE.MeshStandardMaterial({ color: blue ? 0x39414f : 0x4c5056, roughness: 0.45, metalness: 0.8, flatShading: true });
-  applyPH(pipeMat, 'metal_plate_02', blue ? [0.6, 0.92, 1.75] : [0.95, 1.1, 1.4], [1, 2]);
+  const pipeMat = new THREE.MeshStandardMaterial({ color: blue ? 0x25364f : 0x4c5056, roughness: blue ? 0.48 : 0.45, metalness: blue ? 0.5 : 0.8, flatShading: true });
+  applyPH(pipeMat, 'metal_plate_02', blue ? [0.26, 0.55, 2.1] : [0.95, 1.1, 1.4], [1, 2]);
   // kaarevan näyttöpaneelin taustakehys (DoubleSide → sisäpinta näkyy pelaajalle)
   const bezelMat = new THREE.MeshStandardMaterial({ color: 0x23262c, roughness: 0.7, metalness: 0.5, side: THREE.DoubleSide });
   applyPH(bezelMat, 'metal_plate_02', [0.7, 0.78, 0.95], [3, 1]);
@@ -675,18 +835,24 @@ function buildCockpit(opts){
       bar(g, frameMat, faceP(i, t0, s0), faceP(i, t1, s0), 0.035);
       bar(g, frameMat, faceP(i, t0, s1), faceP(i, t1, s1), 0.035);
     }
-    // putken rivat reunoja pitkin → keulaa kohti suppenevat linjat
-    bar(g, pipeMat, ringP(RING_REAR, i), ringP(RING_FRONT, i), 0.045);
+    // putken rivat reunoja pitkin → ohuet, keulaa (kauinta kärkeä) kohti
+    // suippenevat ja litistetyt rimat (avaruusalus); litteä sivu runkoa vasten
+    const ea = ringP(RING_REAR, i), eb = ringP(RING_FRONT, i);
+    bar(g, pipeMat, ea, eb, blue ? 0.026 : 0.045, blue ? 0.008 : 0.045, blue ? 0.5 : 1,
+        blue ? [ea[0] + eb[0], ea[1] + eb[1], 0] : null);
   }
 
   /* lasikupu: 8 reunapaneelia keularenkaasta sisärenkaaseen + keskioktagoni.
      Tukipuut säteilevät renkaiden kulmista — falcon-kanopia */
   for (let i = 0; i < 8; i++) {
     quad(g, glassMat, ringP(RING_FRONT, i), ringP(RING_INNER, i), ringP(RING_INNER, i + 1), ringP(RING_FRONT, i + 1));
-    bar(g, frameMat, ringP(RING_FRONT, i), ringP(RING_FRONT, i + 1), 0.055);  // keularengas (ikkunan ulkokehys)
+    bar(g, frameMat, ringP(RING_FRONT, i), ringP(RING_FRONT, i + 1), blue ? 0.034 : 0.055);  // keularengas (ikkunan ulkokehys)
     if (!opts.shuttle) {   // sukkulalla yksi iso ikkuna ilman tukipuita
-      bar(g, frameMat, ringP(RING_FRONT, i), ringP(RING_INNER, i), 0.05);     // säteittäiset tukipuut
-      bar(g, frameMat, ringP(RING_INNER, i), ringP(RING_INNER, i + 1), 0.04); // sisärengas
+      // säteittäiset tukipuut: sisärengasta (kärkeä) kohti suippenevat, litistetyt,
+      // litteä sivu kupua vasten (rungon normaali), kulmat hieman viistetty
+      const ra = ringP(RING_FRONT, i), rb = ringP(RING_INNER, i);
+      bar(g, frameMat, ra, rb, 0.034, 0.016, 0.6, [ra[0] + rb[0], ra[1] + rb[1], 0], 0.16);
+      bar(g, frameMat, ringP(RING_INNER, i), ringP(RING_INNER, i + 1), 0.024); // sisärengas
     }
   }
   {
@@ -719,8 +885,12 @@ function buildCockpit(opts){
     { w: 0.95, x: -0.93, z: dashZ + 0.27, ry: 0.62 },
     { w: 0.95, x: 0.93, z: dashZ + 0.27, ry: -0.62 },
   ];
+  // avaruusaluksella kojelaudan pinta = sama sininen runkotekstuuri kuin
+  // tukipuissa (PNG peittää sen, mutta alalaidassa pilkottava kaista sulautuu);
+  // sukkulalla säilyy nappikonsoli (consoleMat)
+  const deckMat = blue ? frameMat : consoleMat;
   for (const sg of segs) {
-    const b = box(dash, [darkMat, darkMat, consoleMat, darkMat, darkMat, darkMat],
+    const b = box(dash, [darkMat, darkMat, deckMat, darkMat, darkMat, darkMat],
       sg.w, 0.09, 0.55, sg.x, dashY, sg.z, tilt, sg.ry, 0);
     // etulevy konsolista lattiaan
     box(dash, darkMat, sg.w, 0.52, 0.07, sg.x * 1.13, dashY - 0.28, sg.z - 0.18 + Math.abs(sg.x) * 0.16, 0, sg.ry, 0);
@@ -816,7 +986,7 @@ function buildCockpit(opts){
   blinker(dash, 0xff5340, 0.30, dashY + 0.06, dashZ + 0.20, 1.7, 1.3);
 
   /* keskipedestaali kaasukahvoineen */
-  box(g, [darkMat, darkMat, consoleMat, darkMat, darkMat, darkMat], 0.40, 0.32, 0.5, 0, -0.80, -0.30, -0.12);
+  box(g, [darkMat, darkMat, deckMat, darkMat, darkMat, darkMat], 0.40, 0.32, 0.5, 0, -0.80, -0.30, -0.12);
   for (const lx of [-0.09, 0.09]) {
     const lever = box(g, pipeMat, 0.03, 0.2, 0.03, lx, -0.56, -0.30, 0.5);
     box(lever, darkMat, 0.06, 0.05, 0.06, 0, 0.11, 0);
