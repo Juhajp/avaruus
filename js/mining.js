@@ -69,7 +69,7 @@ const mineTime = (type) => 7.2 / (REFINE_AMT[type] || 3);
 const COLLIDE_R = 1.5;                                 // esiintymän törmäyssäde (ei voi kävellä läpi)
 const _col = [0, 0];
 let deposits = [];
-let scene = null, heightFn = null, active = false;
+let scene = null, heightFn = null, active = false, planetName = null;
 let oreGeo = null, oreMats = null;   // luodaan per pintakäynti (scene-dispose hävittää)
 let mineralEnv = null;               // taivaan IBL-kartta heijastuksiin (surface.js asettaa)
 let rockMap = null, rockNor = null;  // planeetan kivitekstuuri + normaalikartta (surface.js asettaa)
@@ -228,6 +228,7 @@ function relocate(d, px, pz){
 /* kutsutaan pintascenen rakennuksesta; esiintymät Marsille ja Kuulle */
 export function initMining(sc, name, hFn){
   clearMining();
+  planetName = name;
   if (!ORE_SETS[name]) { renderHud(); return; }
   ORE = ORE_SETS[name];
   scene = sc; heightFn = hFn; active = true;
@@ -319,6 +320,13 @@ export function resolveCollision(x, z){
     }
   }
   _col[0] = x; _col[1] = z; return _col;
+}
+// kantaman sisällä olevat esiintymät (kypäränäytön tutkalle)
+export function depositsNear(x, z, r){
+  if (!active) return [];
+  const out = [];
+  for (const d of deposits) { if (d.pop < 0.5) continue; const dd = Math.hypot(d.x - x, d.z - z); if (dd <= r) out.push({ x: d.x, z: d.z, type: d.type, d: dd }); }
+  return out;
 }
 /* tummat halkeamat louhittaessa: kohteen kivitekstuurin päälle piirretään
    pieniä mustia halkeamia, joita tulee LISÄÄ edistymän myötä (kappale ei kutistu) */
@@ -449,9 +457,10 @@ export function renderHud(){
   if (!el) return;
   const raw = line(RAW), made = line(MADE);
   el.innerHTML =
-    (raw ? `<div class="mhRow">${raw}</div>` : '<div class="mhRow mhDim">ei raaka-aineita</div>') +
+    (raw ? `<div class="mhRow">${raw}</div>` : (planetName === 'Kuu' ? '' : '<div class="mhRow mhDim">ei raaka-aineita</div>')) +
     (made ? `<div class="mhRow mhMade">${made}</div>` : '') +
-    `<div class="mhHint">tähtää esiintymään + pidä hiiren vasen = louhi · C = jalostus</div>`;
+    // Kuun pinnalla ei selitetekstejä (kypäränäyttö hoitaa opastuksen)
+    (planetName === 'Kuu' ? '' : `<div class="mhHint">tähtää esiintymään + pidä hiiren vasen = louhi · C = jalostus</div>`);
 }
 export function renderCraft(){
   const el = document.getElementById('craftPanel');

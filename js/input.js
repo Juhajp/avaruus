@@ -1,7 +1,7 @@
 /* ---------------- Ohjaus: hiiri, näppäimet, UI-napit ---------------- */
 import { renderer } from './core.js';
 import { bodies, orbitLines, placeNearBody } from './bodies.js';
-import { quickTravel, tryBeamDown, exitSurface, abortDescent } from './surface.js';
+import { quickTravel, tryBeamDown, exitSurface, abortDescent, aimingAtShuttle } from './surface.js';
 import { toggleShipView, nearParkedShuttle } from './cockpit.js';
 import { toggleCraft, craftRecipe, isCraftOpen, setMining } from './mining.js';
 import { useItem } from './resources.js';
@@ -177,7 +177,7 @@ addEventListener('keydown', (e) => {
   } else {
     if (e.code === 'KeyB') {
       if (S.mode === 'descent') abortDescent();
-      else if (nearParkedShuttle()) exitSurface();   // paluu vain sukkulan vierestä
+      else if (nearParkedShuttle() || aimingAtShuttle()) exitSurface();   // paluu sukkulan vierestä tai sitä osoittaen
     }
   }
 });

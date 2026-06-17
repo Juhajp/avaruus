@@ -2059,6 +2059,9 @@ function enterSurfaceScene(b, mode){
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
   clearMining();
+  if (helmetCanvas) { helmetCanvas.style.display = 'none'; hudReturnEl.style.display = 'none'; }
+  const sp = document.getElementById('surfacePanel'); if (sp) sp.style.display = '';   // palauta muille planeetoille
+  S.shuttlePos = null;
   S.mode = 'space';
   whiteOutEl.style.opacity = '0';
   setHeatShimmer(0, 0);
@@ -2104,6 +2107,122 @@ export function exitSurface(){
   placeNearBody(idx, 6);
 }
 
+/* ---- Kypäränäyttö (HUD): visiirin lasiin heijastuva TUTKA. Havaitsee vain
+   kantaman (RADAR_RANGE) sisällä olevat kohteet ja näyttää ne blippeinä, joiden
+   etäisyys keskeltä = etäisyys pelaajaan ja suunta = suhteellinen suuntima
+   (pelaaja = ylös). Kohteita ei nimetä — vain "KOHDE" + kokoarvio — kunnes
+   pelaaja saapuu kohteen viereen (NAME_RANGE). Lasiheijastus: läpinäkyvä canvas
+   + screen-blend + cyan-hehku + kaareva perspektiivikallistus. */
+const APOLLO_SITE = new THREE.Vector3(-11, 0, -17);   // kaluston keskus
+const _hFwd = new THREE.Vector3();
+const HUD_MONO = 'ui-monospace, "SF Mono", Menlo, monospace';
+const RADAR_RANGE = 180;   // tutkan kantama (m)
+const NAME_RANGE = 12;     // kohde nimetään kun näin lähellä
+let helmetCanvas = null, helmetCtx = null, hudReturnEl = null;
+
+export function aimingAtShuttle(){
+  if (!S.shuttlePos || S.mode !== 'surface') return false;
+  camera.getWorldDirection(_hFwd); _hFwd.y = 0; _hFwd.normalize();
+  const dx = S.shuttlePos.x - surfX, dz = S.shuttlePos.z - surfZ, d = Math.hypot(dx, dz);
+  if (d < 0.1 || d > 90) return false;
+  return (_hFwd.x * dx + _hFwd.z * dz) / d > 0.95;   // ~18° tähtäyskartio
+}
+function detectContacts(){
+  const list = [];
+  const push = (x, z, name, sizeWord, big) => { const d = Math.hypot(x - surfX, z - surfZ); if (d <= RADAR_RANGE) list.push({ x, z, name, sizeWord, big, d }); };
+  if (surfaceBody && surfaceBody.def.name === 'Kuu') push(APOLLO_SITE.x, APOLLO_SITE.z, 'APOLLO-PAIKKA', 'SUURI', true);
+  if (S.shuttlePos) push(S.shuttlePos.x, S.shuttlePos.z, 'SUKKULA', 'SUURI', true);
+  return list;
+}
+function buildHud(){
+  helmetCanvas = document.createElement('canvas'); helmetCanvas.width = 440; helmetCanvas.height = 150;
+  helmetCtx = helmetCanvas.getContext('2d');
+  helmetCanvas.id = 'helmetHud';
+  helmetCanvas.style.cssText = 'position:fixed;left:50%;bottom:5.5%;width:440px;height:150px;'
+    + 'transform:translateX(-50%) perspective(1000px) rotateX(16deg);transform-origin:center bottom;'
+    + 'mix-blend-mode:screen;opacity:0.92;pointer-events:none;z-index:6;display:none';
+  document.body.appendChild(helmetCanvas);
+  hudReturnEl = document.createElement('div'); hudReturnEl.id = 'hudReturn';
+  hudReturnEl.style.cssText = 'position:fixed;left:50%;bottom:34%;transform:translateX(-50%);z-index:6;pointer-events:none;'
+    + 'display:none;color:#7af0ff;font:700 17px ' + HUD_MONO + ';letter-spacing:3px;text-shadow:0 0 10px #1aa0c8;mix-blend-mode:screen';
+  hudReturnEl.textContent = '↩ PALUU  ( B )';
+  document.body.appendChild(hudReturnEl);
+}
+function drawRadar(contacts, nearest, fwdAng){
+  const c = helmetCtx, W = helmetCanvas.width, H = helmetCanvas.height;
+  c.clearRect(0, 0, W, H);
+  const cyan = '#62e8ff', dim = 'rgba(108,228,255,0.5)';
+  c.strokeStyle = 'rgba(108,228,255,0.28)'; c.lineWidth = 1.5; c.shadowColor = cyan; c.shadowBlur = 7;
+  c.beginPath(); c.roundRect(5, 5, W - 10, H - 10, 16); c.stroke(); c.shadowBlur = 0;
+  // tutkaympyrä + kehärenkaat + ristikko
+  const cx = 80, cy = H / 2 + 2, R = 62;
+  c.strokeStyle = 'rgba(108,228,255,0.5)'; c.lineWidth = 1.4; c.shadowColor = cyan; c.shadowBlur = 5;
+  c.beginPath(); c.arc(cx, cy, R, 0, 6.2832); c.stroke(); c.shadowBlur = 0;
+  c.strokeStyle = 'rgba(108,228,255,0.20)'; c.lineWidth = 1;
+  c.beginPath(); c.arc(cx, cy, R * 0.66, 0, 6.2832); c.stroke();
+  c.beginPath(); c.arc(cx, cy, R * 0.33, 0, 6.2832); c.stroke();
+  c.beginPath(); c.moveTo(cx - R, cy); c.lineTo(cx + R, cy); c.moveTo(cx, cy - R); c.lineTo(cx, cy + R); c.stroke();
+  // pulssi: laajeneva rengas keskeltä ulospäin (toistuva)
+  const phase = (S.simTime * 0.55) % 1;
+  const pulseR = phase * R;
+  c.strokeStyle = `rgba(120,240,255,${(0.55 * (1 - phase)).toFixed(2)})`; c.lineWidth = 1.6;
+  c.shadowColor = cyan; c.shadowBlur = 6;
+  c.beginPath(); c.arc(cx, cy, pulseR, 0, 6.2832); c.stroke(); c.shadowBlur = 0;
+  // pelaaja keskellä (kolmio = eteen)
+  c.fillStyle = 'rgba(108,228,255,0.9)';
+  c.beginPath(); c.moveTo(cx, cy - 6); c.lineTo(cx - 4, cy + 4); c.lineTo(cx + 4, cy + 4); c.closePath(); c.fill();
+  // blipit: kirkastuvat kun pulssirengas ohittaa niiden etäisyyden
+  for (const ct of contacts) {
+    const rel = Math.atan2(ct.x - surfX, ct.z - surfZ) - fwdAng;
+    const rr = Math.min(R, ct.d / RADAR_RANGE * R);
+    const bx = cx + Math.sin(rel) * rr, by = cy - Math.cos(rel) * rr;
+    const age = ((phase - rr / R) % 1 + 1) % 1;     // kuinka kauan pulssin ohituksesta
+    const ping = 0.32 + 0.68 * Math.exp(-age * 4.0);
+    c.fillStyle = `rgba(${ct.big ? '120,240,255' : '255,200,90'},${ping.toFixed(2)})`;
+    c.shadowColor = ct.big ? cyan : '#ffb000'; c.shadowBlur = 7 * ping;
+    c.beginPath(); c.arc(bx, by, ct.big ? 4.5 : 3, 0, 6.2832); c.fill();
+  }
+  c.shadowBlur = 0;
+  if (nearest) {   // korosta lähin kontakti
+    const rel = Math.atan2(nearest.x - surfX, nearest.z - surfZ) - fwdAng;
+    const rr = Math.min(R, nearest.d / RADAR_RANGE * R);
+    c.strokeStyle = '#eaffff'; c.lineWidth = 1.2;
+    c.beginPath(); c.arc(cx + Math.sin(rel) * rr, cy - Math.cos(rel) * rr, 7, 0, 6.2832); c.stroke();
+  }
+  // lukema oikealla
+  const tx = 178; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+  c.shadowColor = cyan; c.shadowBlur = 4;
+  c.fillStyle = dim; c.font = '700 11px ' + HUD_MONO; c.fillText('TUTKA · ' + contacts.length + ' KOHDETTA', tx, 30);
+  if (nearest) {
+    const named = nearest.d <= NAME_RANGE;
+    c.fillStyle = '#e2f7ff'; c.font = '700 18px ' + HUD_MONO; c.fillText(named ? nearest.name : 'KOHDE', tx, 58);
+    c.fillStyle = dim; c.font = '700 11px ' + HUD_MONO; c.fillText('KOKO ≈ ' + nearest.sizeWord, tx, 78);
+    c.fillStyle = cyan; c.font = '700 30px ' + HUD_MONO; c.fillText('≈ ' + nearest.d.toFixed(0) + ' M', tx, 112);
+  } else {
+    c.fillStyle = dim; c.font = '700 15px ' + HUD_MONO; c.fillText('EI KONTAKTEJA', tx, 66);
+  }
+  c.shadowBlur = 0;
+  // hento kiilto (lasiheijastus)
+  const g = c.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, 'rgba(180,240,255,0.10)'); g.addColorStop(0.5, 'rgba(180,240,255,0)');
+  c.fillStyle = g; c.beginPath(); c.roundRect(6, 6, W - 12, H - 12, 14); c.fill();
+}
+function updateHelmetHud(){
+  if (!helmetCanvas) buildHud();
+  const on = (S.mode === 'surface' || S.mode === 'descent') && surfaceBody && surfHeightFn;
+  if (!on) { helmetCanvas.style.display = 'none'; hudReturnEl.style.display = 'none'; return; }
+  const sp = document.getElementById('surfacePanel');
+  if (sp) sp.style.display = (surfaceBody.def.name === 'Kuu') ? 'none' : '';
+  camera.getWorldDirection(_hFwd);
+  const fwdAng = Math.atan2(_hFwd.x, _hFwd.z);
+  const contacts = detectContacts();
+  let nearest = null; for (const ct of contacts) if (!nearest || ct.d < nearest.d) nearest = ct;
+  drawRadar(contacts, nearest, fwdAng);
+  helmetCanvas.style.display = 'block';
+  const nearSh = S.shuttlePos && Math.hypot(S.shuttlePos.x - surfX, S.shuttlePos.z - surfZ) < 10;
+  hudReturnEl.style.display = (S.mode === 'surface' && (aimingAtShuttle() || nearSh)) ? 'block' : 'none';
+}
+
 export function updateSurface(dt){
   updateDaylight();
   const running = S.keys.ShiftLeft || S.keys.ShiftRight;
@@ -2146,6 +2265,7 @@ export function updateSurface(dt){
     surfZ + rZ * sway
   );
   updateStorm(dt);   // myrskyn ajoitus, näkyvyys ja pölyjuovat (kameran ympärillä)
+  updateHelmetHud();
 }
 
 /* ---- matalalento: hidas lähestyminen vie pintalentoon ----
@@ -2339,6 +2459,7 @@ export function updateDescent(dt){
   const rollOk = Math.abs(rollDeg) <= MAX_ROLL_DEG;
   ld.roll.style.color = rollOk ? '#4dff88' : '#ff7a5c';
   ld.v.style.color = descentV <= SOFT_V ? '#4dff88' : '#9fd8ff';
+  updateHelmetHud();
 }
 
 // debug-koukkua (__sim.surf) varten; setDayPhase: 0 = auringonnousu,

@@ -1314,6 +1314,7 @@ function parkShuttle(){
   m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   sd.scene.add(m);
   shuttleSurf = m;
+  S.shuttlePos = m.position.clone();   // kypäränäyttö lukee tästä (vältetään sirkulaarinen import)
 }
 
 /* etäisyyssovitus: lähellä planeetan pintaa (tai matalalennossa maata)
