@@ -14,7 +14,7 @@ export const BODIES = [
     opts:{ c1:[0.93,0.80,0.55], c2:[0.83,0.66,0.40], c3:[0.97,0.91,0.74], bandFreq:1.6, turb:2.6, flow:0.020 },
     atmo:{ color:[1.0,0.85,0.55], intensity:0.55, power:3.2 } },
   { name:'Maa',       a:1.0,    r:5.0,  incl:0.0,  tilt:23.4, spinP:239.3, phase:0.30, type:'earth',
-    atmo:{ color:[0.30,0.55,1.0], intensity:0.3, power:3.6, scale:1.03 } },
+    atmo:{ color:[0.30,0.55,1.0], intensity:0.42, power:3.6, scale:1.03 } },
   { name:'Mars',      a:1.524,  r:2.66, incl:1.85, tilt:25.2, spinP:246.2, phase:1.20, type:'rocky',
     opts:{ c1:[0.48,0.21,0.10], c2:[0.70,0.37,0.18], c3:[0.26,0.11,0.06], scale:4.0, rugged:0.8, polar:0.86 },
     atmo:{ color:[0.85,0.55,0.38], intensity:0.30, power:3.5 } },

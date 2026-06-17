@@ -10,6 +10,9 @@ import { S } from './state.js';
 
 export const ITEM_NAMES = {
   rauta: 'Rautaoksidi', silikaatti: 'Silikaatit', jaa: 'Vesijää',
+  // Kuun mineraalit (realistiset): ilmeniitti (Fe-Ti-oksidi, maaria), anortiitti
+  // (maasälpä, ylängöt), helium-3 (regoliittiin sitoutunut fuusiopolttoaine)
+  ilmeniitti: 'Ilmeniitti', anortiitti: 'Anortiitti', helium3: 'Helium-3',
   teras: 'Teräs', happi: 'Happisäiliö', komposiitti: 'Komposiitti', paneeli: 'Runkopaneeli',
 };
 // jalostusreseptit: kuluttaa varastosta in-osat, tuottaa out-tuotteen varastoon.
@@ -20,19 +23,36 @@ export const RECIPES = [
   { out: 'komposiitti', in: { silikaatti: 3 } },
   { out: 'happi',       in: { jaa: 2 } },
   { out: 'paneeli',     in: { teras: 2, komposiitti: 1 } },
+  // Kuun mineraalit jalostuvat samoihin tuotteisiin: ilmeniitistä rauta-titaani
+  // pelkistyy teräkseksi, anortiitti (alumiinisilikaatti) komposiitiksi.
+  // Helium-3 on harvinainen kerättävä (fuusiopolttoaine, ei jalostusta).
+  { out: 'teras',       in: { ilmeniitti: 3 } },
+  { out: 'komposiitti', in: { anortiitti: 3 } },
 ];
-const RAW = ['rauta', 'silikaatti', 'jaa'];
+const RAW = ['rauta', 'silikaatti', 'jaa', 'ilmeniitti', 'anortiitti', 'helium3'];
 const MADE = ['teras', 'komposiitti', 'happi', 'paneeli'];
 
 // esiintymätyypit: väri, emissio (hehku) ja suhteellinen yleisyys
 // kivimäisiä esiintymiä: sama tekstuuri kuin tavallisilla kivillä, mutta hillitty
 // tunnusväri (kerrotaan kivitekstuurilla) erottaa lajit toisistaan ja kivistä
-const ORE = [
-  { type: 'rauta',      col: 0xc86a42, w: 0.42 },   // ruosteenpunainen vivahde
-  { type: 'silikaatti', col: 0xbcbcae, w: 0.38 },   // vaalean harmaa
-  { type: 'jaa',        col: 0x9ec6de, w: 0.20 },    // sinertävä
-];
-function pickOre(){ const r = Math.random(); let a = 0; for (const o of ORE) { a += o.w; if (r < a) return o; } return ORE[0]; }
+// esiintymäsetit planeetoittain (väri = hillitty tunnusvivahde kivitekstuurin päällä)
+const ORE_SETS = {
+  Mars: [
+    { type: 'rauta',      col: 0xc86a42, w: 0.42 },   // ruosteenpunainen vivahde
+    { type: 'silikaatti', col: 0xbcbcae, w: 0.38 },   // vaalean harmaa
+    { type: 'jaa',        col: 0x9ec6de, w: 0.20 },    // sinertävä
+  ],
+  // Kuun realistiset mineraalit: tumma ilmeniitti (maaria), vaalea anortiitti
+  // (ylängöt), vesijää (napakraatterit), harvinainen hohtava helium-3
+  Kuu: [
+    { type: 'ilmeniitti', col: 0x4f4a47, w: 0.38 },   // tumma rauta-titaanioksidi
+    { type: 'anortiitti', col: 0xdad6cd, w: 0.34 },   // vaalea maasälpä
+    { type: 'jaa',        col: 0x9ec6de, w: 0.16 },    // sinertävä vesijää
+    { type: 'helium3',    col: 0xa6dcff, w: 0.12 },    // harvinainen, kalpean sininen
+  ],
+};
+let ORE = ORE_SETS.Mars;   // aktiivinen setti (valitaan initMiningissä)
+function pickOre(){ const r = Math.random(); let a = 0, tot = 0; for (const o of ORE) tot += o.w; for (const o of ORE) { a += o.w / tot; if (r < a) return o; } return ORE[0]; }
 
 const COUNT = 12, NEAR = 16, FAR = 70;
 const MINE_TIME = 1.2, REACH = 14, AIM_COS = 0.975;   // louhinta-aika (s), kantama (m, 3D), tähtäyskartio ~13°
@@ -139,7 +159,7 @@ function makeDeposit(){
   // kivimäinen lohkareklusteri (kuten tavalliset kivet), tyvi osin maan alle
   const n = 2 + Math.floor(Math.random() * 2);    // 2–3 lohkaretta
   for (let i = 0; i < n; i++) {
-    const m = new THREE.Mesh(oreGeo, oreMats.rauta);
+    const m = new THREE.Mesh(oreGeo, oreMats[ORE[0].type]);   // korvataan setOre:lla
     const s = 0.55 + Math.random() * 0.7;
     m.scale.setScalar(s);
     m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
@@ -174,10 +194,11 @@ function relocate(d, px, pz){
   d.mesh.scale.setScalar(0.001);
 }
 
-/* kutsutaan pintascenen rakennuksesta; esiintymät vain Marsille */
+/* kutsutaan pintascenen rakennuksesta; esiintymät Marsille ja Kuulle */
 export function initMining(sc, name, hFn){
   clearMining();
-  if (name !== 'Mars') { renderHud(); return; }
+  if (!ORE_SETS[name]) { renderHud(); return; }
+  ORE = ORE_SETS[name];
   scene = sc; heightFn = hFn; active = true;
   oreGeo = makeOreRockGeo();
   oreMats = {};
@@ -200,7 +221,7 @@ export function initMining(sc, name, hFn){
   burstGeo = new THREE.OctahedronGeometry(0.13, 0);   // kidemäiset sirut
   bursts = [];
   for (let i = 0; i < BURST_POOL; i++) {
-    const m = new THREE.Mesh(burstGeo, oreMats.rauta);
+    const m = new THREE.Mesh(burstGeo, oreMats[ORE[0].type]);
     m.visible = false;
     sc.add(m);
     bursts.push({ mesh: m, vel: new THREE.Vector3(), spin: new THREE.Vector3(), life: 0, max: 0, base: 1 });
@@ -282,7 +303,7 @@ function aimedDeposit(){
   return best;
 }
 export function updateMining(dt, px, pz){
-  // louhintatyökalu: näkyy Marsin pinnalla, heiluu kun louhitaan
+  // louhintatyökalu: näkyy louhittavalla pinnalla (Mars/Kuu), heiluu kun louhitaan
   tool.visible = active;
   updateTool(dt, active && (_lmb || S.keys.Space));
   if (!active) return;

@@ -674,7 +674,8 @@ export const SURFACE_CONFIGS = {
     ground: 0x9a9896, ground2: 0x5c5b59, rock: 0x807e7c,
     hScale: 22, freq: 0.0048,
     pbr: { base: 'gravelly_sand', second: 'rocks_ground_05', rock: 'rock_boulder_dry',
-           baseScale: 6, secondScale: 0.45, rockScale: 16, tint: 0.6, bright: 1.1, desat: 0.72, dust: 0.75 },
+           baseScale: 6, secondScale: 0.45, rockScale: 16, tint: 0.6, bright: 1.1, desat: 0.72, dust: 0.75,
+           secMix: 0.3 },   // hienovarainen sekundäärivaihtelu (ei litteä, ei voimakas "patchy")
     dayLength: 360,    // sidotusti kytketty kiertoon: aurinko kiertää taivaan ja Maan vaihe muuttuu
     sun: { color: [4.0, 4.0, 3.95], size: 95, intensity: 1.6 },
     hemi: [0x0c0c0e, 0x161618, 0.14], stars: true,
@@ -1104,7 +1105,7 @@ function fillTile(mesh, tx, tz, segs){
       const jit = fbm2(wx * 0.05 + 5, wz * 0.05, 2) - 0.47;
       let rockW = 1 - sstep(0.58 + jit * 0.2, 0.80, _vn.y);
       rockW = Math.max(rockW, sstep(hs * 2.0, hs * 3.4, h));
-      const secW = sstep(0.42, 0.60, fbm2(wx * 0.009 + 31, wz * 0.009 + 7, 3) + jit * 0.3) * (1 - rockW);
+      const secW = sstep(0.42, 0.60, fbm2(wx * 0.009 + 31, wz * 0.009 + 7, 3) + jit * 0.3) * (1 - rockW) * (pbr.secMix ?? 1);
       spl.setXYZ(v, 1 - rockW - secW, secW, rockW);
     } else {
       const shade = (0.72 + 0.55 * ((h / hs) * 0.5 + 0.5)) * 1.16;
@@ -1446,7 +1447,7 @@ function buildEarthInSky(sc){
   earth.position.copy(dir).multiplyScalar(dist);
   sc.add(earth);
   const atmo = new THREE.Mesh(new THREE.SphereGeometry(R * 1.03, 48, 32),
-    new THREE.MeshBasicMaterial({ color: 0x4d80d0, transparent: true, opacity: 0.054,
+    new THREE.MeshBasicMaterial({ color: 0x6ba3ee, transparent: true, opacity: 0.054,
       side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
   atmo.position.copy(earth.position);
   sc.add(atmo);

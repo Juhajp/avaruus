@@ -74,7 +74,10 @@ export function updateFlight(dt){
   camera.position.addScaledVector(fwd, S.effFrac * C * dt);
 
   // kehysseuranta: lähellä planeettaa kamera kulkee sen mukana,
-  // jotta kappaleen vierellä voi leijua sen karkaamatta radallaan
+  // jotta kappaleen vierellä voi leijua sen karkaamatta radallaan.
+  // VAIN lähin (suurin paino) kappale vetää — muuten esim. Kuun vierellä myös
+  // Maa vetäisi (Kuu on Maan vetoalueella), jolloin Maan nopea rataliike
+  // laskettaisiin kahteen kertaan ja kamera sinkoutuisi Kuusta irti.
   S.dragBody = null; S.dragWeight = 0;
   for (const b of bodies) {
     if (!(b.def.a > 0) && b.def.parent == null) continue;   // aurinkoa ei seurata
@@ -82,14 +85,16 @@ export function updateFlight(dt){
     const near = b.def.r * 8, far = b.def.r * 15;
     if (d < far) {
       const w = d < near ? 1 : 1 - (d - near) / (far - near);
-      // kappaleen rataliike äärellisdifferenssinä (toimii myös kuulle, joka
-      // kiertää emoplaneettaa eikä Aurinkoa → ei analyyttistä a·angVel-kaavaa)
-      bodyPosition(b, S.simTime - 0.05, _v2);
-      bodyPosition(b, S.simTime + 0.05, _p);
-      _v2.subVectors(_p, _v2).multiplyScalar(10);   // yks/s (Δt = 0,1 s)
-      camera.position.addScaledVector(_v2, w * dt);
       if (w > S.dragWeight) { S.dragWeight = w; S.dragBody = b; }
     }
+  }
+  if (S.dragBody) {
+    // kappaleen rataliike äärellisdifferenssinä (toimii myös kuulle, joka
+    // kiertää emoplaneettaa eikä Aurinkoa → ei analyyttistä a·angVel-kaavaa)
+    bodyPosition(S.dragBody, S.simTime - 0.05, _v2);
+    bodyPosition(S.dragBody, S.simTime + 0.05, _p);
+    _v2.subVectors(_p, _v2).multiplyScalar(10);   // yks/s (Δt = 0,1 s)
+    camera.position.addScaledVector(_v2, S.dragWeight * dt);
   }
 
   // törmäyssuoja: ei planeetan sisään — liu'utaan pintaa pitkin
