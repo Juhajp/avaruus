@@ -163,17 +163,19 @@ function updateDaylight(){
 /* ---- kypärävalo: kameran lapsi, valo silmien yläpuolelta alaviistoon ----
    Kapea, tarkennettu valokeila ympäröivään pimeyteen. Käänteisneliövaimennus
    ja maltillinen voimakkuus, ettei maasto/objektit hehku puhki. */
-const HELMET_INT = 62;
+const HELMET_INT = 150;
 let helmetLight = null;
 (function initHelmetLight(){
-  helmetLight = new THREE.SpotLight(0xffe9c4, 0, 120, 0.40, 0.45, 2);
-  helmetLight.position.set(0, 0.5, 0.1);        // hieman silmien yläpuolella
-  helmetLight.target.position.set(0, -2.2, -7); // alaviistoon eteen (hieman ylempänä), kohti maata
+  // pidempi kantama (distance 240), loivempi vaimennus (decay 1.7) ja eteenpäin
+  // tähdätty keila → valoa kauemmas pelaajan eteen
+  helmetLight = new THREE.SpotLight(0xffe9c4, 0, 240, 0.42, 0.5, 1.7);
+  helmetLight.position.set(0, 0.5, 0.1);         // hieman silmien yläpuolella
+  helmetLight.target.position.set(0, -1.0, -15); // loivasti alaviistoon → valo kantaa kauas eteen
   // kypärävalo heittää myös varjot (päällä vain yöllä, ks. updateDaylight)
   helmetLight.castShadow = false;
   helmetLight.shadow.mapSize.set(1024, 1024);
   helmetLight.shadow.camera.near = 1;
-  helmetLight.shadow.camera.far = 80;
+  helmetLight.shadow.camera.far = 140;
   helmetLight.shadow.bias = -0.0006;
   helmetLight.shadow.normalBias = 0.4;
   camera.add(helmetLight);
@@ -1407,9 +1409,9 @@ function makeSkyEarthMaterial(){
       varying vec2 vUv; varying vec3 vN; varying vec3 vWP; varying vec3 vOP;
       ` + NOISE_GLSL + /* glsl */`
       void main(){
-        // sama himmennetty/desaturoitu albedo kuin avaruuden Maassa
-        vec3 day = texture2D(uDay, vUv).rgb * vec3(0.74, 0.81, 0.92);
-        day = mix(day, vec3(dot(day, vec3(0.299, 0.587, 0.114))), 0.16);
+        // himmennetty ja desaturoitu albedo — kuusta katsottuna Maa on tummempi
+        vec3 day = texture2D(uDay, vUv).rgb * vec3(0.52, 0.57, 0.64);
+        day = mix(day, vec3(dot(day, vec3(0.299, 0.587, 0.114))), 0.30);
         vec3 night = texture2D(uNight, vUv).rgb;
         vec3 N = normalize(vN); vec3 S = normalize(uSun); vec3 V = normalize(cameraPosition - vWP);
         float ndl = dot(N, S);
@@ -1428,8 +1430,8 @@ function makeSkyEarthMaterial(){
                      + fbm(vOP * 4.5 + 2.0 * cq) * 0.20 + fbm(vOP * 8.5 + 1.5 * cq) * 0.14;
         float ca = smoothstep(-0.02, 0.12, cshape);
         ca *= 0.45 + 0.55 * smoothstep(0.03, 0.24, fbm(vOP * 0.9 + 1.2 * cq));
-        vec3 cloudCol = vec3(1.0) * (diff * 0.85 + 0.04);
-        vec3 surf = day * (diff * 1.15 + 0.012) + lights;
+        vec3 cloudCol = vec3(1.0) * (diff * 0.6 + 0.03);
+        vec3 surf = day * (diff * 0.92 + 0.01) + lights;
         vec3 col = mix(surf, cloudCol, ca * 0.92) + atmo;
         gl_FragColor = vec4(col, 1.0);
         #include <logdepthbuf_fragment>

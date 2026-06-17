@@ -10,26 +10,25 @@ import { S } from './state.js';
 
 export const ITEM_NAMES = {
   rauta: 'Rautaoksidi', silikaatti: 'Silikaatit', jaa: 'Vesijää',
-  // Kuun mineraalit (realistiset): ilmeniitti (Fe-Ti-oksidi, maaria), anortiitti
-  // (maasälpä, ylängöt), helium-3 (regoliittiin sitoutunut fuusiopolttoaine)
-  ilmeniitti: 'Ilmeniitti', anortiitti: 'Anortiitti', helium3: 'Helium-3',
+  // kiviplaneettojen ja Kuun realistiset mineraalit
+  pyriitti: 'Pyriitti', ilmeniitti: 'Ilmeniitti', anortiitti: 'Anortiitti',
   teras: 'Teräs', happi: 'Happisäiliö', komposiitti: 'Komposiitti', paneeli: 'Runkopaneeli',
 };
 // jalostusreseptit: kuluttaa varastosta in-osat, tuottaa out-tuotteen varastoon.
 // Happisäiliö ja Runkopaneeli ovat käyttötuotteita: ne varastoidaan ja käytetään
 // erikseen (J/K tai HUD-napit, resources.js) aluksen hapen/rungon täyttöön.
 export const RECIPES = [
-  { out: 'teras',       in: { rauta: 3 } },
+  // teräksen lähteet: malmin rikkauden mukaan eri määrä → 1 teräs
+  // (hematiitti tehokkain 2, ilmeniitti 3, pyriitti heikoin 4)
+  { out: 'teras',       in: { rauta: 2 } },
+  { out: 'teras',       in: { ilmeniitti: 3 } },
+  { out: 'teras',       in: { pyriitti: 4 } },
   { out: 'komposiitti', in: { silikaatti: 3 } },
+  { out: 'komposiitti', in: { anortiitti: 3 } },
   { out: 'happi',       in: { jaa: 2 } },
   { out: 'paneeli',     in: { teras: 2, komposiitti: 1 } },
-  // Kuun mineraalit jalostuvat samoihin tuotteisiin: ilmeniitistä rauta-titaani
-  // pelkistyy teräkseksi, anortiitti (alumiinisilikaatti) komposiitiksi.
-  // Helium-3 on harvinainen kerättävä (fuusiopolttoaine, ei jalostusta).
-  { out: 'teras',       in: { ilmeniitti: 3 } },
-  { out: 'komposiitti', in: { anortiitti: 3 } },
 ];
-const RAW = ['rauta', 'silikaatti', 'jaa', 'ilmeniitti', 'anortiitti', 'helium3'];
+const RAW = ['rauta', 'silikaatti', 'jaa', 'pyriitti', 'ilmeniitti', 'anortiitti'];
 const MADE = ['teras', 'komposiitti', 'happi', 'paneeli'];
 
 // esiintymätyypit: väri, emissio (hehku) ja suhteellinen yleisyys
@@ -37,25 +36,36 @@ const MADE = ['teras', 'komposiitti', 'happi', 'paneeli'];
 // tunnusväri (kerrotaan kivitekstuurilla) erottaa lajit toisistaan ja kivistä
 // esiintymäsetit planeetoittain (väri = hillitty tunnusvivahde kivitekstuurin päällä)
 const ORE_SETS = {
+  Merkurius: [
+    { type: 'rauta',      col: 0xc86a42, w: 0.45 },   // rautapitoinen regoliitti
+    { type: 'silikaatti', col: 0xbcbcae, w: 0.35 },   // vaalean harmaa
+    { type: 'jaa',        col: 0x9ec6de, w: 0.20 },    // napakraattereiden vesijää
+  ],
+  Venus: [
+    { type: 'pyriitti',   col: 0xb89a4e, w: 0.45 },   // metallinen "huurre" ylängöillä
+    { type: 'silikaatti', col: 0xbcbcae, w: 0.55 },   // basalttitasangot
+  ],
   Mars: [
     { type: 'rauta',      col: 0xc86a42, w: 0.42 },   // ruosteenpunainen vivahde
     { type: 'silikaatti', col: 0xbcbcae, w: 0.38 },   // vaalean harmaa
     { type: 'jaa',        col: 0x9ec6de, w: 0.20 },    // sinertävä
   ],
-  // Kuun realistiset mineraalit: tumma ilmeniitti (maaria), vaalea anortiitti
-  // (ylängöt), vesijää (napakraatterit), harvinainen hohtava helium-3
   Kuu: [
-    { type: 'ilmeniitti', col: 0x4f4a47, w: 0.38 },   // tumma rauta-titaanioksidi
-    { type: 'anortiitti', col: 0xdad6cd, w: 0.34 },   // vaalea maasälpä
-    { type: 'jaa',        col: 0x9ec6de, w: 0.16 },    // sinertävä vesijää
-    { type: 'helium3',    col: 0xa6dcff, w: 0.12 },    // harvinainen, kalpean sininen
+    { type: 'ilmeniitti', col: 0x4f4a47, w: 0.40 },   // tumma rauta-titaanioksidi (maaria)
+    { type: 'anortiitti', col: 0xdad6cd, w: 0.36 },   // vaalea maasälpä (ylängöt)
+    { type: 'jaa',        col: 0x9ec6de, w: 0.24 },    // napakraattereiden vesijää
   ],
 };
 let ORE = ORE_SETS.Mars;   // aktiivinen setti (valitaan initMiningissä)
 function pickOre(){ const r = Math.random(); let a = 0, tot = 0; for (const o of ORE) tot += o.w; for (const o of ORE) { a += o.w / tot; if (r < a) return o; } return ORE[0]; }
 
-const COUNT = 12, NEAR = 16, FAR = 70;
-const MINE_TIME = 1.2, REACH = 14, AIM_COS = 0.975;   // louhinta-aika (s), kantama (m, 3D), tähtäyskartio ~13°
+const COUNT = 26, NEAR = 25, FAR = 150;   // esiintymäpooli levitetty laajemmalle alueelle
+const REACH = 14, AIM_COS = 0.975;   // kantama (m, 3D), tähtäyskartio ~13°
+// louhinta-aika riippuu mineraalista: mitä ENEMMÄN jalostukseen tarvitaan, sitä
+// nopeampi louhia (käänteinen suhde). Hitain (jalostustarve 2) = 3,6 s ≈ 3×
+// vanhasta (1,2 s), nopein (tarve 4) = 1,8 s. Yhteisaika per jaloste pysyy ~7,2 s.
+const REFINE_AMT = { rauta: 2, jaa: 2, silikaatti: 3, ilmeniitti: 3, anortiitti: 3, pyriitti: 4 };
+const mineTime = (type) => 7.2 / (REFINE_AMT[type] || 3);
 const COLLIDE_R = 1.5;                                 // esiintymän törmäyssäde (ei voi kävellä läpi)
 const _col = [0, 0];
 let deposits = [];
@@ -68,6 +78,7 @@ let rockMap = null, rockNor = null;  // planeetan kivitekstuuri + normaalikartta
 export function setMineralEnv(tex){
   mineralEnv = tex;
   if (oreMats) for (const k in oreMats) { oreMats[k].envMap = tex; oreMats[k].needsUpdate = true; }
+  for (const m of toolMats) { m.envMap = tex; m.needsUpdate = true; }   // työkalun metalli heijastaa taivasta
 }
 
 // surface.js kutsuu kun kivitekstuuri on ladattu → esiintymät käyttävät sitä
@@ -103,26 +114,46 @@ let mineTarget = null, mineProg = 0; // nykyinen louhintakohde ja edistymä
 const _fwd = new THREE.Vector3(), _to = new THREE.Vector3();
 
 /* ---- ensimmäisen persoonan louhintatyökalu (kameran lapsi) ----
-   Stilisoitu metallihakku oikeassa alakulmassa; heiluu kaarella kun louhitaan
-   (Minecraft-tyylinen hakkuanimaatio). Näkyy vain Marsin kävelymoodissa. */
+   Octagonaalinen metallihakku oikeassa alakulmassa; heiluu kaarella kun
+   louhitaan (Minecraft-tyylinen hakkuanimaatio). Näkyy kiviplaneetoilla ja
+   Kuulla kävelymoodissa. Realistiset PBR-metallitekstuurit Poly Havenista. */
 const TOOL_POS = new THREE.Vector3(0.42, -0.46, -0.95);
 const TOOL_ROT = new THREE.Vector3(-0.30, 0.62, 0.35);
 let swingT = 0, swingAmt = 0;
+let toolMats = [];   // työkalun materiaalit (envMap päivitetään setMineralEnvissä)
+// realistiset metallitekstuurit Poly Havenilta (diff + normaali + karheus + metallisuus)
+const PH_TOOL = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/';
+function loadToolTex(mat, slug, ru, rv){
+  const L = new THREE.TextureLoader();
+  const load = (map, key, srgb) => L.load(`${PH_TOOL}${slug}/${slug}_${map}_1k.jpg`, t => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(ru, rv); t.anisotropy = 4;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    mat[key] = t; mat.needsUpdate = true;
+  });
+  load('diff', 'map', true);
+  load('nor_gl', 'normalMap', false);
+  load('rough', 'roughnessMap', false);
+  load('metal', 'metalnessMap', false);
+}
 function buildTool(){
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x5b3a22, roughness: 0.9, metalness: 0.0 });
-  // himmeä, karhea metalli — ei peilimäisiä kirkkaita heijastuksia (ei "loista")
-  const steel = new THREE.MeshStandardMaterial({ color: 0x70777f, roughness: 0.72, metalness: 0.35, envMapIntensity: 0.35 });
-  // varsi (puu) + teräskaulus
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.025, 0.6, 10), wood);
+  // kahva: octagonaalinen metalli (metal_plate_02), terä/kaulus: teräs (metal_plate)
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0x9298a0, roughness: 0.55, metalness: 0.9, envMapIntensity: 0.5 });
+  loadToolTex(handleMat, 'metal_plate_02', 1, 4);
+  const steel = new THREE.MeshStandardMaterial({ color: 0x8c929a, roughness: 0.5, metalness: 0.9, envMapIntensity: 0.5 });
+  loadToolTex(steel, 'metal_plate', 1, 1);
+  toolMats = [handleMat, steel];
+  if (mineralEnv) { handleMat.envMap = steel.envMap = mineralEnv; }
+  // varsi: 8-särmäinen (octagoni) metallikahva
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.026, 0.6, 8), handleMat);
   handle.position.set(0, -0.1, 0); g.add(handle);
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.04, 0.07, 10), steel);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.042, 0.07, 8), steel);
   collar.position.set(0, 0.18, 0); g.add(collar);
   // pää: kaksipäinen teräskärki poikittain varteen nähden (klassinen hakku)
   const head = new THREE.Mesh(new THREE.OctahedronGeometry(0.5, 0), steel);
   head.scale.set(0.78, 0.1, 0.12);            // pitkä X-suunnassa, ohut → kaksi kärkeä
   head.position.set(0, 0.205, 0.015);
-  head.rotation.set(0.22, Math.PI / 2 - 0.35, 0);   // 90° − 20° (käännetty -40° edellisestä), kallistus eteen-alas
+  head.rotation.set(0.22, Math.PI / 2 - 0.35, 0);   // 90° − 20°, kallistus eteen-alas
   g.add(head);
   g.position.copy(TOOL_POS);
   g.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z);
@@ -270,7 +301,7 @@ function renderMineBar(){
   if (!el) return;
   if (active && mineTarget) {
     el.style.display = 'block';
-    el.firstElementChild.style.width = Math.min(100, mineProg / MINE_TIME * 100) + '%';
+    el.firstElementChild.style.width = Math.min(100, mineProg / mineTime(mineTarget.type) * 100) + '%';
   } else el.style.display = 'none';
 }
 /* louhinta = pidä hiiren vasen (tai Space) pohjassa ja TÄHTÄÄ esiintymään;
@@ -289,7 +320,57 @@ export function resolveCollision(x, z){
   }
   _col[0] = x; _col[1] = z; return _col;
 }
-function restoreMesh(d){ d.mesh.position.set(d.x, d.y, d.z); d.mesh.scale.setScalar(d.pop); }
+/* tummat halkeamat louhittaessa: kohteen kivitekstuurin päälle piirretään
+   pieniä mustia halkeamia, joita tulee LISÄÄ edistymän myötä (kappale ei kutistu) */
+const CRACK_MAX = 30;        // halkeamien enimmäismäärä täydellä edistymällä (enemmän)
+const CRACK_SZ = 256;
+function drawCrack(ctx){
+  let x = Math.random() * CRACK_SZ, y = Math.random() * CRACK_SZ;
+  let ang = Math.random() * 6.28;
+  const segs = 7 + (Math.random() * 6 | 0);    // 7–12 segmenttiä (pidemmät juovat)
+  ctx.strokeStyle = 'rgba(8,6,5,0.85)'; ctx.lineCap = 'round';
+  ctx.lineWidth = 0.3 + Math.random() * 0.4;   // 0,3–0,7 (ohuet)
+  ctx.beginPath(); ctx.moveTo(x, y);
+  for (let s = 0; s < segs; s++) {
+    ang += (Math.random() - 0.5) * 0.9;        // loiva mutkittelu
+    const len = 18 + Math.random() * 12;       // 18–30 px segmentit
+    x += Math.cos(ang) * len; y += Math.sin(ang) * len;
+    ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+function applyCracks(d){
+  if (d._crackMats) return;
+  const cv = document.createElement('canvas'); cv.width = cv.height = CRACK_SZ;
+  const ctx = cv.getContext('2d');
+  if (rockMap && rockMap.image) ctx.drawImage(rockMap.image, 0, 0, CRACK_SZ, CRACK_SZ);
+  else { ctx.fillStyle = '#8a8a8a'; ctx.fillRect(0, 0, CRACK_SZ, CRACK_SZ); }
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  if (rockMap) { tex.wrapS = rockMap.wrapS; tex.wrapT = rockMap.wrapT; tex.repeat.copy(rockMap.repeat); }
+  d._crackCtx = ctx; d._crackTex = tex; d._crackN = 0;
+  d._origMats = []; d._crackMats = [];
+  for (const m of d.mesh.children) {
+    d._origMats.push(m.material);
+    const cm = m.material.clone();
+    cm.map = tex;                  // sama UV kuin kivitekstuurissa → halkeamat pintaan
+    m.material = cm; d._crackMats.push(cm);
+  }
+}
+function setCrackLevel(d, f){
+  if (!d._crackCtx) return;
+  const target = Math.floor(f * CRACK_MAX);    // halkeamia lisää edistymän myötä
+  if (target <= d._crackN) return;
+  while (d._crackN < target) { drawCrack(d._crackCtx); d._crackN++; }
+  d._crackTex.needsUpdate = true;
+}
+function removeCracks(d){
+  if (!d._origMats) return;
+  d.mesh.children.forEach((m, i) => { m.material = d._origMats[i]; });
+  for (const cm of d._crackMats) cm.dispose();
+  if (d._crackTex) d._crackTex.dispose();
+  d._origMats = d._crackMats = d._crackCtx = d._crackTex = null;
+}
+function restoreMesh(d){ removeCracks(d); d.mesh.position.set(d.x, d.y, d.z); d.mesh.scale.setScalar(d.pop); }
 function aimedDeposit(){
   camera.getWorldDirection(_fwd);
   let best = null, bestDot = AIM_COS;
@@ -316,19 +397,21 @@ export function updateMining(dt, px, pz){
   // louhinta
   if (_lmb || S.keys.Space) {
     const t = aimedDeposit();
-    if (t !== mineTarget) { if (mineTarget) restoreMesh(mineTarget); mineTarget = t; mineProg = 0; }
+    if (t !== mineTarget) { if (mineTarget) restoreMesh(mineTarget); mineTarget = t; mineProg = 0; if (mineTarget) applyCracks(mineTarget); }
     if (mineTarget) {
       mineProg += dt;
-      const f = Math.min(1, mineProg / MINE_TIME);
+      const mt = mineTime(mineTarget.type);
+      const f = Math.min(1, mineProg / mt);
       const j = 0.07 * f;                        // tärinä kasvaa edistymän mukaan
       mineTarget.mesh.position.set(
         mineTarget.x + (Math.random() - 0.5) * j,
         mineTarget.y + (Math.random() - 0.5) * j,
         mineTarget.z + (Math.random() - 0.5) * j);
-      mineTarget.mesh.scale.setScalar(mineTarget.pop * (1 - 0.4 * f));
-      if (mineProg >= MINE_TIME) {               // murtuu → purske + saalis + ilmestyy muualle
+      setCrackLevel(mineTarget, f);             // koko säilyy; halkeamat syvenevät edistymän mukaan
+      if (mineProg >= mt) {                      // murtuu → purske + saalis + ilmestyy muualle
         S.inv[mineTarget.type] = (S.inv[mineTarget.type] || 0) + 1;
         spawnBurst(mineTarget.x, mineTarget.y + 0.5, mineTarget.z, mineTarget.type);
+        removeCracks(mineTarget);
         relocate(mineTarget, px, pz);
         mineTarget = null; mineProg = 0;
         renderHud(); pulse();
