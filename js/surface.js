@@ -49,13 +49,28 @@ function updateDaylight(){
   const tw = d.twilight ? Math.max(0, 1 - Math.abs(elev) / 0.35) * sstep(-0.22, -0.04, elev) : 0;
 
   if (d.cfg.sun) {
+    // Varjofrustumi laajenee ja sen keskus siirtyy auringosta poispäin auringon
+    // laskiessa: muuten matalan auringon PITKÄT varjot leikkautuvat tiukan ±70
+    // katteen reunaan ja näyttävät irtoavan/"pakenevan" kohteesta. Korkealla
+    // aurinko → tiukka ±70 (terävä reuna); alle ~13° kate kasvaa varjon mittaan.
+    const half = Math.min(230, 70 * Math.max(1, 0.22 / Math.max(0.04, elev)));
+    const sh = d.dl.shadow.camera;
+    if (sh.right !== half) {
+      sh.left = -half; sh.right = half; sh.top = half; sh.bottom = -half;
+      sh.updateProjectionMatrix();
+    }
+    // keskus pelaajasta kohti varjojen suuntaa (vaakatasossa auringosta poispäin),
+    // jotta laajeneva kate kattaa juuri pitkien varjojen puolen
+    const hl = Math.hypot(_sunDir.x, _sunDir.z) || 1;
+    const off = (half - 70) * 0.6;
     // valo ja varjokamera seuraavat pelaajaa, mutta keskus napsautetaan
-    // varjokartan tekseliruudukkoon → varjot eivät uimari/savua kävellessä,
-    // vaan liikkuvat vain auringon suunnan mukana (ja tekseliaskelin)
-    const texel = 140 / 4096;                       // frustumin leveys / kartan koko
-    const sx = Math.round(camera.position.x / texel) * texel;
+    // varjokartan tekseliruudukkoon → varjot eivät uimari/savua kävellessä
+    const texel = (2 * half) / 4096;                // frustumin leveys / kartan koko
+    const cxw = camera.position.x - _sunDir.x / hl * off;
+    const czw = camera.position.z - _sunDir.z / hl * off;
+    const sx = Math.round(cxw / texel) * texel;
     const sy = Math.round(camera.position.y / texel) * texel;
-    const sz = Math.round(camera.position.z / texel) * texel;
+    const sz = Math.round(czw / texel) * texel;
     d.dl.target.position.set(sx, sy, sz);
     d.dl.position.set(sx, sy, sz).addScaledVector(_sunDir, 800);
     d.dl.target.updateMatrixWorld();
@@ -671,7 +686,7 @@ export const SURFACE_CONFIGS = {
   },
   Kuu: {
     title: 'KUU — PINTA',
-    info: 'Ei kaasukehää: taivas on pikimusta keskelläkin päivää ja tähdet näkyvät. Painovoima 1/6 Maan. Harmaata regoliittia ja kraattereita. Maa näkyy taivaalla sinisenä kiekkona. Jäljellä Apollo-laskeutumispaikkojen kalustoa: laskeutumismoduulien alaosat, kuukulkijat ja Yhdysvaltain liput.',
+    info: 'Ei kaasukehää: taivas on pikimusta keskelläkin päivää ja tähdet näkyvät. Painovoima 1/6 Maan. Harmaata regoliittia ja kraattereita. Maa näkyy taivaalla sinisenä kiekkona. Jäljellä Apollo-laskeutumispaikkojen kalustoa: laskeutumismoduulien alaosat ja Yhdysvaltain liput.',
     sky: 0x000000, fog: null,
     ground: 0x9a9896, ground2: 0x5c5b59, rock: 0x807e7c,
     hScale: 22, freq: 0.0048,
@@ -1491,26 +1506,6 @@ function makeLanderModule(){
   return g;
 }
 
-function makeRover(){
-  const g = new THREE.Group();
-  const body = new THREE.MeshStandardMaterial({ color: 0xb4b8bc, metalness: 0.5, roughness: 0.5 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x26262a, roughness: 0.85 });
-  const gold = new THREE.MeshStandardMaterial({ color: 0xc8a23a, metalness: 0.5, roughness: 0.5 });
-  const ch = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.3, 1.6), body); ch.position.y = 0.85; g.add(ch);
-  for (const sx of [-1.2, 1.2]) for (const sz of [-0.78, 0.78]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.42, 16), dark);
-    w.rotation.x = Math.PI / 2; w.position.set(sx, 0.55, sz); g.add(w);
-  }
-  for (const sz of [-0.42, 0.42]) {
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.1, 0.58), dark); seat.position.set(-0.2, 1.05, sz); g.add(seat);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.66, 0.58), dark); back.position.set(-0.52, 1.38, sz); g.add(back);
-  }
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.5, 8), body); mast.position.set(1.2, 1.7, 0); g.add(mast);
-  const dish = new THREE.Mesh(new THREE.CircleGeometry(0.55, 20), gold); dish.position.set(1.2, 2.45, 0); dish.rotation.set(-0.7, 0, 0); g.add(dish);
-  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return g;
-}
-
 function makeFlag(){
   const g = new THREE.Group();
   const metal = new THREE.MeshStandardMaterial({ color: 0xcfd2d6, metalness: 0.7, roughness: 0.4 });
@@ -1591,13 +1586,11 @@ function loadGLBModel(file, targetSize, onReady){
 
 function buildApolloSite(sc){
   const place = (o, x, z, ry) => { o.position.set(x, surfHeightFn(x, z), z); o.rotation.y = ry; sc.add(o); };
-  // Laskeutuja: NASAn oikea Apollo Lunar Module (glTF) — varalla proseduraalimalli
-  const lm = new THREE.Group(); place(lm, -15, -21, 0.6);
+  // Laskeutuja: NASAn oikea Apollo Lunar Module (glTF) — varalla proseduraalimalli.
+  // Maasto on tasoitettu kaluston ympäriltä (apolloFlat surfHeightFn:ssä) → seisoo suorassa
+  const lm = new THREE.Group(); place(lm, -13, -19, 0.6);
   loadGLBModel('Apollo Lunar Module/Apollo Lunar Module.glb', 7, m => lm.add(m || makeLanderModule()));
-  // Mönkijä: NASAn Space Exploration Vehicle (glTF) — varalla proseduraalimalli
-  const rv = new THREE.Group(); place(rv, -7, -16, -0.8);
-  loadGLBModel('Space Exploration Vehicle/Space Exploration Vehicle.glb', 6, m => rv.add(m || makeRover()));
-  place(makeFlag(), -11, -13.5, 0.4);
+  place(makeFlag(), -9, -13.5, 0.4);
 }
 
 function buildSurfaceScene(name){
@@ -1613,6 +1606,10 @@ function buildSurfaceScene(name){
   // kohina on luonnostaan ääretöntä; piirteet mahtuvat jakson sisään ilman saumaa
   const FEAT_P = 4200;
   const wrapF = (v) => (((v + FEAT_P / 2) % FEAT_P + FEAT_P) % FEAT_P) - FEAT_P / 2;
+  // Kuun Apollo-kalusto + pelaajan spawn tasaiselle maalle: tasoita keskialue
+  // laajan fbm-muodon korkeuteen (kraatterit kierrätetään muutenkin kauas keskeltä)
+  const apolloFlat = cfg.apollo ? { x: APOLLO_SITE.x, z: APOLLO_SITE.z, r: 26, blend: 30 } : null;
+  const apolloH = apolloFlat ? (fbm2(apolloFlat.x * freq, apolloFlat.z * freq, 2) - 0.5) * 2 * hs : 0;
   surfHeightFn = (x, z) => {
     let h = (fbm2(x * freq, z * freq, 5) - 0.5) * 2 * hs
           + (fbm2(x * freq * 6 + 9, z * freq * 6 + 9, 3) - 0.5) * hs * 0.22;
@@ -1655,6 +1652,11 @@ function buildSurfaceScene(name){
         const hL = (fbm2(x * freq, z * freq, 2) - 0.5) * 2 * hs;
         h = h * (1 - 0.9 * m) + hL * 0.9 * m;
       }
+    }
+    if (apolloFlat) {
+      const d = Math.hypot(x - apolloFlat.x, z - apolloFlat.z);
+      const m = 1 - sstep(apolloFlat.r, apolloFlat.r + apolloFlat.blend, d);
+      if (m > 0) h = h * (1 - m) + apolloH * m;
     }
     return h;
   };
@@ -2120,6 +2122,27 @@ const RADAR_RANGE = 180;   // tutkan kantama (m)
 const NAME_RANGE = 12;     // kohde nimetään kun näin lähellä
 let helmetCanvas = null, helmetCtx = null, hudReturnEl = null;
 
+/* tutkan pulssiääni: hiljainen "bleep" joka pyyhkäisyllä (WebAudio, ei
+   tiedostoa). Soi vasta pelaajan eleen jälkeen — autoplay-rajoitus. */
+let _audioCtx = null, _lastPulse = 1;
+function radarBleep(){
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ac = _audioCtx;
+    if (ac.state === 'suspended') ac.resume();
+    const t = ac.currentTime;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(1180, t);
+    o.frequency.exponentialRampToValueAtTime(1520, t + 0.05);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.05, t + 0.012);   // pieni voimakkuus
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+    o.connect(g); g.connect(ac.destination);
+    o.start(t); o.stop(t + 0.14);
+  } catch (e) { /* ääni ei ole pakollinen */ }
+}
+
 export function aimingAtShuttle(){
   if (!S.shuttlePos || S.mode !== 'surface') return false;
   camera.getWorldDirection(_hFwd); _hFwd.y = 0; _hFwd.normalize();
@@ -2164,6 +2187,8 @@ function drawRadar(contacts, nearest, fwdAng){
   c.beginPath(); c.moveTo(cx - R, cy); c.lineTo(cx + R, cy); c.moveTo(cx, cy - R); c.lineTo(cx, cy + R); c.stroke();
   // pulssi: laajeneva rengas keskeltä ulospäin (toistuva)
   const phase = (S.simTime * 0.55) % 1;
+  if (phase < _lastPulse) radarBleep();   // uusi pyyhkäisy alkoi → bleep
+  _lastPulse = phase;
   const pulseR = phase * R;
   c.strokeStyle = `rgba(120,240,255,${(0.55 * (1 - phase)).toFixed(2)})`; c.lineWidth = 1.6;
   c.shadowColor = cyan; c.shadowBlur = 6;

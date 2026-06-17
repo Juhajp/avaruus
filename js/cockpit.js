@@ -10,7 +10,7 @@
    kamerassa = aluksen rungossa (lento kääntää alusta). */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { scene, camera, AU, C_KMS } from './core.js';
+import { scene, camera, renderer, AU, C_KMS } from './core.js';
 import { loadPH, surfDebug } from './surface.js';
 import { bodies } from './bodies.js';
 import { S } from './state.js';
@@ -1136,22 +1136,135 @@ function buildFalcon(){
   return g;
 }
 
+/* Sukkulan runkopinta: kulunut, likainen valkoinen MAALATTU METALLI (ei
+   metallilevykuviota eikä laattaruudukkoa). Maalipohja, laaja-alainen
+   likamottling, alasvaluvat likajuovat, muutama EPÄSÄÄNNÖLLINEN paneelisauma
+   niitteineen, naarmut (paljastunut metalli kiiltää → matalampi rosoisuus) ja
+   nokituhrut. Bump-kartta korostaa saumaurat/niitit; rosoisuuskartta tekee
+   naarmuista kiiltäviä ja likaläiskistä mattoja → realistinen kuluneisuus.
+   UV-toisto 0,42 → kuvio kattaa ~2,4 yks → ei silmiinpistävää toistoa. */
+let _shuttleHullTex = null;
+function makeShuttleHullTex(){
+  if (_shuttleHullTex) return _shuttleHullTex;
+  const SZ = 512;
+  const al = document.createElement('canvas'); al.width = al.height = SZ;
+  const bp = document.createElement('canvas'); bp.width = bp.height = SZ;
+  const ro = document.createElement('canvas'); ro.width = ro.height = SZ;
+  const c = al.getContext('2d'), b = bp.getContext('2d'), q = ro.getContext('2d');
+  const r = rng(91);
+  c.fillStyle = '#e9eae6'; c.fillRect(0, 0, SZ, SZ);          // hieman kellastunut valkoinen maali
+  b.fillStyle = '#808080'; b.fillRect(0, 0, SZ, SZ);
+  q.fillStyle = '#8c8c8c'; q.fillRect(0, 0, SZ, SZ);          // perusrosoisuus ~0,55 (maalattu metalli)
+
+  // laaja-alainen likamottling: pehmeät harmaanruskeat läiskät (+ mattapintaisemmaksi)
+  for (let i = 0; i < 26; i++) {
+    const x = r() * SZ, y = r() * SZ, rad = 40 + r() * 120, a = 0.04 + r() * 0.07;
+    let g = c.createRadialGradient(x, y, 0, x, y, rad);
+    g.addColorStop(0, `rgba(122,114,99,${a.toFixed(2)})`); g.addColorStop(1, 'rgba(122,114,99,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, rad, 0, 7); c.fill();
+    g = q.createRadialGradient(x, y, 0, x, y, rad);
+    g.addColorStop(0, `rgba(200,200,200,${(a * 2).toFixed(2)})`); g.addColorStop(1, 'rgba(200,200,200,0)');
+    q.fillStyle = g; q.beginPath(); q.arc(x, y, rad, 0, 7); q.fill();
+  }
+  // pystysuuntaiset likajuovat (valuvat alas) — "likainen" tuntu
+  for (let i = 0; i < 60; i++) {
+    const x = r() * SZ, y0 = r() * SZ * 0.6, len = 40 + r() * 200, w = 1 + r() * 2.5, a = 0.05 + r() * 0.12;
+    const g = c.createLinearGradient(0, y0, 0, y0 + len);
+    g.addColorStop(0, 'rgba(94,88,78,0)'); g.addColorStop(0.3, `rgba(94,88,78,${a.toFixed(2)})`); g.addColorStop(1, 'rgba(94,88,78,0)');
+    c.fillStyle = g; c.fillRect(x, y0, w, len);
+  }
+  // paneelisaumat: muutama EPÄSÄÄNNÖLLINEN viiva (ei ruudukkoa) + valoreuna + bump-ura
+  const seams = [];
+  const seam = (x0, y0, x1, y1) => {
+    c.strokeStyle = 'rgba(70,72,70,0.5)'; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
+    c.strokeStyle = 'rgba(255,255,255,0.16)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x0 + 1.5, y0 + 1.5); c.lineTo(x1 + 1.5, y1 + 1.5); c.stroke();
+    b.strokeStyle = '#4a4a4a'; b.lineWidth = 2.5;
+    b.beginPath(); b.moveTo(x0, y0); b.lineTo(x1, y1); b.stroke();
+    seams.push([x0, y0, x1, y1]);
+  };
+  seam(0, 150, SZ, 150 + (r() - 0.5) * 26);
+  seam(0, 332, SZ, 332 + (r() - 0.5) * 26);
+  seam(124, 0, 124 + (r() - 0.5) * 18, SZ);
+  seam(372, 0, 372 + (r() - 0.5) * 18, SZ);
+  // niitit saumojen varteen
+  b.fillStyle = '#9a9a9a'; c.fillStyle = 'rgba(80,82,80,0.35)';
+  for (const [x0, y0, x1, y1] of seams) {
+    const n = Math.hypot(x1 - x0, y1 - y0) / 22 | 0;
+    for (let k = 0; k <= n; k++) {
+      const t = k / n, x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+      b.beginPath(); b.arc(x, y, 1.5, 0, 7); b.fill();
+      c.beginPath(); c.arc(x, y, 1.2, 0, 7); c.fill();
+    }
+  }
+  // naarmut: ohuet vaaleat/tummat viivat; paljas metalli kiiltää → rosoisuus matalampi
+  for (let i = 0; i < 70; i++) {
+    const x = r() * SZ, y = r() * SZ, a2 = r() * 6.28, len = 4 + r() * 22;
+    const dx = Math.cos(a2) * len, dy = Math.sin(a2) * len;
+    c.strokeStyle = r() < 0.5 ? 'rgba(255,255,255,0.22)' : 'rgba(70,68,64,0.18)'; c.lineWidth = 0.8;
+    c.beginPath(); c.moveTo(x, y); c.lineTo(x + dx, y + dy); c.stroke();
+    q.strokeStyle = 'rgba(45,45,45,0.5)'; q.lineWidth = 0.8;
+    q.beginPath(); q.moveTo(x, y); q.lineTo(x + dx, y + dy); q.stroke();
+  }
+  // pienet noki-/likatuhrut
+  for (let i = 0; i < 40; i++) {
+    const x = r() * SZ, y = r() * SZ, rad = 2 + r() * 9;
+    c.fillStyle = `rgba(58,54,48,${(0.05 + r() * 0.1).toFixed(2)})`;
+    c.beginPath(); c.arc(x, y, rad, 0, 7); c.fill();
+  }
+  const t1 = tex(al), t2 = tex(bp, false), t3 = tex(ro, false);
+  for (const t of [t1, t2, t3]) t.repeat.set(0.42, 0.42);
+  _shuttleHullTex = { map: t1, bump: t2, rough: t3 };
+  return _shuttleHullTex;
+}
+
+/* neutraali ympäristökartta sukkulan heijastuksiin: pystygradientti
+   (vaalea "taivas" → tumma "maa") PMREM:nä. Toimii kaikissa tiloissa
+   (avaruus/Kuu/Mars) ilman scenekohtaista kytkentää; antaa valkoiselle
+   rungolle ja lasille hienovaraiset valonheijastukset. */
+let _shuttleEnv = null;
+function shuttleEnvMap(){
+  if (_shuttleEnv) return _shuttleEnv;
+  const cv = document.createElement('canvas'); cv.width = 16; cv.height = 64;
+  const c = cv.getContext('2d');
+  const g = c.createLinearGradient(0, 0, 0, 64);
+  g.addColorStop(0.00, '#454b54'); g.addColorStop(0.46, '#23262b');
+  g.addColorStop(0.54, '#16181c'); g.addColorStop(1.00, '#0a0b0c');
+  c.fillStyle = g; c.fillRect(0, 0, 16, 64);
+  const t = new THREE.CanvasTexture(cv);
+  t.mapping = THREE.EquirectangularReflectionMapping;
+  const pg = new THREE.PMREMGenerator(renderer);
+  const rt = pg.fromEquirectangular(t);
+  t.dispose(); pg.dispose();
+  _shuttleEnv = rt.texture;
+  return _shuttleEnv;
+}
+
 /* Star Trek -henkinen sukkula: virtaviivainen runko viistetystä
    poikkileikkauksesta (8 pistettä × 5 sektiota — kapenee keulaan ja
-   perään), yhtenäinen valkoinen pinta ja punainen vyötäisraita,
+   perään), kulunut likainen valkoinen metallipinta ja punainen vyötäisraita,
    oktagonikonehtimot kiskomaisin laskujalaksin.
    makeShuttleModel rakentaa tuoreen mallin omine resursseineen —
    pinnalle pysäköity kopio saa tuhoutua scenen mukana */
 function makeShuttleModel(withBlinkers = true){
   const g = new THREE.Group();
+  const hull = makeShuttleHullTex();
+  const env = shuttleEnvMap();
+  // kulunut, likainen valkoinen maalattu metalli: metallinen pinta (heijastaa
+  // ympäristöä), rosoisuuskartta tekee naarmuista kiiltäviä ja liasta mattoja
   const hullMat = new THREE.MeshStandardMaterial({
-    color: 0xdfe3e8, roughness: 0.5, metalness: 0.15, side: THREE.DoubleSide,
+    color: 0xffffff, map: hull.map, bumpMap: hull.bump, bumpScale: 0.45,
+    roughnessMap: hull.rough, roughness: 1.0, metalness: 0.55, side: THREE.DoubleSide,
+    envMap: env, envMapIntensity: 0.55,
   });
   const nacMat = new THREE.MeshStandardMaterial({
-    color: 0xdfe3e8, roughness: 0.5, metalness: 0.15, flatShading: true,
+    color: 0xffffff, map: hull.map, bumpMap: hull.bump, bumpScale: 0.4,
+    roughnessMap: hull.rough, roughness: 1.0, metalness: 0.55, flatShading: true,
+    envMap: env, envMapIntensity: 0.55,
   });
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.6, metalness: 0.5, flatShading: true });
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.15, metalness: 0.75, side: THREE.DoubleSide });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.6, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.5 });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.12, metalness: 0.85, side: THREE.DoubleSide, envMap: env, envMapIntensity: 1.0 });
   const stripeMat = new THREE.MeshStandardMaterial({ color: 0xb31f1f, roughness: 0.45, metalness: 0.1 });
   const redGlow = new THREE.MeshBasicMaterial();
   redGlow.color.setRGB(1.15, 0.35, 0.25);
@@ -1245,6 +1358,24 @@ function makeShuttleModel(withBlinkers = true){
   box(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0);
   bar(g, darkMat, [-0.55, 0.7, 1.8], [-0.55, 1.05, 1.8], 0.022);
   if (withBlinkers) blinker(g, 0xffb340, -0.55, 1.1, 1.8, 0.9, 0.5);
+
+  // ---- yksityiskohdat: ohjaamon sivuikkunat, RCS-suuttimet, keulaputki ----
+  // sivuikkunat: tummat lasiruudut etukabiinin kyljissä (kehys upotettuna)
+  for (const s of [-1, 1])
+    for (const wz of [-0.25, -0.85, -1.45]) {
+      const wx = 0.96 - (wz < -1.0 ? 0.06 : 0);   // runko kapenee keulaa kohti
+      box(g, darkMat, 0.03, 0.2, 0.3, s * (wx + 0.01), 0.04, wz);   // kehys
+      box(g, glassMat, 0.02, 0.15, 0.24, s * (wx + 0.03), 0.04, wz);
+    }
+  // RCS-ohjaussuuttimet: pienet tummat suppilot keulassa ja perässä
+  const rcs = (x, y, z) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.02, 0.05, 8), darkMat); m.position.set(x, y, z); m.rotation.x = Math.PI / 2; g.add(m); };
+  for (const s of [-1, 1]) { rcs(s * 0.34, 0.34, -2.78); rcs(s * 0.5, -0.2, -2.74); rcs(s * 1.0, 0.0, 1.9); }
+  rcs(0, 0.5, -2.7); rcs(0, -0.45, -2.5);
+  // keulan pitot-/anturiputki rungon kärjessä
+  bar(g, darkMat, [0, -0.06, -2.95], [0, -0.04, -3.28], 0.03, 0.008);
+  // pari kohotettua selkäpaneelia (greeble) lakatulla rungolla
+  box(g, hullMat, 0.5, 0.05, 0.7, 0, 0.79, -0.4);
+  box(g, hullMat, 0.26, 0.04, 0.34, 0.32, 0.5, 1.55);
 
   mergeStatic(g);
   return g;
