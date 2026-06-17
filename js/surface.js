@@ -2175,7 +2175,7 @@ function drawRadar(contacts, nearest, fwdAng){
   for (const ct of contacts) {
     const rel = Math.atan2(ct.x - surfX, ct.z - surfZ) - fwdAng;
     const rr = Math.min(R, ct.d / RADAR_RANGE * R);
-    const bx = cx + Math.sin(rel) * rr, by = cy - Math.cos(rel) * rr;
+    const bx = cx - Math.sin(rel) * rr, by = cy - Math.cos(rel) * rr;   // -sin: pelaajan oikea = ruudun oikea
     const age = ((phase - rr / R) % 1 + 1) % 1;     // kuinka kauan pulssin ohituksesta
     const ping = 0.32 + 0.68 * Math.exp(-age * 4.0);
     c.fillStyle = `rgba(${ct.big ? '120,240,255' : '255,200,90'},${ping.toFixed(2)})`;
@@ -2187,7 +2187,7 @@ function drawRadar(contacts, nearest, fwdAng){
     const rel = Math.atan2(nearest.x - surfX, nearest.z - surfZ) - fwdAng;
     const rr = Math.min(R, nearest.d / RADAR_RANGE * R);
     c.strokeStyle = '#eaffff'; c.lineWidth = 1.2;
-    c.beginPath(); c.arc(cx + Math.sin(rel) * rr, cy - Math.cos(rel) * rr, 7, 0, 6.2832); c.stroke();
+    c.beginPath(); c.arc(cx - Math.sin(rel) * rr, cy - Math.cos(rel) * rr, 7, 0, 6.2832); c.stroke();
   }
   // lukema oikealla
   const tx = 178; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
