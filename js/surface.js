@@ -96,6 +96,15 @@ function updateDaylight(){
     d.dl.target.position.copy(_sCtr);
     d.dl.position.copy(_sCtr).addScaledVector(_sunDir, 800);
     d.dl.target.updateMatrixWorld();
+    // VARJON KARKAAMISEN ESTO: bias-rako (peter-panning) kohteen tyven ja varjon
+    // välillä kasvaa ∝ bias/tan(korkeus), joten matalalla auringolla MIKÄ TAHANSA
+    // kiinteä bias venyttää varjon irti kohteesta. Skaalataan bias SUORAAN auringon
+    // korkeudella (elev = sin(korkeus)) → rako = bias/tan ≈ 0,02·elev/elev = vakio
+    // ~0,02 yks eikä kasva → varjo pysyy KIINNI kohteessa horisontille asti.
+    // Takapintavarjostus (shadowSide BackSide) estää aknen pienelläkin biaksella.
+    const biasK = Math.max(0, Math.min(1, elev));
+    d.dl.shadow.bias = -0.0003 * biasK;
+    d.dl.shadow.normalBias = 0.02 * biasK;
   }
   // Varjon häivytys auringonlaskussa: hyvin matalalla aurinko aiheuttaa varjon
   // "karkaamisen" (peter-panning kasvaa ∝ 1/tan(korkeus) → varjo irtoaa kohteen
