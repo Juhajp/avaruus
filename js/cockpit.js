@@ -1415,11 +1415,13 @@ function makeShuttleModel(withBlinkers = true){
 
   // ---- PERÄ: hieman ulkoneva moottori-/laitemoduuli yksityiskohtineen ----
   // (runko päättyy z = 2,35; moduuli porrastuu siitä taaksepäin → ulkonema)
-  // tumma kiinnityslaippa (AALTOPELTI-tekstuuri), hieman runkoa leveämpi → porras näkyy
-  rbox(g, aftFrameMat, 1.64, 1.18, 0.10, 0, -0.02, 2.40, 0.02);
+  // (kiinnityslaippa-levy poistettu — se oli kahdesta perälevystä lähinnä sukkulaa)
   // ulkoneva kotelo (NIITATTU METALLILEVY -tekstuuri), kapeampi kuin runko, viistetyt särmät
-  rbox(g, aftHousingMat, 1.46, 0.96, 0.42, 0, -0.02, 2.62, 0.03);   // z 2,41 → 2,83
-  // (raidallinen huoltoluukku-levy poistettu takapinnasta — kotelon metallilevy jää näkyviin)
+  rbox(g, aftHousingMat, 1.46, 0.96, 0.48, 0, -0.02, 2.59, 0.03);   // z 2,35 → 2,83 (jatkettu runkoon kiinni)
+  // huoltoluukku varoitusraidoin moduulin takapinnassa (canvas-tekstuuri)
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.72), new THREE.MeshStandardMaterial({
+    map: makeDoorTex(), roughness: 0.8, metalness: 0.25 }));
+  door.position.set(0, 0.02, 2.835); g.add(door);             // taso osoittaa +z (taakse)
   // impulssipalkki (hehku) moduulin yläreunaan
   box(g, redGlow, 0.98, 0.07, 0.04, 0, 0.5, 2.84);
   // kaksi päämoottorin suutinta (RUOSTE/NOKI-tekstuuri) moduulin alaosaan (+z)
