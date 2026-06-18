@@ -73,7 +73,7 @@ function subtleTex(){
 let _toonRamp = null;
 function toonRamp(){
   if (_toonRamp) return _toonRamp;
-  const steps = new Uint8Array([70, 140, 205, 255]);   // 4 sävyporrasta (varjo ei aivan musta)
+  const steps = new Uint8Array([55, 145, 255]);   // 3 selvää sävyporrasta (vahva cell-shade)
   _toonRamp = new THREE.DataTexture(steps, steps.length, 1, THREE.RedFormat);
   _toonRamp.minFilter = _toonRamp.magFilter = THREE.NearestFilter;
   _toonRamp.needsUpdate = true;
@@ -1079,6 +1079,25 @@ function buildCockpit(opts){
 /* yhdistä staattiset meshit materiaaleittain — ~90 piirtokutsua → ~10.
    Näytöt (emissiveMap + flicker), vilkkuvalot (MeshBasic) ja
    monimateriaalilaatikot (konsolipinnat) jäävät omiksi mesheikseen */
+/* CELL SHADING -ääriviiva: käänteinen kuori — kopioidaan toon-meshien geometria,
+   työnnetään verteksit normaalin suuntaan ja piirretään mustana TAKAPINNALLA
+   (BackSide). Vain siluetin reunalla kuori näkyy → musta ääriviiva. */
+function addOutlines(g, thickness){
+  const adds = [];
+  g.traverse(o => {
+    if (!o.isMesh || !o.material || !o.material.isMeshToonMaterial) return;
+    const geo = o.geometry.clone();
+    const p = geo.attributes.position, n = geo.attributes.normal;
+    if (!n) return;
+    for (let i = 0; i < p.count; i++)
+      p.setXYZ(i, p.getX(i) + n.getX(i) * thickness, p.getY(i) + n.getY(i) * thickness, p.getZ(i) + n.getZ(i) * thickness);
+    p.needsUpdate = true;
+    const om = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide }));
+    adds.push(om);
+  });
+  for (const om of adds) g.add(om);
+}
+
 function mergeStatic(g){
   g.updateMatrixWorld(true);
   const byMat = new Map();
@@ -1351,22 +1370,7 @@ function makeShuttleModel(withBlinkers = true){
   // RCS-ohjaussuutin: pieni tumma suppilo (käytetään perässä ja keulassa)
   const rcs = (x, y, z) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.02, 0.05, 8), darkMat); m.position.set(x, y, z); m.rotation.x = Math.PI / 2; g.add(m); };
 
-  // PERÄN omat REALISTISET bittikarttatekstuurit (3 eri Poly Haven CC0 -tekstuuria,
-  // eri elementeille → mekaaninen yksityiskohtaisuus erottuu sileästä maalipinnasta):
-  const applyTex = (mat, slug, rep, tint) => {
-    loadPH(slug, 'diff', true).then(t => { if (!t) return;
-      const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep); mat.map = c;
-      if (tint) mat.color.setRGB(tint[0], tint[1], tint[2]); mat.needsUpdate = true; });
-    loadPH(slug, 'nor_gl', false).then(t => { if (!t) return;
-      const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep); mat.normalMap = c; mat.needsUpdate = true; });
-  };
-  // (subtleTex on alkukartta → ei yksiväristä pintaa ennen valokuvan latausta)
-  // 1) peräkotelo: niitattu metallilevy (moottori-/laitemoduuli)
-  const aftHousingMat = toonMat({ color: 0x9aa0a6, map: subtleTex() });
-  applyTex(aftHousingMat, 'metal_plate_02', 1.0, [1.18, 1.22, 1.28]);
-  // 2) kiinnityslaippa + sivupaneelit: aaltopelti (vahvike/ritilä)
-  const aftFrameMat = toonMat({ color: 0x6a6e72, map: subtleTex() });
-  applyTex(aftFrameMat, 'corrugated_iron_03', 1.0, [0.92, 0.94, 0.98]);
+  // (perämoduulin omat tekstuurit/materiaalit poistettu moduulin mukana)
 
   // runko: viistetty poikkileikkaus pyyhkäistynä sektioiden läpi
   const CS = [[-0.78, 0.66], [0.78, 0.66], [1.05, 0.38], [1.05, -0.42],
@@ -1418,26 +1422,8 @@ function makeShuttleModel(withBlinkers = true){
   bar(g, darkMat, wt(3, 1), wt(4, 1), 0.03);
   // (pystysuora keskituki poistettu — yksi yhtenäinen tuulilasi)
 
-  // ---- PERÄ: hieman ulkoneva moottori-/laitemoduuli yksityiskohtineen ----
-  // (runko päättyy z = 2,35; moduuli porrastuu siitä taaksepäin → ulkonema)
-  // (kiinnityslaippa-levy poistettu — se oli kahdesta perälevystä lähinnä sukkulaa)
-  // ulkoneva kotelo (NIITATTU METALLILEVY -tekstuuri), kapeampi kuin runko, viistetyt särmät
-  rbox(g, aftHousingMat, 1.46, 0.96, 0.48, 0, -0.02, 2.59, 0.03);   // z 2,35 → 2,83 (jatkettu runkoon kiinni)
-  // huoltoluukku varoitusraidoin moduulin takapinnassa (canvas-tekstuuri, toon)
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.72), toonMat({ map: makeDoorTex() }));
-  door.position.set(0, 0.02, 2.835); g.add(door);             // taso osoittaa +z (taakse)
-  // impulssipalkki (hehku) moduulin yläreunaan
-  box(g, redGlow, 0.98, 0.07, 0.04, 0, 0.5, 2.84);
-  // (perän rakettisuuttimet hehkukiekkoineen poistettu luukun alta)
-  // pienet yksityiskohdat: louver-tuuletusritilä, kulmasuuttimet, kahvat, putket
-  for (let i = 0; i < 3; i++) box(g, darkMat, 0.5, 0.025, 0.03, -0.32, 0.32 - i * 0.1, 2.835);  // tuuletusritilä luukun vasemmalla
-  for (const s of [-1, 1]) {
-    rbox(g, aftFrameMat, 0.05, 0.78, 0.36, s * 0.7, -0.02, 2.6, 0.01);   // sivupaneeli (aaltopelti)
-    rcs(s * 0.55, 0.5, 2.84);                                   // RCS-suutin yläkulmassa (peruutus)
-    box(g, darkMat, 0.04, 0.04, 0.4, s * 0.55, -0.02, 2.62);    // kylkiputki/johdin
-    rbox(g, hullMat, 0.16, 0.1, 0.06, s * 0.42, 0.34, 2.84, 0.012); // kohopaneeli/kahva luukun yllä
-  }
-  box(g, darkMat, 0.3, 0.12, 0.05, 0, -0.5, 2.84);              // alalaipan greeble keskellä
+  // (perän ulkoneva "laatikko"-moduuli huoltoluukkuineen poistettu — runko
+  //  päättyy peräkanteen z = 2,35)
 
   // konehtimot: valkoiset oktagoniprismat, tummat kärkikartiot ja
   // bussard-hehkut; alla viistetyt kiskomaiset laskujalakset
@@ -1463,11 +1449,9 @@ function makeShuttleModel(withBlinkers = true){
     if (withBlinkers) blinker(g, s < 0 ? 0xff5340 : 0x46d06a, s * 1.36, -0.48, 1.85, 1.3, s);
   }
 
-  // kattodetaljit ja antenni (viistetyt särmät)
+  // kattodetaljit (viistetyt särmät) — antenni-"tappi" poistettu katolta
   rbox(g, hullMat, 0.7, 0.12, 1.2, 0, 0.74, 0.9, 0.02);
   rbox(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0, 0.015);
-  bar(g, darkMat, [-0.55, 0.7, 1.8], [-0.55, 1.05, 1.8], 0.022);
-  if (withBlinkers) blinker(g, 0xffb340, -0.55, 1.1, 1.8, 0.9, 0.5);
 
   // ---- yksityiskohdat: ohjaamon sivuikkunat, RCS-suuttimet, keulaputki ----
   // sivuikkunat: tummat lasiruudut etukabiinin kyljissä (kehys upotettuna)
@@ -1477,16 +1461,15 @@ function makeShuttleModel(withBlinkers = true){
       box(g, darkMat, 0.03, 0.2, 0.3, s * (wx + 0.01), 0.04, wz);   // kehys
       box(g, glassMat, 0.02, 0.15, 0.24, s * (wx + 0.03), 0.04, wz);
     }
-  // RCS-ohjaussuuttimet keulassa ja kyljissä (perän suuttimet lisätty perämoduulissa)
-  for (const s of [-1, 1]) { rcs(s * 0.34, 0.34, -2.78); rcs(s * 0.5, -0.2, -2.74); rcs(s * 1.0, 0.0, 1.9); }
-  rcs(0, 0.5, -2.7); rcs(0, -0.45, -2.5);
-  // keulan pitot-/anturiputki rungon kärjessä
-  bar(g, darkMat, [0, -0.06, -2.95], [0, -0.04, -3.28], 0.03, 0.008);
+  // RCS-ohjaussuuttimet vain kyljissä (keulan leijuvat suuttimet poistettu)
+  for (const s of [-1, 1]) rcs(s * 1.0, 0.0, 1.9);
+  // (keulan pitot-/anturiputki "piikki" poistettu)
   // pari kohotettua selkäpaneelia (greeble) lakatulla rungolla (viistetyt särmät)
   rbox(g, hullMat, 0.5, 0.05, 0.7, 0, 0.79, -0.4, 0.01);
   rbox(g, hullMat, 0.26, 0.04, 0.34, 0.32, 0.5, 1.55, 0.009);
 
   mergeStatic(g);
+  addOutlines(g, 0.02);   // cell shading: musta ääriviiva (käänteinen kuori)
   return g;
 }
 
