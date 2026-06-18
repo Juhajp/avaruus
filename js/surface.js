@@ -1639,12 +1639,89 @@ function loadGLBModel(file, targetSize, onReady){
     (err) => { console.warn('GLB-lataus epäonnistui, käytetään proseduraalimallia:', file, err); onReady(null); });
 }
 
+/* proseduraalinen KULTAFOLION ryppy-normaalikartta: satunnaiset pehmeät
+   taitokset → pehmennys → Sobel-normaali. Antaa kultapinnalle folion
+   kimaltavat poimut (Apollo-laskeutujan kullankeltainen Mylar-/Kapton-folio). */
+let _foilNor = null;
+function foilNormalTex(){
+  if (_foilNor) return _foilNor;
+  const S = 256; let seed = 8237;
+  const rnd = () => { seed = (seed * 16807 + 11) % 2147483647; return (seed & 0xffff) / 0x10000; };
+  const hc = document.createElement('canvas'); hc.width = hc.height = S;
+  const c = hc.getContext('2d');
+  c.fillStyle = '#808080'; c.fillRect(0, 0, S, S);
+  for (let i = 0; i < 180; i++) {            // ryppyjä: vaaleita/tummia pehmeitä viivoja
+    const x0 = rnd() * S, y0 = rnd() * S, a = rnd() * 6.283, len = 12 + rnd() * 75;
+    const v = rnd() < 0.5 ? 205 : 95;
+    c.strokeStyle = `rgba(${v},${v},${v},0.10)`; c.lineWidth = 1 + rnd() * 3;
+    c.beginPath(); c.moveTo(x0, y0); c.lineTo(x0 + Math.cos(a) * len, y0 + Math.sin(a) * len); c.stroke();
+  }
+  const bl = document.createElement('canvas'); bl.width = bl.height = S;
+  const bc = bl.getContext('2d'); try { bc.filter = 'blur(2px)'; } catch (e) {} bc.drawImage(hc, 0, 0);
+  const src = bc.getImageData(0, 0, S, S).data;
+  const out = document.createElement('canvas'); out.width = out.height = S;
+  const oc = out.getContext('2d'); const od = oc.createImageData(S, S);
+  const H = (x, y) => src[(((y + S) % S) * S + ((x + S) % S)) * 4] / 255;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const dx = (H(x + 1, y) - H(x - 1, y)) * 2.5, dy = (H(x, y + 1) - H(x, y - 1)) * 2.5;
+    const l = Math.hypot(-dx, -dy, 1), i = (y * S + x) * 4;
+    od.data[i] = (-dx / l * 0.5 + 0.5) * 255; od.data[i + 1] = (-dy / l * 0.5 + 0.5) * 255;
+    od.data[i + 2] = (1 / l * 0.5 + 0.5) * 255; od.data[i + 3] = 255;
+  }
+  oc.putImageData(od, 0, 0);
+  _foilNor = new THREE.CanvasTexture(out);
+  _foilNor.wrapS = _foilNor.wrapT = THREE.RepeatWrapping; _foilNor.repeat.set(4, 4);
+  return _foilNor;
+}
+
+/* Lisää realistiset bittikarttatekstuurit laskeutumismoduuliin (NASA-glTF tai
+   proseduraalivara): NASA-malli on enimmäkseen tasaisia värejä — luokitellaan
+   materiaalit värin mukaan ja annetaan Poly Haven -valokuvatekstuuri (diff +
+   normaali): vaaleat/harmaat metallipanelit `metal_plate_02` (niitattu levy),
+   tummat osat (suutin, tikkaat) `rust_coarse_01` (noki/karkeus). Kultafolio
+   säilyttää sävynsä mutta saa metallikiillon + levyn relievin. Sävy
+   kerrotaan (×1,6–1,9) kompensoimaan kartan tummennus → kirkkaus säilyy. */
+function applyLanderTextures(root){
+  const seen = new Set();
+  root.traverse(o => {
+    if (!o.isMesh || !(o.geometry.attributes && o.geometry.attributes.uv)) return;
+    const arr = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of arr) {
+      if (!m || !m.isMeshStandardMaterial || seen.has(m) || m.map) continue;  // säilytä valmis tekstuuri
+      seen.add(m);
+      const c = m.color || new THREE.Color(0.6, 0.6, 0.6);
+      const lum = (c.r + c.g + c.b) / 3;
+      const gold = c.r > 0.4 && c.g < c.r && c.b < c.g * 0.7;
+      if (gold) {
+        // KULTAFOLIO: kirkas kullankeltainen folio + ryppy-normaali + metallikiilto
+        // (EI levykuviota/tekstuuria → ei ruskeaa "niitattua" pintaa)
+        m.color.setRGB(1.0, 0.78, 0.34);
+        m.metalness = 0.55; m.roughness = 0.38;
+        m.normalMap = foilNormalTex(); m.normalScale = new THREE.Vector2(1.2, 1.2);
+        m.needsUpdate = true;
+        continue;
+      }
+      const slug = lum < 0.28 ? 'rust_coarse_01' : 'metal_plate_02';
+      const rep = lum < 0.28 ? 2 : 3;
+      m.metalness = Math.max(m.metalness ?? 0, 0.5);
+      m.roughness = 0.58;
+      if (m.color) m.color.multiplyScalar(lum > 0.7 ? 1.9 : 1.6);
+      loadPH(slug, 'diff', true).then(t => { if (!t) return; const cc = t.clone(); cc.needsUpdate = true; cc.repeat.set(rep, rep); m.map = cc; m.needsUpdate = true; });
+      loadPH(slug, 'nor_gl', false).then(t => { if (!t) return; const cc = t.clone(); cc.needsUpdate = true; cc.repeat.set(rep, rep); m.normalMap = cc; m.normalScale = new THREE.Vector2(0.6, 0.6); m.needsUpdate = true; });
+    }
+  });
+}
+
 function buildApolloSite(sc){
   const place = (o, x, z, ry) => { o.position.set(x, surfHeightFn(x, z), z); o.rotation.y = ry; sc.add(o); };
   // Laskeutuja: NASAn oikea Apollo Lunar Module (glTF) — varalla proseduraalimalli.
   // Maasto on tasoitettu kaluston ympäriltä (apolloFlat surfHeightFn:ssä) → seisoo suorassa
   const lm = new THREE.Group(); place(lm, -13, -19, 0.6);
-  loadGLBModel('Apollo Lunar Module/Apollo Lunar Module.glb', 7, m => lm.add(m || makeLanderModule()));
+  loadGLBModel('Apollo Lunar Module/Apollo Lunar Module.glb', 7, m => {
+    const model = m || makeLanderModule();
+    applyLanderTextures(model);   // realistiset bittikarttatekstuurit
+    lm.add(model);
+  });
   place(makeFlag(), -9, -13.5, 0.4);
 }
 
