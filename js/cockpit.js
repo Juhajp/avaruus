@@ -1419,10 +1419,7 @@ function makeShuttleModel(withBlinkers = true){
   rbox(g, aftFrameMat, 1.64, 1.18, 0.10, 0, -0.02, 2.40, 0.02);
   // ulkoneva kotelo (NIITATTU METALLILEVY -tekstuuri), kapeampi kuin runko, viistetyt särmät
   rbox(g, aftHousingMat, 1.46, 0.96, 0.42, 0, -0.02, 2.62, 0.03);   // z 2,41 → 2,83
-  // huoltoluukku varoitusraidoin moduulin takapinnassa (canvas-tekstuuri)
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.72), new THREE.MeshStandardMaterial({
-    map: makeDoorTex(), roughness: 0.8, metalness: 0.25 }));
-  door.position.set(0, 0.02, 2.835); g.add(door);             // taso osoittaa +z (taakse)
+  // (raidallinen huoltoluukku-levy poistettu takapinnasta — kotelon metallilevy jää näkyviin)
   // impulssipalkki (hehku) moduulin yläreunaan
   box(g, redGlow, 0.98, 0.07, 0.04, 0, 0.5, 2.84);
   // kaksi päämoottorin suutinta (RUOSTE/NOKI-tekstuuri) moduulin alaosaan (+z)
@@ -1457,7 +1454,7 @@ function makeShuttleModel(withBlinkers = true){
     buss.position.set(s * 1.36, -0.76, -1.41);
     buss.rotation.y = Math.PI;
     g.add(buss);
-    // (sinertävä konehtimon hehkujuova poistettu)
+    box(g, blueGlow, 0.04, 0.07, 1.7, s * 1.605, -0.76, 0.45);
     // pyloni rungosta konehtimon kanteen
     box(g, hullMat, 0.13, 0.5, 0.85, s * 1.16, -0.5, 0.45, 0, 0, s * 0.5);
     // jalaskisko: matala palkki + ylösviistetty kärki
