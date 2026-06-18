@@ -106,13 +106,21 @@ function updateDaylight(){
     d.dl.shadow.bias = -0.0003 * biasK;
     d.dl.shadow.normalBias = 0.02 * biasK;
   }
-  // Varjon häivytys auringonlaskussa: hyvin matalalla aurinko aiheuttaa varjon
-  // "karkaamisen" (peter-panning kasvaa ∝ 1/tan(korkeus) → varjo irtoaa kohteen
-  // tyvestä ja liukuu pois). Häivytetään suoran valon (= varjonheittäjän) osuus
-  // nollaan horisonttia kohti ja siirretään menetetty valo täytevaloon →
-  // varjon KONTRASTI → 0 eli varjo HÄIPYY PAIKALLAAN (pysyy kiinni kohteessa)
-  // eikä näkymä pimene liian aikaisin. (r160:ssa ei shadow.intensitya.)
-  const sf = d.cfg.sun ? sstep(0.04, 0.15, elev) : 1;
+  // VARJOJEN AIKAPERUSTAINEN HÄIVYTYS: varjot häivytetään NÄKYMÄTTÖMIIN 10 s ENNEN
+  // täydellistä pimeyttä — pehmeä häivytys alkaa ~30 s ennen. Matalalla auringolla
+  // varjot "vaeltavat"/karkaavat (peter-panning + tekselikohina); poistetaan ne
+  // siis kokonaan ennen pimeyttä. Tehdään suoran valon (= ainoan varjonheittäjän)
+  // voimakkuutta laskemalla → varjon kontrasti → 0; menetetty valo siirretään
+  // täytevaloon ettei näkymä pimene liian aikaisin. (r160:ssa ei shadow.intensitya.)
+  let sf = 1;
+  if (d.cfg.sun) {
+    const P_DARK = Math.PI + 0.132;                  // sunPhase jolloin elev = −0,12 (dayF→0)
+    const omega = (2 * Math.PI) / d.cfg.dayLength;   // auringon kulmanopeus (rad/s)
+    let p = sunPhase() % (2 * Math.PI); if (p < 0) p += 2 * Math.PI;
+    let dp = P_DARK - p; if (dp < 0) dp += 2 * Math.PI;
+    const tDark = dp / omega;                         // sekuntia täyteen pimeyteen
+    sf = Math.max(0, Math.min(1, (tDark - 10) / 20)); // 0 kun ≤10 s, 1 kun ≥30 s jäljellä
+  }
   d.dl.intensity = d.baseInt * (d.cfg.sun ? dayF * sf : 0.2 + 0.8 * dayF);
   if (d.twilight) d.dl.color.copy(_c1.set(0xffffff).lerp(d.twilight, tw * 0.85));
   if (d.hemi) d.hemi.intensity = d.baseHemi * (0.22 + 0.78 * dayF)
