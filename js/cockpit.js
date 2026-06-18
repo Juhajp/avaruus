@@ -1429,6 +1429,8 @@ function makeShuttleModel(withBlinkers = true){
   for (const s of [-1, 1]) {
     const noz = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.12, 0.34, 12), aftNozzleMat);
     noz.rotation.x = Math.PI / 2; noz.position.set(s * 0.38, -0.34, 2.9); g.add(noz);
+    const gl = new THREE.Mesh(new THREE.CircleGeometry(0.115, 12), blueGlow);
+    gl.position.set(s * 0.38, -0.34, 3.01); g.add(gl);
   }
   // pienet yksityiskohdat: louver-tuuletusritilä, kulmasuuttimet, kahvat, putket
   for (let i = 0; i < 3; i++) box(g, darkMat, 0.5, 0.025, 0.03, -0.32, 0.32 - i * 0.1, 2.835);  // tuuletusritilä luukun vasemmalla
@@ -1455,7 +1457,7 @@ function makeShuttleModel(withBlinkers = true){
     buss.position.set(s * 1.36, -0.76, -1.41);
     buss.rotation.y = Math.PI;
     g.add(buss);
-    box(g, blueGlow, 0.04, 0.07, 1.7, s * 1.605, -0.76, 0.45);
+    // (sinertävä konehtimon hehkujuova poistettu)
     // pyloni rungosta konehtimon kanteen
     box(g, hullMat, 0.13, 0.5, 0.85, s * 1.16, -0.5, 0.45, 0, 0, s * 0.5);
     // jalaskisko: matala palkki + ylösviistetty kärki
