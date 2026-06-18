@@ -10,6 +10,7 @@
    kamerassa = aluksen rungossa (lento kääntää alusta). */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { scene, camera, renderer, AU, C_KMS } from './core.js';
 import { loadPH, surfDebug } from './surface.js';
 import { bodies } from './bodies.js';
@@ -46,6 +47,25 @@ function tex(cv, srgb = true){
 function rng(seed){
   let s = seed;
   return () => { s = (s * 16807 + 11) % 2147483647; return (s & 0xffff) / 0x10000; };
+}
+// hienovarainen gradientti + kevyt laikutus: käytetään `map`ina materiaaleille,
+// joilla ei ole omaa tekstuuria → mikään pinta ei ole tasaista yksiväristä.
+// Harmaasävyinen (materiaalin color sävyttää); keskiarvo ~0,95 (tuskin tummentaa).
+let _subtleTex = null;
+function subtleTex(){
+  if (_subtleTex) return _subtleTex;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const c = cv.getContext('2d'); const r = rng(131);
+  const g = c.createLinearGradient(0, 0, 64, 128);
+  g.addColorStop(0, '#e6e6e6'); g.addColorStop(0.5, '#ffffff'); g.addColorStop(1, '#dedede');
+  c.fillStyle = g; c.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 1100; i++) {   // hyvin kevyt laikutus
+    const v = 222 + r() * 33 | 0;
+    c.fillStyle = `rgba(${v},${v},${v},0.22)`;
+    c.fillRect(r() * 128, r() * 128, 2 + r() * 6, 2 + r() * 6);
+  }
+  _subtleTex = tex(cv, true);
+  return _subtleTex;
 }
 
 // kulunut metallipaneeli: saumat, niitit, grimet
@@ -204,22 +224,41 @@ function makeConsoleTex(accent){
   return { map: tex(base), emissive: tex(emit), bump: tex(bump, false) };
 }
 
-// takaseinän ovi varoitusraitoineen
+// takaseinän huoltoluukku varoitusraitoineen — ei tasaista yksiväristä pintaa:
+// gradienttipohja + laikutus, keskuspaneeli, niitit, naarmut
 function makeDoorTex(){
   const cv = document.createElement('canvas');
   cv.width = cv.height = 512;
-  const c = cv.getContext('2d');
-  c.fillStyle = '#7e8287'; c.fillRect(0, 0, 512, 512);
-  c.fillStyle = '#6a6e74';
-  c.beginPath();
+  const c = cv.getContext('2d'); const r = rng(211);
+  // pohja: pystygradientti (ei yksivärinen)
+  const g = c.createLinearGradient(0, 0, 0, 512);
+  g.addColorStop(0, '#8a8e94'); g.addColorStop(0.5, '#7e8288'); g.addColorStop(1, '#70747a');
+  c.fillStyle = g; c.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 1500; i++) {   // kevyt likalaikutus
+    const v = 110 + r() * 44 | 0;
+    c.fillStyle = `rgba(${v},${v + 2},${v + 6},0.10)`;
+    c.fillRect(r() * 512, r() * 512, 3 + r() * 11, 3 + r() * 11);
+  }
+  // keskuspaneeli (oktagoni) hieman tummempana
   const oct = [[256, 60], [398, 120], [440, 256], [398, 392], [256, 452], [114, 392], [72, 256], [114, 120]];
-  oct.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]));
-  c.closePath(); c.fill();
+  c.fillStyle = '#6a6e74';
+  c.beginPath(); oct.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); c.fill();
   c.strokeStyle = '#34373c'; c.lineWidth = 8; c.stroke();
   c.lineWidth = 4;
   c.beginPath(); c.moveTo(256, 60); c.lineTo(256, 452); c.stroke();
+  // niitit oktagonin kulmiin + saranat
+  c.fillStyle = '#3a3d42';
+  for (const [x, y] of oct) { c.beginPath(); c.arc(x, y, 6, 0, 7); c.fill(); }
+  c.fillStyle = '#2a2c30'; c.fillRect(120, 235, 24, 12); c.fillRect(368, 265, 24, 12);
+  // naarmut (vaaleat/tummat)
+  for (let i = 0; i < 36; i++) {
+    const x = r() * 512, y = r() * 512, a = r() * 6.28, l = 8 + r() * 34;
+    c.strokeStyle = r() < 0.5 ? 'rgba(210,210,210,0.12)' : 'rgba(50,50,50,0.14)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x, y); c.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); c.stroke();
+  }
+  // varoitusraidat ala- ja yläreunaan
   c.fillStyle = '#caa23c';
-  for (let x = 0; x < 512; x += 64) {   // varoitusraidat ala- ja yläreunaan
+  for (let x = 0; x < 512; x += 64) {
     c.save(); c.translate(x, 480); c.transform(1, 0, -0.5, 1, 0, 0); c.fillRect(0, 0, 32, 32); c.restore();
     c.save(); c.translate(x, 0); c.transform(1, 0, -0.5, 1, 0, 0); c.fillRect(0, 0, 32, 32); c.restore();
   }
@@ -682,6 +721,16 @@ function bar(parent, mat, a, b, r, r2 = r, flat = 1, nrm = null, bevel = 0){
 
 function box(parent, mat, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0){
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  m.rotation.set(rx, ry, rz);
+  parent.add(m);
+  return m;
+}
+// kuten box(), mutta viistetyt (pyöristetyt) särmät → ei teräviä 90° kulmia.
+// r = viisteen säde (pieni, hieman pyöristää); r < min(w,h,d)/2.
+function rbox(parent, mat, w, h, d, x, y, z, r = 0.04, rx = 0, ry = 0, rz = 0){
+  const rr = Math.min(r, Math.min(w, h, d) * 0.48);
+  const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 2, rr), mat);
   m.position.set(x, y, z);
   m.rotation.set(rx, ry, rz);
   parent.add(m);
@@ -1283,13 +1332,36 @@ function makeShuttleModel(withBlinkers = true){
   applyRealHull(hullMat, 0.45);
   applyRealHull(nacMat, 0.6);
 
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.6, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.5 });
+  // map: subtleTex() → ei tasaista yksiväristä pintaa (hienovarainen gradientti/laikutus)
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x34383f, map: subtleTex(), roughness: 0.6, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.5 });
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.12, metalness: 0.85, side: THREE.DoubleSide, envMap: env, envMapIntensity: 1.0 });
-  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xb31f1f, roughness: 0.45, metalness: 0.1 });
+  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xbe2222, map: subtleTex(), roughness: 0.45, metalness: 0.1 });
   const redGlow = new THREE.MeshBasicMaterial();
   redGlow.color.setRGB(1.15, 0.35, 0.25);
   const blueGlow = new THREE.MeshBasicMaterial();
   blueGlow.color.setRGB(0.5, 0.9, 1.2);
+  // RCS-ohjaussuutin: pieni tumma suppilo (käytetään perässä ja keulassa)
+  const rcs = (x, y, z) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.02, 0.05, 8), darkMat); m.position.set(x, y, z); m.rotation.x = Math.PI / 2; g.add(m); };
+
+  // PERÄN omat REALISTISET bittikarttatekstuurit (3 eri Poly Haven CC0 -tekstuuria,
+  // eri elementeille → mekaaninen yksityiskohtaisuus erottuu sileästä maalipinnasta):
+  const applyTex = (mat, slug, rep, tint) => {
+    loadPH(slug, 'diff', true).then(t => { if (!t) return;
+      const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep); mat.map = c;
+      if (tint) mat.color.setRGB(tint[0], tint[1], tint[2]); mat.needsUpdate = true; });
+    loadPH(slug, 'nor_gl', false).then(t => { if (!t) return;
+      const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep); mat.normalMap = c; mat.needsUpdate = true; });
+  };
+  // (subtleTex on alkukartta → ei yksiväristä pintaa ennen valokuvan latausta)
+  // 1) peräkotelo: niitattu metallilevy (moottori-/laitemoduuli)
+  const aftHousingMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, map: subtleTex(), roughness: 0.6, metalness: 0.6, envMap: env, envMapIntensity: 0.5 });
+  applyTex(aftHousingMat, 'metal_plate_02', 1.0, [1.18, 1.22, 1.28]);
+  // 2) kiinnityslaippa + sivupaneelit: aaltopelti (vahvike/ritilä)
+  const aftFrameMat = new THREE.MeshStandardMaterial({ color: 0x6a6e72, map: subtleTex(), roughness: 0.72, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.4 });
+  applyTex(aftFrameMat, 'corrugated_iron_03', 1.0, [0.92, 0.94, 0.98]);
+  // 3) suuttimet: karkea ruoste/noki (kuumentunut pakoputki)
+  const aftNozzleMat = new THREE.MeshStandardMaterial({ color: 0x6a625a, map: subtleTex(), roughness: 0.75, metalness: 0.55, flatShading: true, envMap: env, envMapIntensity: 0.35 });
+  applyTex(aftNozzleMat, 'rust_coarse_01', 1.6, [0.72, 0.66, 0.6]);
 
   // runko: viistetty poikkileikkaus pyyhkäistynä sektioiden läpi
   const CS = [[-0.78, 0.66], [0.78, 0.66], [1.05, 0.38], [1.05, -0.42],
@@ -1342,12 +1414,34 @@ function makeShuttleModel(withBlinkers = true){
   bar(g, darkMat, [(wt(3, 0)[0] + wt(3, 1)[0]) / 2, wt(3, 0)[1], wt(3, 0)[2]],
                   [(wt(4, 0)[0] + wt(4, 1)[0]) / 2, wt(4, 0)[1], wt(4, 0)[2]], 0.024);
 
-  // takaovi varoitusraitoineen + impulssipalkki
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 0.95), new THREE.MeshStandardMaterial({
+  // ---- PERÄ: hieman ulkoneva moottori-/laitemoduuli yksityiskohtineen ----
+  // (runko päättyy z = 2,35; moduuli porrastuu siitä taaksepäin → ulkonema)
+  // tumma kiinnityslaippa (AALTOPELTI-tekstuuri), hieman runkoa leveämpi → porras näkyy
+  rbox(g, aftFrameMat, 1.64, 1.18, 0.10, 0, -0.02, 2.40, 0.02);
+  // ulkoneva kotelo (NIITATTU METALLILEVY -tekstuuri), kapeampi kuin runko, viistetyt särmät
+  rbox(g, aftHousingMat, 1.46, 0.96, 0.42, 0, -0.02, 2.62, 0.03);   // z 2,41 → 2,83
+  // huoltoluukku varoitusraidoin moduulin takapinnassa (canvas-tekstuuri)
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.72), new THREE.MeshStandardMaterial({
     map: makeDoorTex(), roughness: 0.8, metalness: 0.25 }));
-  door.position.set(0, -0.06, 2.37);   // taso osoittaa +z eli taaksepäin katsojaan
-  g.add(door);
-  box(g, redGlow, 1.2, 0.09, 0.04, 0, 0.46, 2.37);
+  door.position.set(0, 0.02, 2.835); g.add(door);             // taso osoittaa +z (taakse)
+  // impulssipalkki (hehku) moduulin yläreunaan
+  box(g, redGlow, 0.98, 0.07, 0.04, 0, 0.5, 2.84);
+  // kaksi päämoottorin suutinta (RUOSTE/NOKI-tekstuuri) moduulin alaosaan (+z)
+  for (const s of [-1, 1]) {
+    const noz = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.12, 0.34, 12), aftNozzleMat);
+    noz.rotation.x = Math.PI / 2; noz.position.set(s * 0.38, -0.34, 2.9); g.add(noz);
+    const gl = new THREE.Mesh(new THREE.CircleGeometry(0.115, 12), blueGlow);
+    gl.position.set(s * 0.38, -0.34, 3.01); g.add(gl);
+  }
+  // pienet yksityiskohdat: louver-tuuletusritilä, kulmasuuttimet, kahvat, putket
+  for (let i = 0; i < 3; i++) box(g, darkMat, 0.5, 0.025, 0.03, -0.32, 0.32 - i * 0.1, 2.835);  // tuuletusritilä luukun vasemmalla
+  for (const s of [-1, 1]) {
+    rbox(g, aftFrameMat, 0.05, 0.78, 0.36, s * 0.7, -0.02, 2.6, 0.01);   // sivupaneeli (aaltopelti)
+    rcs(s * 0.55, 0.5, 2.84);                                   // RCS-suutin yläkulmassa (peruutus)
+    box(g, darkMat, 0.04, 0.04, 0.4, s * 0.55, -0.02, 2.62);    // kylkiputki/johdin
+    rbox(g, hullMat, 0.16, 0.1, 0.06, s * 0.42, 0.34, 2.84, 0.012); // kohopaneeli/kahva luukun yllä
+  }
+  box(g, darkMat, 0.3, 0.12, 0.05, 0, -0.5, 2.84);              // alalaipan greeble keskellä
 
   // konehtimot: valkoiset oktagoniprismat, tummat kärkikartiot ja
   // bussard-hehkut; alla viistetyt kiskomaiset laskujalakset
@@ -1373,9 +1467,9 @@ function makeShuttleModel(withBlinkers = true){
     if (withBlinkers) blinker(g, s < 0 ? 0xff5340 : 0x46d06a, s * 1.36, -0.48, 1.85, 1.3, s);
   }
 
-  // kattodetaljit ja antenni
-  box(g, hullMat, 0.7, 0.12, 1.2, 0, 0.74, 0.9);
-  box(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0);
+  // kattodetaljit ja antenni (viistetyt särmät)
+  rbox(g, hullMat, 0.7, 0.12, 1.2, 0, 0.74, 0.9, 0.02);
+  rbox(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0, 0.015);
   bar(g, darkMat, [-0.55, 0.7, 1.8], [-0.55, 1.05, 1.8], 0.022);
   if (withBlinkers) blinker(g, 0xffb340, -0.55, 1.1, 1.8, 0.9, 0.5);
 
@@ -1387,15 +1481,14 @@ function makeShuttleModel(withBlinkers = true){
       box(g, darkMat, 0.03, 0.2, 0.3, s * (wx + 0.01), 0.04, wz);   // kehys
       box(g, glassMat, 0.02, 0.15, 0.24, s * (wx + 0.03), 0.04, wz);
     }
-  // RCS-ohjaussuuttimet: pienet tummat suppilot keulassa ja perässä
-  const rcs = (x, y, z) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.02, 0.05, 8), darkMat); m.position.set(x, y, z); m.rotation.x = Math.PI / 2; g.add(m); };
+  // RCS-ohjaussuuttimet keulassa ja kyljissä (perän suuttimet lisätty perämoduulissa)
   for (const s of [-1, 1]) { rcs(s * 0.34, 0.34, -2.78); rcs(s * 0.5, -0.2, -2.74); rcs(s * 1.0, 0.0, 1.9); }
   rcs(0, 0.5, -2.7); rcs(0, -0.45, -2.5);
   // keulan pitot-/anturiputki rungon kärjessä
   bar(g, darkMat, [0, -0.06, -2.95], [0, -0.04, -3.28], 0.03, 0.008);
-  // pari kohotettua selkäpaneelia (greeble) lakatulla rungolla
-  box(g, hullMat, 0.5, 0.05, 0.7, 0, 0.79, -0.4);
-  box(g, hullMat, 0.26, 0.04, 0.34, 0.32, 0.5, 1.55);
+  // pari kohotettua selkäpaneelia (greeble) lakatulla rungolla (viistetyt särmät)
+  rbox(g, hullMat, 0.5, 0.05, 0.7, 0, 0.79, -0.4, 0.01);
+  rbox(g, hullMat, 0.26, 0.04, 0.34, 0.32, 0.5, 1.55, 0.009);
 
   mergeStatic(g);
   return g;
