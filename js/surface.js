@@ -2267,10 +2267,8 @@ function drawRadar(contacts, nearest, fwdAng){
   c.beginPath(); c.arc(cx, cy, R * 0.66, 0, 6.2832); c.stroke();
   c.beginPath(); c.arc(cx, cy, R * 0.33, 0, 6.2832); c.stroke();
   c.beginPath(); c.moveTo(cx - R, cy); c.lineTo(cx + R, cy); c.moveTo(cx, cy - R); c.lineTo(cx, cy + R); c.stroke();
-  // pulssi: laajeneva rengas keskeltä ulospäin (toistuva)
+  // pulssi: laajeneva rengas keskeltä ulospäin (toistuva); ääni mykistetty
   const phase = (S.simTime * 0.55) % 1;
-  if (phase < _lastPulse) radarBleep();   // uusi pyyhkäisy alkoi → bleep
-  _lastPulse = phase;
   const pulseR = phase * R;
   c.strokeStyle = `rgba(120,240,255,${(0.55 * (1 - phase)).toFixed(2)})`; c.lineWidth = 1.6;
   c.shadowColor = cyan; c.shadowBlur = 6;

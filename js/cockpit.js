@@ -1411,8 +1411,7 @@ function makeShuttleModel(withBlinkers = true){
   bar(g, darkMat, wt(4, 0), wt(4, 1), 0.03);
   bar(g, darkMat, wt(3, 0), wt(4, 0), 0.03);
   bar(g, darkMat, wt(3, 1), wt(4, 1), 0.03);
-  bar(g, darkMat, [(wt(3, 0)[0] + wt(3, 1)[0]) / 2, wt(3, 0)[1], wt(3, 0)[2]],
-                  [(wt(4, 0)[0] + wt(4, 1)[0]) / 2, wt(4, 0)[1], wt(4, 0)[2]], 0.024);
+  // (pystysuora keskituki poistettu — yksi yhtenäinen tuulilasi)
 
   // ---- PERÄ: hieman ulkoneva moottori-/laitemoduuli yksityiskohtineen ----
   // (runko päättyy z = 2,35; moduuli porrastuu siitä taaksepäin → ulkonema)
@@ -1430,8 +1429,6 @@ function makeShuttleModel(withBlinkers = true){
   for (const s of [-1, 1]) {
     const noz = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.12, 0.34, 12), aftNozzleMat);
     noz.rotation.x = Math.PI / 2; noz.position.set(s * 0.38, -0.34, 2.9); g.add(noz);
-    const gl = new THREE.Mesh(new THREE.CircleGeometry(0.115, 12), blueGlow);
-    gl.position.set(s * 0.38, -0.34, 3.01); g.add(gl);
   }
   // pienet yksityiskohdat: louver-tuuletusritilä, kulmasuuttimet, kahvat, putket
   for (let i = 0; i < 3; i++) box(g, darkMat, 0.5, 0.025, 0.03, -0.32, 0.32 - i * 0.1, 2.835);  // tuuletusritilä luukun vasemmalla
