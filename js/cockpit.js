@@ -68,6 +68,23 @@ function subtleTex(){
   return _subtleTex;
 }
 
+// CELL SHADING: porrastettu sävyrampi MeshToonMaterialille (valaistus
+// kvantitaan muutamaan portaaseen → litteä sarjakuvamainen varjostus).
+let _toonRamp = null;
+function toonRamp(){
+  if (_toonRamp) return _toonRamp;
+  const steps = new Uint8Array([70, 140, 205, 255]);   // 4 sävyporrasta (varjo ei aivan musta)
+  _toonRamp = new THREE.DataTexture(steps, steps.length, 1, THREE.RedFormat);
+  _toonRamp.minFilter = _toonRamp.magFilter = THREE.NearestFilter;
+  _toonRamp.needsUpdate = true;
+  return _toonRamp;
+}
+// luo MeshToonMaterial vain kelvollisin parametrein (säilyttää map/normalMap/
+// bumpMap, kvantitaa valaistuksen) + jaettu sävyrampi
+function toonMat(params){
+  return new THREE.MeshToonMaterial(Object.assign({ gradientMap: toonRamp() }, params));
+}
+
 // kulunut metallipaneeli: saumat, niitit, grimet
 function makePanelTex(){
   const cv = document.createElement('canvas');
@@ -1068,7 +1085,7 @@ function mergeStatic(g){
   const remove = [];
   g.traverse(m => {
     if (!m.isMesh) return;
-    if (Array.isArray(m.material) || !m.material.isMeshStandardMaterial) return;
+    if (Array.isArray(m.material) || !(m.material.isMeshStandardMaterial || m.material.isMeshToonMaterial)) return;
     if (m.material.emissiveMap) return;
     const geo = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
     geo.applyMatrix4(m.matrixWorld);
@@ -1299,19 +1316,10 @@ function shuttleEnvMap(){
 function makeShuttleModel(withBlinkers = true){
   const g = new THREE.Group();
   const hull = makeShuttleHullTex();
-  const env = shuttleEnvMap();
-  // kulunut, likainen valkoinen maalattu metalli: metallinen pinta (heijastaa
-  // ympäristöä), rosoisuuskartta tekee naarmuista kiiltäviä ja liasta mattoja
-  const hullMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff, map: hull.map, bumpMap: hull.bump, bumpScale: 0.45,
-    roughnessMap: hull.rough, roughness: 1.0, metalness: 0.55, side: THREE.DoubleSide,
-    envMap: env, envMapIntensity: 0.55,
-  });
-  const nacMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff, map: hull.map, bumpMap: hull.bump, bumpScale: 0.4,
-    roughnessMap: hull.rough, roughness: 1.0, metalness: 0.55, flatShading: true,
-    envMap: env, envMapIntensity: 0.55,
-  });
+  // CELL SHADING: MeshToonMaterial säilyttää tekstuurit (map/bumpMap) mutta
+  // kvantitaa valaistuksen porrastetuksi (toonRamp) → sarjakuvamainen varjostus
+  const hullMat = toonMat({ color: 0xffffff, map: hull.map, bumpMap: hull.bump, bumpScale: 0.45, side: THREE.DoubleSide });
+  const nacMat = toonMat({ color: 0xffffff, map: hull.map, bumpMap: hull.bump, bumpScale: 0.4 });
   // Korvaa proseduraalipinta REALISTISELLA Poly Haven -valokuvatekstuurilla
   // (`painted_plaster_wall` = kulunut vaalea maalipinta, CC0 — ei kuvioita/uria
   // kuten metallilevyissä/-sälekaihtimissa) heti kun se latautuu; canvas-
@@ -1333,9 +1341,9 @@ function makeShuttleModel(withBlinkers = true){
   applyRealHull(nacMat, 0.6);
 
   // map: subtleTex() → ei tasaista yksiväristä pintaa (hienovarainen gradientti/laikutus)
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x34383f, map: subtleTex(), roughness: 0.6, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.5 });
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.12, metalness: 0.85, side: THREE.DoubleSide, envMap: env, envMapIntensity: 1.0 });
-  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xbe2222, map: subtleTex(), roughness: 0.45, metalness: 0.1 });
+  const darkMat = toonMat({ color: 0x34383f, map: subtleTex() });
+  const glassMat = toonMat({ color: 0x0d1118, side: THREE.DoubleSide });
+  const stripeMat = toonMat({ color: 0xbe2222, map: subtleTex() });
   const redGlow = new THREE.MeshBasicMaterial();
   redGlow.color.setRGB(1.15, 0.35, 0.25);
   const blueGlow = new THREE.MeshBasicMaterial();
@@ -1354,10 +1362,10 @@ function makeShuttleModel(withBlinkers = true){
   };
   // (subtleTex on alkukartta → ei yksiväristä pintaa ennen valokuvan latausta)
   // 1) peräkotelo: niitattu metallilevy (moottori-/laitemoduuli)
-  const aftHousingMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, map: subtleTex(), roughness: 0.6, metalness: 0.6, envMap: env, envMapIntensity: 0.5 });
+  const aftHousingMat = toonMat({ color: 0x9aa0a6, map: subtleTex() });
   applyTex(aftHousingMat, 'metal_plate_02', 1.0, [1.18, 1.22, 1.28]);
   // 2) kiinnityslaippa + sivupaneelit: aaltopelti (vahvike/ritilä)
-  const aftFrameMat = new THREE.MeshStandardMaterial({ color: 0x6a6e72, map: subtleTex(), roughness: 0.72, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.4 });
+  const aftFrameMat = toonMat({ color: 0x6a6e72, map: subtleTex() });
   applyTex(aftFrameMat, 'corrugated_iron_03', 1.0, [0.92, 0.94, 0.98]);
 
   // runko: viistetty poikkileikkaus pyyhkäistynä sektioiden läpi
@@ -1415,9 +1423,8 @@ function makeShuttleModel(withBlinkers = true){
   // (kiinnityslaippa-levy poistettu — se oli kahdesta perälevystä lähinnä sukkulaa)
   // ulkoneva kotelo (NIITATTU METALLILEVY -tekstuuri), kapeampi kuin runko, viistetyt särmät
   rbox(g, aftHousingMat, 1.46, 0.96, 0.48, 0, -0.02, 2.59, 0.03);   // z 2,35 → 2,83 (jatkettu runkoon kiinni)
-  // huoltoluukku varoitusraidoin moduulin takapinnassa (canvas-tekstuuri)
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.72), new THREE.MeshStandardMaterial({
-    map: makeDoorTex(), roughness: 0.8, metalness: 0.25 }));
+  // huoltoluukku varoitusraidoin moduulin takapinnassa (canvas-tekstuuri, toon)
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.72), toonMat({ map: makeDoorTex() }));
   door.position.set(0, 0.02, 2.835); g.add(door);             // taso osoittaa +z (taakse)
   // impulssipalkki (hehku) moduulin yläreunaan
   box(g, redGlow, 0.98, 0.07, 0.04, 0, 0.5, 2.84);
