@@ -1263,6 +1263,26 @@ function makeShuttleModel(withBlinkers = true){
     roughnessMap: hull.rough, roughness: 1.0, metalness: 0.55, flatShading: true,
     envMap: env, envMapIntensity: 0.55,
   });
+  // Korvaa proseduraalipinta REALISTISELLA Poly Haven -valokuvatekstuurilla
+  // (`painted_plaster_wall` = kulunut vaalea maalipinta, CC0 — ei kuvioita/uria
+  // kuten metallilevyissä/-sälekaihtimissa) heti kun se latautuu; canvas-
+  // proseduraali jää offline-varalle. Vaalennetaan tintillä (setRGB > 1) →
+  // kulunut VALKOINEN maalattu pinta; materiaalin metalness antaa metallikiillon.
+  // diff korvaa bumpin (kuvassa jo kuluneisuus), nor_gl antaa pinnan reliefin.
+  const applyRealHull = (mat, rep) => {
+    loadPH('painted_plaster_wall', 'diff', true).then(t => { if (!t) return;
+      const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep);
+      mat.map = c; mat.bumpMap = null; mat.color.setRGB(1.3, 1.3, 1.33); mat.metalness = 0.4; mat.needsUpdate = true; });
+    loadPH('painted_plaster_wall', 'nor_gl', false).then(t => { if (!t) return;
+      const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep);
+      mat.normalMap = c; mat.normalScale = new THREE.Vector2(0.4, 0.4); mat.needsUpdate = true; });
+    loadPH('painted_plaster_wall', 'rough', false).then(t => { if (!t) return;
+      const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep);
+      mat.roughnessMap = c; mat.needsUpdate = true; });
+  };
+  applyRealHull(hullMat, 0.45);
+  applyRealHull(nacMat, 0.6);
+
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.6, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.5 });
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x0d1118, roughness: 0.12, metalness: 0.85, side: THREE.DoubleSide, envMap: env, envMapIntensity: 1.0 });
   const stripeMat = new THREE.MeshStandardMaterial({ color: 0xb31f1f, roughness: 0.45, metalness: 0.1 });

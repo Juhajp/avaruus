@@ -208,9 +208,12 @@ function updateDaylight(){
     }
   }
 
-  // ilmakehällisten yötähdet häivytetään sisään pimeällä (neliöllisesti —
-  // muuten tähdet erottuvat jo iltapäivän kirkkaalla taivaalla)
-  if (d.starsMat && d.cfg.nightStars) d.starsMat.opacity = 0.7 * (1 - dayF) * (1 - dayF);
+  // tähtien tuike (uTime) + ilmakehällisten yötähtien häivytys pimeällä
+  // (neliöllisesti — muuten tähdet erottuvat jo iltapäivän kirkkaalla taivaalla)
+  if (d.starsMat) {
+    d.starsMat.uniforms.uTime.value = S.simTime;
+    if (d.cfg.nightStars) d.starsMat.uniforms.uOpacity.value = 0.7 * (1 - dayF) * (1 - dayF);
+  }
   if (d.nebula && d.cfg.nightStars) d.nebula.material.opacity = 0.6 * (1 - dayF) * (1 - dayF);
 
   // kypärävalo: pinnalla yöksi automaattisesti päälle (silmien yläpuolelta
@@ -2026,18 +2029,46 @@ function buildSurfaceScene(name){
   // tähtitaivas: ilmakehättömillä aina, ilmakehällisillä öisin
   let starsMat = null;
   if (cfg.stars || cfg.nightStars) {
-    const n = 1600, p = new Float32Array(n * 3);
+    const n = 1600, p = new Float32Array(n * 3), ph = new Float32Array(n), sz = new Float32Array(n);
     const sv = new THREE.Vector3();
     for (let i = 0; i < n; i++) {
       sv.set(hash2(i, 7) - 0.5, Math.abs(hash2(i, 8)) * 0.9 + 0.04, hash2(i, 9) - 0.5)
         .normalize().multiplyScalar(7500);
       p[i * 3] = sv.x; p[i * 3 + 1] = sv.y; p[i * 3 + 2] = sv.z;
+      ph[i] = hash2(i, 21) * 6.283;                       // tuikkeen vaihe per tähti
+      sz[i] = 1.1 + hash2(i, 22) * hash2(i, 23) * 2.6;    // enimmäkseen pieniä, harvat kirkkaita
     }
     const sg = new THREE.BufferGeometry();
     sg.setAttribute('position', new THREE.BufferAttribute(p, 3));
-    starsMat = new THREE.PointsMaterial({
-      color: 0xffffff, size: 2, sizeAttenuation: false, transparent: true,
-      opacity: cfg.stars ? 0.7 : 0, fog: false });   // fog söisi tähdet ilmakehällisillä
+    sg.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
+    sg.setAttribute('aSize', new THREE.BufferAttribute(sz, 1));
+    // hienovarainen tuike: kirkkaus moduloituu kahden eritahtisen sinin tulolla
+    // (epäsäännöllinen välke), per-tähti vaihe; pyöreä pehmeäreunainen piste
+    starsMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, fog: false,
+      uniforms: { uTime: { value: 0 }, uOpacity: { value: cfg.stars ? 0.7 : 0 } },
+      vertexShader: /* glsl */`
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        attribute float aPhase; attribute float aSize;
+        uniform float uTime; varying float vTw;
+        void main(){
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aSize;
+          vTw = 0.82 + 0.18 * sin(uTime * 1.9 + aPhase) * sin(uTime * 0.8 + aPhase * 1.7);
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader: /* glsl */`
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
+        uniform float uOpacity; varying float vTw;
+        void main(){
+          #include <logdepthbuf_fragment>
+          float a = smoothstep(0.5, 0.08, length(gl_PointCoord - 0.5));   // pehmeä pyöreä piste
+          if (a <= 0.0) discard;
+          gl_FragColor = vec4(vec3(1.0), uOpacity * vTw * a);
+        }`,
+    });
     sc.add(new THREE.Points(sg, starsMat));
   }
   // tähtisumu Linnunradan kohdalle (häivytys vuorokauden mukaan updateDaylightissa)
