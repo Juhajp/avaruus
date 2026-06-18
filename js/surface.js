@@ -34,6 +34,16 @@ const _c1 = new THREE.Color(), _c2 = new THREE.Color(), _c3 = new THREE.Color();
 // varjokartan tekseli-napsauksen apuvektorit (valon katseavaruus)
 const _sRight = new THREE.Vector3(), _sUp = new THREE.Vector3(),
       _sCtr = new THREE.Vector3(), _sUpW = new THREE.Vector3(0, 1, 0);
+// VARJOKARTTA: TIUKKA kate keskittää tekselit pelaajan lähelle → korkea
+// tekselitiheys, jotta OHUET varjot (kuumodulin jalakset, tikkaat, lipputanko)
+// saavat tarpeeksi tekseleitä eivätkä aliasoidu (terävänä porrastus, pehmeänä
+// "savu"). 2·30/4096 ≈ 0,0146 yks/teksel → ~0,1 yks tuki = ~7 tekseliä = terävä.
+// Kate pidetään pienenä (30 yks) FPS-neutraalisti — sama 4096-kartta, ei lisää
+// VRAMia/täyttöä, vain tekselit tiheämmässä. Kaukana (> 30 yks) ei varjoa, mutta
+// kohteet ovat pieniä; pelaaja katselee lähikohteita (alus, esiintymät).
+const SUN_SHADOW_RES = 4096;     // varjokartan resoluutio (FPS-neutraali)
+const SUN_SHADOW_HALF = 30;      // frustumin puolikate korkealla auringolla (yks)
+const SUN_SHADOW_CAP = 110;      // max puolikate matalalla auringolla (pitkät varjot)
 
 function sunPhase(){
   return dayPhase0 + ((S.simTime - dayT0) / daylight.cfg.dayLength) * Math.PI * 2;
@@ -56,7 +66,7 @@ function updateDaylight(){
     // laskiessa: muuten matalan auringon PITKÄT varjot leikkautuvat tiukan ±70
     // katteen reunaan ja näyttävät irtoavan/"pakenevan" kohteesta. Korkealla
     // aurinko → tiukka ±70 (terävä reuna); alle ~13° kate kasvaa varjon mittaan.
-    const half = Math.min(230, 70 * Math.max(1, 0.22 / Math.max(0.04, elev)));
+    const half = Math.min(SUN_SHADOW_CAP, SUN_SHADOW_HALF * Math.max(1, 0.22 / Math.max(0.05, elev)));
     const sh = d.dl.shadow.camera;
     if (sh.right !== half) {
       sh.left = -half; sh.right = half; sh.top = half; sh.bottom = -half;
@@ -65,8 +75,8 @@ function updateDaylight(){
     // keskus pelaajasta kohti varjojen suuntaa (vaakatasossa auringosta poispäin),
     // jotta laajeneva kate kattaa juuri pitkien varjojen puolen
     const hl = Math.hypot(_sunDir.x, _sunDir.z) || 1;
-    const off = (half - 70) * 0.6;
-    const texel = (2 * half) / 4096;                // frustumin leveys / kartan koko
+    const off = (half - SUN_SHADOW_HALF) * 0.6;
+    const texel = (2 * half) / SUN_SHADOW_RES;      // frustumin leveys / kartan koko
     _sCtr.set(camera.position.x - _sunDir.x / hl * off,
               camera.position.y,
               camera.position.z - _sunDir.z / hl * off);
@@ -1942,16 +1952,12 @@ function buildSurfaceScene(name){
   if (cfg.sun) {
     // varjot: kartta seuraa pelaajaa (paikat päivitetään updateDaylightissa)
     dl.castShadow = true;
-    // laaja kate (kaikki näkyvät kivet heittävät varjon) + iso 4096-kartta →
-    // terävä reuna. 400/4096 ≈ 0,098 yks/teksel
-    dl.shadow.mapSize.set(4096, 4096);
-    dl.shadow.camera.left = -200; dl.shadow.camera.right = 200;
-    dl.shadow.camera.top = 200; dl.shadow.camera.bottom = -200;
-    // tiukka kate (±70) keskittää 4096 tekseliä pelaajan lähelle → ~0,034 yks/teksel,
-    // terävä reuna + vähemmän aknea/reunakohinaa lähikohteissa (kauempana olevat
-    // eivät heitä varjoa, mutta ne ovat pieniä)
-    dl.shadow.camera.left = -70; dl.shadow.camera.right = 70;
-    dl.shadow.camera.top = 70; dl.shadow.camera.bottom = -70;
+    // tiukka kate (±SUN_SHADOW_HALF) + iso kartta keskittää tekselit pelaajan
+    // lähelle → korkea tiheys, ohuet varjot terävinä (kate/koko ajetaan
+    // updateDaylightissa; kaukana olevat eivät heitä varjoa mutta ovat pieniä)
+    dl.shadow.mapSize.set(SUN_SHADOW_RES, SUN_SHADOW_RES);
+    dl.shadow.camera.left = -SUN_SHADOW_HALF; dl.shadow.camera.right = SUN_SHADOW_HALF;
+    dl.shadow.camera.top = SUN_SHADOW_HALF; dl.shadow.camera.bottom = -SUN_SHADOW_HALF;
     // valo on aina 800 yks päässä pelaajasta → tiukka near/far pakkaa syvyystarkkuuden
     // → poistaa kahlaavan kulman akne ("pulppuava mössö")
     dl.shadow.camera.near = 480; dl.shadow.camera.far = 1180;
