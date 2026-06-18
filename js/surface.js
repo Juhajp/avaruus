@@ -62,11 +62,16 @@ function updateDaylight(){
   const tw = d.twilight ? Math.max(0, 1 - Math.abs(elev) / 0.35) * sstep(-0.22, -0.04, elev) : 0;
 
   if (d.cfg.sun) {
-    // Varjofrustumi laajenee ja sen keskus siirtyy auringosta poispäin auringon
-    // laskiessa: muuten matalan auringon PITKÄT varjot leikkautuvat tiukan ±70
-    // katteen reunaan ja näyttävät irtoavan/"pakenevan" kohteesta. Korkealla
-    // aurinko → tiukka ±70 (terävä reuna); alle ~13° kate kasvaa varjon mittaan.
-    const half = Math.min(SUN_SHADOW_CAP, SUN_SHADOW_HALF * Math.max(1, 0.22 / Math.max(0.05, elev)));
+    // Varjofrustumi laajenee auringon laskiessa (pitkät varjot mahtuvat katteeseen),
+    // mutta PORTAITTAIN eikä jatkuvasti: jatkuvasti muuttuva kate muuttaisi tekselikokoa
+    // joka ruutu (~9 yks/s matalalla) → koko varjokartta remappautuu → OHUET varjot
+    // (kivet) "vaeltavat". Diskreeteillä portailla tekselikoko pysyy vakiona kynnysten
+    // välillä → kivien varjot pysyvät paikallaan (vain harva 1-tekselin hyppy kynnyksellä,
+    // kun aurinko ylittää korkeuden). Korkealla tiukka ±30 (terävä).
+    const half = elev > 0.22 ? SUN_SHADOW_HALF        // 30
+               : elev > 0.13 ? 52
+               : elev > 0.08 ? 78
+               : SUN_SHADOW_CAP;                       // 110
     const sh = d.dl.shadow.camera;
     if (sh.right !== half) {
       sh.left = -half; sh.right = half; sh.top = half; sh.bottom = -half;
@@ -1794,7 +1799,10 @@ function buildSurfaceScene(name){
         const hg = Math.min(surfHeightFn(x, z), hAvg);
         m4.compose(_vp.set(x, hg - s * 0.04, z), rq, rs);
       });
-    pebbles.castShadow = true;
+    // pikkukivet EIVÄT heitä varjoa: 1300 pientä heittäjää tuottaisi tiheän kentän
+    // ohuita varjoja, jotka vaeltavat herkimmin (ja maksavat varjorenderissä);
+    // todelliset pikkukivet eivät juuri varjosta. Isot kivet (W 2200) varjostavat yhä.
+    pebbles.castShadow = false;
   }
 
   // puut (Maa): kuusia ja lehtipuita vertex-värein; instanssiväri vain
