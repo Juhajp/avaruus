@@ -1359,9 +1359,6 @@ function makeShuttleModel(withBlinkers = true){
   // 2) kiinnityslaippa + sivupaneelit: aaltopelti (vahvike/ritilä)
   const aftFrameMat = new THREE.MeshStandardMaterial({ color: 0x6a6e72, map: subtleTex(), roughness: 0.72, metalness: 0.5, flatShading: true, envMap: env, envMapIntensity: 0.4 });
   applyTex(aftFrameMat, 'corrugated_iron_03', 1.0, [0.92, 0.94, 0.98]);
-  // 3) suuttimet: karkea ruoste/noki (kuumentunut pakoputki)
-  const aftNozzleMat = new THREE.MeshStandardMaterial({ color: 0x6a625a, map: subtleTex(), roughness: 0.75, metalness: 0.55, flatShading: true, envMap: env, envMapIntensity: 0.35 });
-  applyTex(aftNozzleMat, 'rust_coarse_01', 1.6, [0.72, 0.66, 0.6]);
 
   // runko: viistetty poikkileikkaus pyyhkäistynä sektioiden läpi
   const CS = [[-0.78, 0.66], [0.78, 0.66], [1.05, 0.38], [1.05, -0.42],
@@ -1424,13 +1421,7 @@ function makeShuttleModel(withBlinkers = true){
   door.position.set(0, 0.02, 2.835); g.add(door);             // taso osoittaa +z (taakse)
   // impulssipalkki (hehku) moduulin yläreunaan
   box(g, redGlow, 0.98, 0.07, 0.04, 0, 0.5, 2.84);
-  // kaksi päämoottorin suutinta (RUOSTE/NOKI-tekstuuri) moduulin alaosaan (+z)
-  for (const s of [-1, 1]) {
-    const noz = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.12, 0.34, 12), aftNozzleMat);
-    noz.rotation.x = Math.PI / 2; noz.position.set(s * 0.38, -0.34, 2.9); g.add(noz);
-    const gl = new THREE.Mesh(new THREE.CircleGeometry(0.115, 12), blueGlow);
-    gl.position.set(s * 0.38, -0.34, 3.01); g.add(gl);
-  }
+  // (perän rakettisuuttimet hehkukiekkoineen poistettu luukun alta)
   // pienet yksityiskohdat: louver-tuuletusritilä, kulmasuuttimet, kahvat, putket
   for (let i = 0; i < 3; i++) box(g, darkMat, 0.5, 0.025, 0.03, -0.32, 0.32 - i * 0.1, 2.835);  // tuuletusritilä luukun vasemmalla
   for (const s of [-1, 1]) {
