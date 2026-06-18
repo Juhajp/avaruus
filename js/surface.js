@@ -31,6 +31,9 @@ let daylight = null;             // renderöitävän pintascenen valaistusviitte
 let dayPhase0 = 0, dayT0 = 0;    // vaihe ja simTime laskeutumishetkellä
 const _sunDir = new THREE.Vector3();
 const _c1 = new THREE.Color(), _c2 = new THREE.Color(), _c3 = new THREE.Color();
+// varjokartan tekseli-napsauksen apuvektorit (valon katseavaruus)
+const _sRight = new THREE.Vector3(), _sUp = new THREE.Vector3(),
+      _sCtr = new THREE.Vector3(), _sUpW = new THREE.Vector3(0, 1, 0);
 
 function sunPhase(){
   return dayPhase0 + ((S.simTime - dayT0) / daylight.cfg.dayLength) * Math.PI * 2;
@@ -63,16 +66,25 @@ function updateDaylight(){
     // jotta laajeneva kate kattaa juuri pitkien varjojen puolen
     const hl = Math.hypot(_sunDir.x, _sunDir.z) || 1;
     const off = (half - 70) * 0.6;
-    // valo ja varjokamera seuraavat pelaajaa, mutta keskus napsautetaan
-    // varjokartan tekseliruudukkoon → varjot eivät uimari/savua kävellessä
     const texel = (2 * half) / 4096;                // frustumin leveys / kartan koko
-    const cxw = camera.position.x - _sunDir.x / hl * off;
-    const czw = camera.position.z - _sunDir.z / hl * off;
-    const sx = Math.round(cxw / texel) * texel;
-    const sy = Math.round(camera.position.y / texel) * texel;
-    const sz = Math.round(czw / texel) * texel;
-    d.dl.target.position.set(sx, sy, sz);
-    d.dl.position.set(sx, sy, sz).addScaledVector(_sunDir, 800);
+    _sCtr.set(camera.position.x - _sunDir.x / hl * off,
+              camera.position.y,
+              camera.position.z - _sunDir.z / hl * off);
+    // TEKSELI-NAPSAUS VALON KATSEAVARUUDESSA (ei maailma-akseleilla): varjokartan
+    // tekseliruudukko on kohtisuorassa valon suuntaa vastaan, joten keskus on
+    // pyöristettävä valon oikea/ylös-akseleilla — muuten napsautus ei osu oikeille
+    // tekseleille ja ohuet varjot uivat/jitteröivät liikkuessa. (three.js lookAt:
+    // z = valon suunta, x = up × z, y = z × x; light.up = (0,1,0).)
+    _sRight.crossVectors(_sUpW, _sunDir);
+    if (_sRight.lengthSq() < 1e-6) _sRight.set(1, 0, 0);   // aurinko lähes zeniitissä
+    _sRight.normalize();
+    _sUp.crossVectors(_sunDir, _sRight).normalize();
+    const dr = Math.round(_sCtr.dot(_sRight) / texel) * texel;
+    const du = Math.round(_sCtr.dot(_sUp) / texel) * texel;
+    const dz = _sCtr.dot(_sunDir);
+    _sCtr.copy(_sRight).multiplyScalar(dr).addScaledVector(_sUp, du).addScaledVector(_sunDir, dz);
+    d.dl.target.position.copy(_sCtr);
+    d.dl.position.copy(_sCtr).addScaledVector(_sunDir, 800);
     d.dl.target.updateMatrixWorld();
   }
   d.dl.intensity = d.baseInt * (d.cfg.sun ? dayF : 0.2 + 0.8 * dayF);
