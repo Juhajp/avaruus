@@ -97,9 +97,17 @@ function updateDaylight(){
     d.dl.position.copy(_sCtr).addScaledVector(_sunDir, 800);
     d.dl.target.updateMatrixWorld();
   }
-  d.dl.intensity = d.baseInt * (d.cfg.sun ? dayF : 0.2 + 0.8 * dayF);
+  // Varjon häivytys auringonlaskussa: hyvin matalalla aurinko aiheuttaa varjon
+  // "karkaamisen" (peter-panning kasvaa ∝ 1/tan(korkeus) → varjo irtoaa kohteen
+  // tyvestä ja liukuu pois). Häivytetään suoran valon (= varjonheittäjän) osuus
+  // nollaan horisonttia kohti ja siirretään menetetty valo täytevaloon →
+  // varjon KONTRASTI → 0 eli varjo HÄIPYY PAIKALLAAN (pysyy kiinni kohteessa)
+  // eikä näkymä pimene liian aikaisin. (r160:ssa ei shadow.intensitya.)
+  const sf = d.cfg.sun ? sstep(0.04, 0.15, elev) : 1;
+  d.dl.intensity = d.baseInt * (d.cfg.sun ? dayF * sf : 0.2 + 0.8 * dayF);
   if (d.twilight) d.dl.color.copy(_c1.set(0xffffff).lerp(d.twilight, tw * 0.85));
-  if (d.hemi) d.hemi.intensity = d.baseHemi * (0.22 + 0.78 * dayF);
+  if (d.hemi) d.hemi.intensity = d.baseHemi * (0.22 + 0.78 * dayF)
+            + (d.cfg.sun ? d.baseInt * dayF * (1 - sf) * 0.45 : 0);   // kompensoi häivytetty suora valo
   if (d.bldgMat) d.bldgMat.emissiveIntensity = (1 - dayF) * 1.2;   // ikkunat syttyvät yöksi
   if (d.cloudU) {
     // pilvet tummuvat yöksi ja värjäytyvät ruskossa
