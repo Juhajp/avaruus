@@ -13,10 +13,12 @@ import { updateSpaceHUD } from './hud.js';
 import { setTarget } from './input.js';
 import { S, clampSpeed } from './state.js';
 
-// aloituspaikka: Maan lähellä, katse kohti Maata
-placeNearBody(3);
+// aloituspaikka: Marsin lähellä — varsinainen pintalasku tehdään 1. ruudulla
+// (tryBeamDown tarvitsee b.group.positionin, jonka vasta updateBodies asettaa)
+placeNearBody(4);
 
 const clock = new THREE.Clock();
+let started = false;   // peli alkaa Marsin pinnalta, lasku 1. ruudulla
 
 function animate(){
   requestAnimationFrame(animate);
@@ -25,6 +27,13 @@ function animate(){
   if (!S.paused) {
     S.simTime += dt;
     updateBodies(dt);
+    if (!started) {
+      // kohdista Mars ja laskeudu kun radan paikka (b.group.position) on tiedossa
+      started = true;
+      setTarget(4);
+      placeNearBody(4, 6);
+      tryBeamDown();
+    }
     if (S.mode === 'surface') updateSurface(dt);
     else if (S.mode === 'descent') updateDescent(dt);
   }
@@ -46,10 +55,11 @@ function animate(){
 
   composer.render();
 
-  // ensimmäinen ruutu renderöity — vapauta aloitusruutu
+  // ensimmäinen ruutu renderöity — piilota aloitus-/latausruutu automaattisesti
   if (!window.__simReady) {
     window.__simReady = true;
-    document.getElementById('bootStatus').textContent = '▶ Klikkaa aloittaaksesi';
+    const ov = document.getElementById('startOverlay');
+    if (ov) ov.style.display = 'none';
   }
 }
 animate();

@@ -10,6 +10,7 @@ import { makeSky } from './sky.js';
 import { NOISE_GLSL } from './shaders.js';
 import { initMining, updateMining, clearMining, setMineralEnv, setMineralRock, resolveCollision } from './mining.js';
 import { S } from './state.js';
+import { toonMat, expandGeo, outlineMaterial } from './toon.js';
 
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
 let pmrem = null;
@@ -75,6 +76,15 @@ function updateDaylight(){
     const sh = d.dl.shadow.camera;
     if (sh.right !== half) {
       sh.left = -half; sh.right = half; sh.top = half; sh.bottom = -half;
+      // SYVYYSKATE TIUKAKSI valon (etäisyys 800) ympärille: shadow.bias on
+      // normalisoitua syvyyttä, joten se kerrotaan koko near→far-välillä. Vanha
+      // 480→1180 (700 yks) teki pienestäkin biaksesta ~0,2 yks maailmassa →
+      // varjo irtosi kohteesta (peter-panning, rako kiven ja varjon välissä).
+      // Kate bracketoidaan juuri frustumin sisällön (±half + korkeusvara) mukaan
+      // → biaksen maailmavaikutus kutistuu murto-osaan eikä rakoa synny. Kate
+      // skaalautuu halfin mukana (ei vaikuta tekselikokoon → ei "vaeltavia" varjoja).
+      sh.near = 800 - half - 40;
+      sh.far  = 800 + half + 40;
       sh.updateProjectionMatrix();
     }
     // keskus pelaajasta kohti varjojen suuntaa (vaakatasossa auringosta poispäin),
@@ -1263,18 +1273,30 @@ function updateTerrain(ax, az, buildAll = false){
    Kukin instanssi sijaitsee jaksollisen W×W-solun kopioista siinä, joka on
    lähinnä kameraa; solun vaihtuessa paikka ja korkeus lasketaan uudelleen. */
 let scatters = [];
+// staattiset törmäysesteet pinnalla (esim. kuulaskeutuja) — {x,z,r}
+let obstacles = [];
 
-function addScatter(sc, geo, mat, count, W, place, seedOff = 0){
+/* opts: { outline: paksuus (cell shading -ääriviiva instansseille),
+          collide: törmäyssädekerroin (vaakaskaalasta) } */
+function addScatter(sc, geo, mat, count, W, place, seedOff = 0, opts = {}){
   const mesh = new THREE.InstancedMesh(geo, mat, count);
   mesh.frustumCulled = false;   // instanssit hajallaan — perusgeometrian mukainen kullaus veisi ne piiloon
   const sct = {
     mesh, count, W, place,
     bx: new Float32Array(count), bz: new Float32Array(count),
     kx: new Float64Array(count).fill(NaN), kz: new Float64Array(count).fill(NaN),
+    collide: opts.collide || 0,
   };
   for (let i = 0; i < count; i++) {
     sct.bx[i] = (hash2(i + seedOff, 91) - 0.5) * W;
     sct.bz[i] = (hash2(i + seedOff, 92) - 0.5) * W;
+  }
+  // cell shading: käänteinen kuori omana instanssimeshinä (jakaa instanssimatriisit)
+  if (opts.outline) {
+    const om = new THREE.InstancedMesh(expandGeo(geo, opts.outline), outlineMaterial(), count);
+    om.frustumCulled = false;
+    sc.add(om);
+    sct.outline = om;
   }
   scatters.push(sct);
   sc.add(mesh);
@@ -1292,11 +1314,44 @@ function updateScatter(ax, az){
       s.kx[i] = kx; s.kz[i] = kz;
       s.place(i, s.bx[i] + kx * s.W, s.bz[i] + kz * s.W, _m4s, _rqs, _res, _rss);
       s.mesh.setMatrixAt(i, _m4s);
+      if (s.outline) s.outline.setMatrixAt(i, _m4s);
       dirty = true;
     }
-    if (dirty) s.mesh.instanceMatrix.needsUpdate = true;
+    if (dirty) {
+      s.mesh.instanceMatrix.needsUpdate = true;
+      if (s.outline) s.outline.instanceMatrix.needsUpdate = true;
+    }
   }
 }
+
+/* törmäys isoihin kiviin (instanssit), pysäköityyn sukkulaan ja kuulaskeutujaan:
+   työnnä pelaaja esteen ulkokehälle vauhtia nollaamatta */
+const PLAYER_R = 0.8;
+const _m4c = new THREE.Matrix4();
+function resolveStaticCollision(x, z){
+  const push = (ox, oz, R) => {
+    const dx = x - ox, dz = z - oz, d = Math.hypot(dx, dz);
+    if (d < R) { if (d > 1e-4) { x = ox + dx / d * R; z = oz + dz / d * R; } else { x = ox + R; } }
+  };
+  // staattiset esteet (kuulaskeutuja)
+  for (const o of obstacles) push(o.x, o.z, o.r + PLAYER_R);
+  // pysäköity sukkula (cockpit.js asettaa S.shuttlePos pysäköidessä)
+  if (S.shuttlePos) push(S.shuttlePos.x, S.shuttlePos.z, 3.0 + PLAYER_R);
+  // isot kivet: instanssimatriisien vaakaskaalasta säde (pienet ohitetaan)
+  for (const s of scatters) {
+    if (!s.collide) continue;
+    const m = s.mesh;
+    for (let i = 0; i < s.count; i++) {
+      m.getMatrixAt(i, _m4c);
+      const e = _m4c.elements;
+      const sx = Math.hypot(e[0], e[1], e[2]);   // vaakaskaala (1. sarake)
+      if (sx < 1.2) continue;                    // vain isot lohkareet törmäävät
+      push(e[12], e[14], sx * s.collide + PLAYER_R);
+    }
+  }
+  _col2[0] = x; _col2[1] = z; return _col2;
+}
+const _col2 = [0, 0];
 
 /* ---- kasvillisuus ja kivivariaatiot (tiekartan vaihe 3) ---- */
 
@@ -1684,6 +1739,7 @@ function buildApolloSite(sc){
   // Maasto on tasoitettu kaluston ympäriltä (apolloFlat surfHeightFn:ssä) → seisoo suorassa
   const lm = new THREE.Group(); place(lm, -13, -19, 0.6);
   lm.scale.setScalar(1.2);   // suurennettu 1,2× (jalat pysyvät maassa, skaalaus ryhmän origosta)
+  obstacles.push({ x: -13, z: -19, r: 3.2 });   // törmäys: ei voi kävellä laskeutujan läpi
   loadGLBModel('Apollo Lunar Module/Apollo Lunar Module.glb', 7, m => {
     const model = m || makeLanderModule();
     applyLanderTextures(model);   // realistiset bittikarttatekstuurit
@@ -1693,6 +1749,7 @@ function buildApolloSite(sc){
 }
 
 function buildSurfaceScene(name){
+  obstacles = [];   // staattiset törmäysesteet rakennetaan tähän sceneen
   const cfg = SURFACE_CONFIGS[name];
   const sc = new THREE.Scene();
   sc.background = new THREE.Color(cfg.sky);
@@ -1782,9 +1839,10 @@ function buildSurfaceScene(name){
   // kivet: kolme muotovarianttia, planeetan kivitekstuuri + normaalikartta
   // (ei Maassa — nurmella murikat näyttävät vierailta)
   if (F.rocks !== false) {
-    const rocksMat = new THREE.MeshStandardMaterial({
+    // CELL SHADING: toon-materiaali (porrastettu valaistus) — sama tekniikka
+    // kuin sukkulalla/mineraaleilla. Säilyttää kivitekstuurin + normaalikartan.
+    const rocksMat = toonMat({
       color: _cc.copy(_cWhite).lerp(new THREE.Color(cfg.rock), 0.45).multiplyScalar(1.25).clone(),
-      roughness: 1, envMapIntensity: 0.25,
     });
     if (cfg.pbr) {
       loadPH(cfg.pbr.rock, 'diff', true).then(t => { if (t) { rocksMat.map = t; rocksMat.needsUpdate = true; setMineralRock(t, null); } });
@@ -1806,7 +1864,7 @@ function buildSurfaceScene(name){
           ].join('\n'));
       };
     }
-    envMats.push(rocksMat);
+    // toon-materiaali ei käytä ympäristökarttaa → ei envMats-listaan
     for (let vr = 0; vr < 3; vr++) {
       const rocks = addScatter(sc, makeRockGeo(vr * 113 + 7), rocksMat,
         200, 2200, (i, x, z, m4, rq, re, rs) => {
@@ -1820,7 +1878,7 @@ function buildSurfaceScene(name){
           const hl = Math.min(surfHeightFn(x, z), surfHeightFn(x - rr, z), surfHeightFn(x + rr, z),
                               surfHeightFn(x, z - rr), surfHeightFn(x, z + rr));
           m4.compose(_vp.set(x, hl + s * 0.12, z), rq, rs);
-        }, vr * 1000 + 1);
+        }, vr * 1000 + 1, { outline: 0.035, collide: 0.62 });
       rocks.castShadow = true;
       rocks.receiveShadow = true;
     }
@@ -2038,9 +2096,13 @@ function buildSurfaceScene(name){
     dl.shadow.mapSize.set(SUN_SHADOW_RES, SUN_SHADOW_RES);
     dl.shadow.camera.left = -SUN_SHADOW_HALF; dl.shadow.camera.right = SUN_SHADOW_HALF;
     dl.shadow.camera.top = SUN_SHADOW_HALF; dl.shadow.camera.bottom = -SUN_SHADOW_HALF;
-    // valo on aina 800 yks päässä pelaajasta → tiukka near/far pakkaa syvyystarkkuuden
-    // → poistaa kahlaavan kulman akne ("pulppuava mössö")
-    dl.shadow.camera.near = 480; dl.shadow.camera.far = 1180;
+    // valo on aina 800 yks päässä pelaajasta → tiukka near/far pakkaa syvyystarkkuuden.
+    // Kate bracketoidaan juuri frustumin sisällön ympärille (±SUN_SHADOW_HALF + vara):
+    // shadow.bias on normalisoitua syvyyttä → leveä kate (vanha 480→1180) teki pienestä
+    // biaksesta ~0,2 yks maailmassa → varjo irtosi kohteesta (rako). updateDaylight
+    // päivittää tämän halfin mukaan; tämä on aloitusarvo korkealle auringolle.
+    dl.shadow.camera.near = 800 - SUN_SHADOW_HALF - 40;   // 730
+    dl.shadow.camera.far  = 800 + SUN_SHADOW_HALF + 40;   // 870
     // maasto ei kasta → ei tarvita isoa biasta. Pieni → varjo pysyy kiinni kivessä
     // (ei "peter-panning"-rakoa); kivien takapinnat renderöityvät varjokarttaan
     // (three.js oletus) → ei oma-aknea
@@ -2209,6 +2271,7 @@ function leaveSurfaceScene(){
   surfaceBody = null;
   terrain = null;
   scatters = [];
+  obstacles = [];
   stormFx = null; storm.intens = 0; storm.startT = -1; storm.endT = -1; storm.lastSol = null;
   if (helmetLight) helmetLight.intensity = 0;
 }
@@ -2395,6 +2458,8 @@ export function updateSurface(dt){
   }
   // törmäys mineraaliesiintymiin: ei voi kävellä läpi
   const col = resolveCollision(surfX, surfZ); surfX = col[0]; surfZ = col[1];
+  // törmäys isoihin kiviin, pysäköityyn sukkulaan ja kuulaskeutujaan
+  const col2 = resolveStaticCollision(surfX, surfZ); surfX = col2[0]; surfZ = col2[1];
   updateTerrain(surfX, surfZ);
   updateScatter(surfX, surfZ);
   updateMining(dt, surfX, surfZ);

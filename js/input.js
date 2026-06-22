@@ -1,13 +1,12 @@
 /* ---------------- Ohjaus: hiiri, näppäimet, UI-napit ---------------- */
 import { renderer } from './core.js';
-import { bodies, orbitLines, placeNearBody } from './bodies.js';
+import { bodies, orbitLines } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent, aimingAtShuttle } from './surface.js';
 import { toggleShipView, nearParkedShuttle } from './cockpit.js';
 import { toggleCraft, craftRecipe, isCraftOpen, setMining } from './mining.js';
 import { useItem } from './resources.js';
 import { S, clampThrottle } from './state.js';
 
-let started = false;
 let lockFailed = false;
 let dragging = false;
 let lastMX = 0, lastMY = 0;
@@ -29,8 +28,7 @@ document.addEventListener('pointerlockerror', onLockFailed);
 
 const overlay = document.getElementById('startOverlay');
 overlay.addEventListener('click', () => {
-  overlay.style.display = 'none';
-  if (!started) { started = true; placeNearBody(3); }
+  overlay.style.display = 'none';   // peli alkaa Marsin pinnalta (main.js), pelkkä piilotus
   tryPointerLock();
 });
 

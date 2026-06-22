@@ -15,6 +15,7 @@ import { scene, camera, renderer, AU, C_KMS } from './core.js';
 import { loadPH, surfDebug } from './surface.js';
 import { bodies } from './bodies.js';
 import { S } from './state.js';
+import { toonMat, addOutlines } from './toon.js';
 
 /* Poly Haven -metallipinta materiaaliin taustalataukena (canvas jää varalle):
    diffuusi + normaalikartta kloonataan omalla toistolla ja sävytinttillä */
@@ -68,22 +69,8 @@ function subtleTex(){
   return _subtleTex;
 }
 
-// CELL SHADING: porrastettu sävyrampi MeshToonMaterialille (valaistus
-// kvantitaan muutamaan portaaseen → litteä sarjakuvamainen varjostus).
-let _toonRamp = null;
-function toonRamp(){
-  if (_toonRamp) return _toonRamp;
-  const steps = new Uint8Array([55, 145, 255]);   // 3 selvää sävyporrasta (vahva cell-shade)
-  _toonRamp = new THREE.DataTexture(steps, steps.length, 1, THREE.RedFormat);
-  _toonRamp.minFilter = _toonRamp.magFilter = THREE.NearestFilter;
-  _toonRamp.needsUpdate = true;
-  return _toonRamp;
-}
-// luo MeshToonMaterial vain kelvollisin parametrein (säilyttää map/normalMap/
-// bumpMap, kvantitaa valaistuksen) + jaettu sävyrampi
-function toonMat(params){
-  return new THREE.MeshToonMaterial(Object.assign({ gradientMap: toonRamp() }, params));
-}
+// CELL SHADING: toonMat/toonRamp/addOutlines jaettu toon.js:ssä (sama tekniikka
+// myös kivillä, mineraaleilla ja työkalulla)
 
 // kulunut metallipaneeli: saumat, niitit, grimet
 function makePanelTex(){
@@ -1082,22 +1069,6 @@ function buildCockpit(opts){
 /* CELL SHADING -ääriviiva: käänteinen kuori — kopioidaan toon-meshien geometria,
    työnnetään verteksit normaalin suuntaan ja piirretään mustana TAKAPINNALLA
    (BackSide). Vain siluetin reunalla kuori näkyy → musta ääriviiva. */
-function addOutlines(g, thickness){
-  const adds = [];
-  g.traverse(o => {
-    if (!o.isMesh || !o.material || !o.material.isMeshToonMaterial) return;
-    const geo = o.geometry.clone();
-    const p = geo.attributes.position, n = geo.attributes.normal;
-    if (!n) return;
-    for (let i = 0; i < p.count; i++)
-      p.setXYZ(i, p.getX(i) + n.getX(i) * thickness, p.getY(i) + n.getY(i) * thickness, p.getZ(i) + n.getZ(i) * thickness);
-    p.needsUpdate = true;
-    const om = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide }));
-    adds.push(om);
-  });
-  for (const om of adds) g.add(om);
-}
-
 function mergeStatic(g){
   g.updateMatrixWorld(true);
   const byMat = new Map();
@@ -1467,6 +1438,22 @@ function makeShuttleModel(withBlinkers = true){
   // pari kohotettua selkäpaneelia (greeble) lakatulla rungolla (viistetyt särmät)
   rbox(g, hullMat, 0.5, 0.05, 0.7, 0, 0.79, -0.4, 0.01);
   rbox(g, hullMat, 0.26, 0.04, 0.34, 0.32, 0.5, 1.55, 0.009);
+
+  // oviaukon ääriviivat oikealle kyljelle (+x): suorakaide rungon pystypintaan,
+  // alaosasta katon puoliväliin. Ohuet tummat palkit (flat → litistyy runkoa
+  // vasten) hieman pinnasta ulkona → näkyvä luukun reunus. Saa cell-shade-
+  // ääriviivan addOutlines-vaiheessa kuten muutkin meshit.
+  {
+    const DX = 1.05;            // hieman rungon pystypinnan (x≈1.03–1.05) ulkona
+    const y0 = -0.36, y1 = 0.33;   // alaosasta katon puoliväliin
+    const z0 = -0.35, z1 = 0.55;   // luukun leveys rungon pituussuunnassa
+    const n = [1, 0, 0];           // litistetty sivu rungon pystypintaa vasten
+    const r = 0.022, fl = 0.4;
+    bar(g, darkMat, [DX, y0, z0], [DX, y0, z1], r, r, fl, n);   // alareuna
+    bar(g, darkMat, [DX, y1, z0], [DX, y1, z1], r, r, fl, n);   // yläreuna
+    bar(g, darkMat, [DX, y0, z0], [DX, y1, z0], r, r, fl, n);   // takareuna
+    bar(g, darkMat, [DX, y0, z1], [DX, y1, z1], r, r, fl, n);   // etureuna
+  }
 
   mergeStatic(g);
   addOutlines(g, 0.02);   // cell shading: musta ääriviiva (käänteinen kuori)

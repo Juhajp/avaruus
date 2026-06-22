@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { camera } from './core.js';
 import { S } from './state.js';
+import { toonMat, addOutlines } from './toon.js';
 
 export const ITEM_NAMES = {
   rauta: 'Rautaoksidi', silikaatti: 'Silikaatit', jaa: 'Vesijää',
@@ -74,11 +75,11 @@ let oreGeo = null, oreMats = null;   // luodaan per pintakäynti (scene-dispose 
 let mineralEnv = null;               // taivaan IBL-kartta heijastuksiin (surface.js asettaa)
 let rockMap = null, rockNor = null;  // planeetan kivitekstuuri + normaalikartta (surface.js asettaa)
 
-// surface.js kutsuu kun taivaan ympäristökartta on valmis → mineraalit heijastavat sitä
+// surface.js kutsuu kun taivaan ympäristökartta on valmis. CELL SHADING:
+// MeshToonMaterial ei käytä ympäristökarttaa → tallennetaan vain viite (ei
+// aseteta envMappia, joka kaataisi renderöijän — toonilla ei ole envMap-uniformia)
 export function setMineralEnv(tex){
   mineralEnv = tex;
-  if (oreMats) for (const k in oreMats) { oreMats[k].envMap = tex; oreMats[k].needsUpdate = true; }
-  for (const m of toolMats) { m.envMap = tex; m.needsUpdate = true; }   // työkalun metalli heijastaa taivasta
 }
 
 // surface.js kutsuu kun kivitekstuuri on ladattu → esiintymät käyttävät sitä
@@ -120,7 +121,8 @@ const _fwd = new THREE.Vector3(), _to = new THREE.Vector3();
 const TOOL_POS = new THREE.Vector3(0.42, -0.46, -0.95);
 const TOOL_ROT = new THREE.Vector3(-0.30, 0.62, 0.35);
 let swingT = 0, swingAmt = 0;
-let toolMats = [];   // työkalun materiaalit (envMap päivitetään setMineralEnvissä)
+let toolMats = [];   // työkalun materiaalit
+let _toolLight = null;   // hakun oma lähivalo (muotovarjostus + näkyvyys kaikissa valoissa)
 // realistiset metallitekstuurit Poly Havenilta (diff + normaali + karheus + metallisuus)
 const PH_TOOL = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/';
 function loadToolTex(mat, slug, ru, rv){
@@ -130,20 +132,19 @@ function loadToolTex(mat, slug, ru, rv){
     if (srgb) t.colorSpace = THREE.SRGBColorSpace;
     mat[key] = t; mat.needsUpdate = true;
   });
+  // toon-materiaali tukee vain map + normalMap (ei rough/metal/env-karttoja)
   load('diff', 'map', true);
   load('nor_gl', 'normalMap', false);
-  load('rough', 'roughnessMap', false);
-  load('metal', 'metalnessMap', false);
 }
 function buildTool(){
   const g = new THREE.Group();
   // kahva: octagonaalinen metalli (metal_plate_02), terä/kaulus: teräs (metal_plate)
-  const handleMat = new THREE.MeshStandardMaterial({ color: 0x9298a0, roughness: 0.55, metalness: 0.9, envMapIntensity: 0.5 });
+  // CELL SHADING: toon-materiaali (porrastettu valaistus) + tekstuurit (säilyy)
+  const handleMat = toonMat({ color: 0x9298a0 });
   loadToolTex(handleMat, 'metal_plate_02', 1, 4);
-  const steel = new THREE.MeshStandardMaterial({ color: 0x8c929a, roughness: 0.5, metalness: 0.9, envMapIntensity: 0.5 });
+  const steel = toonMat({ color: 0x8c929a });
   loadToolTex(steel, 'metal_plate', 1, 1);
   toolMats = [handleMat, steel];
-  if (mineralEnv) { handleMat.envMap = steel.envMap = mineralEnv; }
   // varsi: 8-särmäinen (octagoni) metallikahva
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.026, 0.6, 8), handleMat);
   handle.position.set(0, -0.1, 0); g.add(handle);
@@ -155,6 +156,20 @@ function buildTool(){
   head.position.set(0, 0.205, 0.015);
   head.rotation.set(0.22, Math.PI / 2 - 0.35, 0);   // 90° − 20°, kallistus eteen-alas
   g.add(head);
+  addOutlines(g, 0.012);   // cell shading: musta ääriviiva (käänteinen kuori)
+  // TYÖKALUVALO: toonilla ei ole ympäristöheijastusta, joten aurinko takana →
+  // hakku pimeni. Oma lähivalo katselijan suunnasta antaa MUOTOVARJOSTUKSEN
+  // (toon-portaat) ja pitää tekstuurin näkyvänä KAIKISSA valaistuksissa. Valo on
+  // LYHYTKANTAMAINEN (distance 1.6, decay 2) ja sijaitsee aivan hakun vieressä →
+  // se valaisee voimakkaasti vain hakun (~0,5 m) ja vaimenee lähes nollaan ennen
+  // maastoa (≥2 m), joten maa ei saa hehkuvaa valokehää. Scenen aurinko valaisee
+  // hakun yhä normaalisti päivällä.
+  if (!_toolLight) {
+    _toolLight = new THREE.PointLight(0xfff2e2, 3.2, 1.6, 2);
+    _toolLight.position.set(0.55, -0.15, -0.78);   // aivan hakun vieressä, katselijan ylä-oikealla
+    _toolLight.visible = false;                     // päällä vain kun hakku näkyy (updateMining)
+    camera.add(_toolLight);
+  }
   g.position.copy(TOOL_POS);
   g.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z);
   g.visible = false;
@@ -198,11 +213,14 @@ function makeDeposit(){
     m.castShadow = true; m.receiveShadow = true;
     g.add(m);
   }
+  addOutlines(g, 0.03);   // cell shading: musta ääriviiva (käänteinen kuori)
   return { mesh: g, type: 'rauta', x: 0, z: 0, y: 0, pop: 1 };
 }
 function setOre(d, ore){
   d.type = ore.type;
-  for (const m of d.mesh.children) m.material = oreMats[ore.type];
+  // vain kivilohkareet (toon) saavat malmin materiaalin — mustat ääriviivat
+  // (MeshBasicMaterial) jätetään ennalleen
+  for (const m of d.mesh.children) if (m.material.isMeshToonMaterial) m.material = oreMats[ore.type];
 }
 function relocate(d, px, pz){
   // syntyy pelaajan TAKAPUOLELLE/sivuille (ei näkyvään etukenttään) → ilmestymistä ei näe
@@ -235,12 +253,11 @@ export function initMining(sc, name, hFn){
   oreGeo = makeOreRockGeo();
   oreMats = {};
   for (const o of ORE) {
-    // kuin kivi: sama kivitekstuuri + normaalikartta, väri vain hillitty tunnusvivahde
-    oreMats[o.type] = new THREE.MeshStandardMaterial({
-      color: o.col, roughness: 1, metalness: 0, envMapIntensity: 0.25 });
+    // CELL SHADING (kuten kivet): toon-materiaali, sama kivitekstuuri +
+    // normaalikartta, väri vain hillitty tunnusvivahde
+    oreMats[o.type] = toonMat({ color: o.col });
     if (rockMap) oreMats[o.type].map = rockMap;
     if (rockNor) oreMats[o.type].normalMap = rockNor;
-    if (mineralEnv) oreMats[o.type].envMap = mineralEnv;
   }
   for (let i = 0; i < COUNT; i++) {
     const d = makeDeposit();
@@ -294,6 +311,7 @@ export function clearMining(){
   bursts = []; burstGeo = null;
   _lmb = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
+  if (_toolLight) _toolLight.visible = false;
   renderMineBar();
   renderHud();
 }
@@ -358,7 +376,8 @@ function applyCracks(d){
   d._crackCtx = ctx; d._crackTex = tex; d._crackN = 0;
   d._origMats = []; d._crackMats = [];
   for (const m of d.mesh.children) {
-    d._origMats.push(m.material);
+    if (!m.material.isMeshToonMaterial) continue;   // ohita mustat ääriviivat
+    d._origMats.push({ m, mat: m.material });
     const cm = m.material.clone();
     cm.map = tex;                  // sama UV kuin kivitekstuurissa → halkeamat pintaan
     m.material = cm; d._crackMats.push(cm);
@@ -373,7 +392,7 @@ function setCrackLevel(d, f){
 }
 function removeCracks(d){
   if (!d._origMats) return;
-  d.mesh.children.forEach((m, i) => { m.material = d._origMats[i]; });
+  for (const o of d._origMats) o.m.material = o.mat;
   for (const cm of d._crackMats) cm.dispose();
   if (d._crackTex) d._crackTex.dispose();
   d._origMats = d._crackMats = d._crackCtx = d._crackTex = null;
@@ -394,6 +413,7 @@ function aimedDeposit(){
 export function updateMining(dt, px, pz){
   // louhintatyökalu: näkyy louhittavalla pinnalla (Mars/Kuu), heiluu kun louhitaan
   tool.visible = active;
+  if (_toolLight) _toolLight.visible = active;
   updateTool(dt, active && (_lmb || S.keys.Space));
   if (!active) return;
   updateBursts(dt);
