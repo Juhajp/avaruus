@@ -152,6 +152,11 @@
     position:fixed; inset:0; background:#dfe6ee; opacity:0;
     pointer-events:none; z-index:6; transition:opacity 0.22s linear;
   }
+  /* Marsin hiekkamyrskyn FOV-usva (ruudun peittävä ajautuva pöly) — HUD (z≥5) jää päälle */
+  #sandHaze {
+    position:fixed; inset:0; opacity:0; pointer-events:none; z-index:4;
+    transition:opacity 0.35s linear;
+  }
 
   /* ---- pintamoodi ---- */
   #surfacePanel { top:16px; left:16px; display:none; max-width:360px; }
@@ -288,6 +293,7 @@
 
 <div id="fadeBlack"></div>
 <div id="whiteOut"></div>
+<div id="sandHaze"></div>
 <div id="miningHud"></div>
 <div id="mineBar"><i></i></div>
 <div id="craftPanel"></div>

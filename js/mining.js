@@ -106,13 +106,20 @@ function makeOreRockGeo(){
   g.computeVertexNormals();
   return g;
 }
-// murtumispurske: pieni pooli kivensiruja, jotka sinkoutuvat mineraalin värissä
-const BURST_POOL = 30, BURST_PER = 14, BURST_G = 8;
+// murtumispurske + iskusirut: jaettu kivensirupooli (sinkoutuvat osuman värissä)
+const BURST_POOL = 44, BURST_G = 8;
 let bursts = [], burstGeo = null;
 const _bd = new THREE.Vector3();
 let _lmb = false;                    // hiiren vasen pohjassa (= louhi)
 let mineTarget = null, mineProg = 0; // nykyinen louhintakohde ja edistymä
 const _fwd = new THREE.Vector3(), _to = new THREE.Vector3();
+const _ray = new THREE.Raycaster();  // hakun isku → mitä edessä (kivi/mineraali/objekti)
+const STRIKE_RATE = 2.6;             // iskuja/s (sama kuin updateToolin animaatio)
+let _prevPh = 0;                     // edellinen iskuvaihe (impaktin tunnistus)
+// ISO loppupurske kun mineraali murtuu (enemmän + isompia + nopeampia siruja)
+const FINAL_BURST  = { count: 24, scaleMin: 0.9, scaleRng: 1.6, speedMin: 2.4, speedRng: 4.2, lifeMin: 0.6, lifeRng: 0.5, spread: 0.35 };
+// pienet sirut joka hakuniskulla (kivi/mineraali/objekti) — PIENET sirpaleet
+const STRIKE_BURST = { count: 5,  scaleMin: 0.12, scaleRng: 0.22, speedMin: 1.1, speedRng: 1.9, lifeMin: 0.3, lifeRng: 0.3, spread: 0.16 };
 
 /* ---- ensimmäisen persoonan louhintatyökalu (kameran lapsi) ----
    Octagonaalinen metallihakku oikeassa alakulmassa; heiluu kaarella kun
@@ -122,7 +129,6 @@ const TOOL_POS = new THREE.Vector3(0.42, -0.46, -0.95);
 const TOOL_ROT = new THREE.Vector3(-0.30, 0.62, 0.35);
 let swingT = 0, swingAmt = 0;
 let toolMats = [];   // työkalun materiaalit
-let _toolLight = null;   // hakun oma lähivalo (muotovarjostus + näkyvyys kaikissa valoissa)
 // realistiset metallitekstuurit Poly Havenilta (diff + normaali + karheus + metallisuus)
 const PH_TOOL = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/';
 function loadToolTex(mat, slug, ru, rv){
@@ -136,6 +142,23 @@ function loadToolTex(mat, slug, ru, rv){
   load('diff', 'map', true);
   load('nor_gl', 'normalMap', false);
 }
+/* "Otsalamppu" VAIN tämän materiaalin shaderissa: lisää kiinteän katselijan
+   suuntaisen valon emissioon (näkymäavaruuden normaali, z+ = kohti katselijaa).
+   Antaa muotovarjostuksen ja näkyvyyden kaikissa valoissa EIKÄ vaikuta muihin
+   objekteihin (toisin kuin scenen PointLight, jota three.js soveltaisi kaikkeen).
+   Käyttää diffuseColoria → tekstuuri säilyy eikä huuhtoudu. */
+function addToolHeadlamp(mat){
+  mat.customProgramCacheKey = () => 'toolHeadlamp';
+  mat.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace(
+      '#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+       float _hl = clamp(dot(normalize(normal), normalize(vec3(0.35, 0.45, 0.82))), 0.0, 1.0);
+       totalEmissiveRadiance += diffuseColor.rgb * (0.55 + 0.85 * _hl);`
+    );
+  };
+  mat.needsUpdate = true;
+}
 function buildTool(){
   const g = new THREE.Group();
   // kahva: octagonaalinen metalli (metal_plate_02), terä/kaulus: teräs (metal_plate)
@@ -145,6 +168,11 @@ function buildTool(){
   const steel = toonMat({ color: 0x8c929a });
   loadToolTex(steel, 'metal_plate', 1, 1);
   toolMats = [handleMat, steel];
+  // OTSALAMPPU pelkästään näiden materiaalien shaderissa (ei scenen valonlähdettä,
+  // joten EI valaise muita objekteja): kiinteä katselijan suuntainen valo lisätään
+  // emissioon → työkalu saa muotovarjostuksen ja pysyy näkyvänä KAIKISSA valoissa,
+  // vaikka aurinko olisi takana. Näkymäavaruuden normaali (z+ = kohti katselijaa).
+  addToolHeadlamp(handleMat); addToolHeadlamp(steel);
   // varsi: 8-särmäinen (octagoni) metallikahva
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.026, 0.6, 8), handleMat);
   handle.position.set(0, -0.1, 0); g.add(handle);
@@ -157,19 +185,6 @@ function buildTool(){
   head.rotation.set(0.22, Math.PI / 2 - 0.35, 0);   // 90° − 20°, kallistus eteen-alas
   g.add(head);
   addOutlines(g, 0.012);   // cell shading: musta ääriviiva (käänteinen kuori)
-  // TYÖKALUVALO: toonilla ei ole ympäristöheijastusta, joten aurinko takana →
-  // hakku pimeni. Oma lähivalo katselijan suunnasta antaa MUOTOVARJOSTUKSEN
-  // (toon-portaat) ja pitää tekstuurin näkyvänä KAIKISSA valaistuksissa. Valo on
-  // LYHYTKANTAMAINEN (distance 1.6, decay 2) ja sijaitsee aivan hakun vieressä →
-  // se valaisee voimakkaasti vain hakun (~0,5 m) ja vaimenee lähes nollaan ennen
-  // maastoa (≥2 m), joten maa ei saa hehkuvaa valokehää. Scenen aurinko valaisee
-  // hakun yhä normaalisti päivällä.
-  if (!_toolLight) {
-    _toolLight = new THREE.PointLight(0xfff2e2, 3.2, 1.6, 2);
-    _toolLight.position.set(0.55, -0.15, -0.78);   // aivan hakun vieressä, katselijan ylä-oikealla
-    _toolLight.visible = false;                     // päällä vain kun hakku näkyy (updateMining)
-    camera.add(_toolLight);
-  }
   g.position.copy(TOOL_POS);
   g.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z);
   g.visible = false;
@@ -181,7 +196,7 @@ function updateTool(dt, swinging){
   swingAmt += ((swinging ? 1 : 0) - swingAmt) * Math.min(1, dt * 10);
   swingT += dt;
   // epäsymmetrinen isku: windup (nosto taakse) → nopea isku alas → palautus, ~2,6 iskua/s
-  const ph = (swingT * 2.6) % 1;
+  const ph = (swingT * STRIKE_RATE) % 1;
   let strike;
   if (ph < 0.34)      strike = -(ph / 0.34) * 0.45;            // windup taakse/ylös
   else if (ph < 0.5)  strike = -0.45 + ((ph - 0.34) / 0.16) * 1.45;   // nopea isku → +1
@@ -272,28 +287,58 @@ export function initMining(sc, name, hFn){
   for (let i = 0; i < BURST_POOL; i++) {
     const m = new THREE.Mesh(burstGeo, oreMats[ORE[0].type]);
     m.visible = false;
+    m.userData.debris = true;   // hakun iskuraycast ohittaa omat sirut
     sc.add(m);
     bursts.push({ mesh: m, vel: new THREE.Vector3(), spin: new THREE.Vector3(), life: 0, max: 0, base: 1 });
   }
   renderHud();
 }
-// sinkoa BURST_PER kivensirua mineraalin paikalta sen värissä
-function spawnBurst(x, y, z, type){
+// sinkoa kivensiruja annetulla materiaalilla ja parametreilla (o = FINAL/STRIKE_BURST)
+function emitBurst(x, y, z, material, o){
+  if (!material || !bursts.length) return;
   let n = 0;
   for (const b of bursts) {
     if (b.life > 0) continue;
     _bd.set(Math.random() - 0.5, Math.random() * 0.8 + 0.25, Math.random() - 0.5).normalize();
-    b.vel.copy(_bd).multiplyScalar(1.6 + Math.random() * 2.6);
+    b.vel.copy(_bd).multiplyScalar(o.speedMin + Math.random() * o.speedRng);
     b.spin.set((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
-    b.max = 0.5 + Math.random() * 0.4; b.life = b.max;
-    b.base = 0.5 + Math.random() * 0.9;
-    b.mesh.material = oreMats[type];
-    b.mesh.position.set(x, y, z);
+    b.max = o.lifeMin + Math.random() * o.lifeRng; b.life = b.max;
+    b.base = o.scaleMin + Math.random() * o.scaleRng;
+    b.mesh.material = material;
+    b.mesh.position.set(x + (Math.random() - 0.5) * o.spread, y, z + (Math.random() - 0.5) * o.spread);
     b.mesh.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
     b.mesh.scale.setScalar(b.base);
     b.mesh.visible = true;
-    if (++n >= BURST_PER) break;
+    if (++n >= o.count) break;
   }
+}
+// ISO loppupurske mineraalin murtuessa
+function spawnBurst(x, y, z, type){ emitBurst(x, y, z, oreMats[type], FINAL_BURST); }
+// hakun iskuraycast: mitä on edessä kantaman sisällä (kivi/mineraali/objekti)
+function raycastHit(){
+  if (!scene) return null;
+  camera.getWorldDirection(_fwd);
+  _ray.set(camera.position, _fwd);
+  _ray.near = 0.2; _ray.far = REACH;
+  const hits = _ray.intersectObjects(scene.children, true);
+  for (const h of hits) {
+    const o = h.object;
+    if (!o.visible || !o.material) continue;
+    if (o.userData && o.userData.debris) continue;        // omat sirut
+    if (o.material.isMeshBasicMaterial) continue;          // mustat ääriviivat / HUD-tasot
+    return h;
+  }
+  return null;
+}
+// pienet sirut joka hakuniskulla: mineraalia louhittaessa malmin värissä,
+// muuten edessä olevan kiven/objektin pinnan materiaalilla (osuman kohdalta)
+function emitStrikeDebris(){
+  if (mineTarget) {
+    emitBurst(mineTarget.x, mineTarget.y + 0.45, mineTarget.z, oreMats[mineTarget.type], STRIKE_BURST);
+    return;
+  }
+  const h = raycastHit();
+  if (h) emitBurst(h.point.x, h.point.y, h.point.z, h.object.material, STRIKE_BURST);
 }
 function updateBursts(dt){
   for (const b of bursts) {
@@ -311,7 +356,6 @@ export function clearMining(){
   bursts = []; burstGeo = null;
   _lmb = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
-  if (_toolLight) _toolLight.visible = false;
   renderMineBar();
   renderHud();
 }
@@ -413,10 +457,15 @@ function aimedDeposit(){
 export function updateMining(dt, px, pz){
   // louhintatyökalu: näkyy louhittavalla pinnalla (Mars/Kuu), heiluu kun louhitaan
   tool.visible = active;
-  if (_toolLight) _toolLight.visible = active;
-  updateTool(dt, active && (_lmb || S.keys.Space));
+  const swinging = active && (_lmb || S.keys.Space);
+  updateTool(dt, swinging);
   if (!active) return;
   updateBursts(dt);
+  // ISKUSIRUT: joka hakuniskun impaktilla (iskuvaihe ylittää 0,5) sinkoa pieniä
+  // siruja edessä olevasta kivestä/mineraalista/objektista (osuman pinnan värissä)
+  const ph = (swingT * STRIKE_RATE) % 1;
+  if (swinging && swingAmt > 0.6 && _prevPh < 0.5 && ph >= 0.5) emitStrikeDebris();
+  _prevPh = ph;
   // kierrätä kauas jääneet eteen (ei aktiivista louhintakohdetta) + kasvuanimaatio
   for (const d of deposits) {
     if (d !== mineTarget && Math.hypot(d.x - px, d.z - pz) > FAR + 40) relocate(d, px, pz);

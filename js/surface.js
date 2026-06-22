@@ -267,7 +267,7 @@ let helmetLight = null;
    pelaajaa tuulen mukana (kävely vastaan kumoaa) ja lennättää vaakasuoria
    pölyjuovia pelaajan ympärillä. */
 const STORM_PROB = 0.40;     // todennäköisyys per sol
-const STORM_PUSH = 5.5;      // tuulen työntö (yks/s) täydellä voimakkuudella (< kävelyvauhti 9)
+const STORM_PUSH = 2.8;      // tuulen työntö (yks/s) täydellä voimakkuudella — hillitty (kävelyvauhti 9)
 const STORM_SPEED = 150;     // pölyjuovien vaakavauhti (yks/s)
 const STORM_APPROACH = 11;   // rintaman saapumisaika (s): pölyseinä lähestyy kaukaa
 const storm = { intens: 0, windX: 1, windZ: 0, startT: -1, endT: -1, lastSol: null, scX: 0, scZ: 0 };
@@ -275,11 +275,34 @@ let stormFx = null;          // { seg, wall, pos, seed, n, BX, BY, BZ, baseFar, 
 
 function _sm(a, b, x){ const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
 
+/* FOV-hiekkasavu: ruudun peittävä punertava pölyusva myrskyn sisällä. Saumattomasti
+   tiilautuva pehmeiden pölypuffien tekstuuri (kiedotut kopiot) jota vieritetään
+   tuulen mukana → "läpi puhaltavan hiekan" tuntu, joka huonontaa näkyvyyttä. */
+const sandHazeEl = document.getElementById('sandHaze');
+let _sandHazeTex = null, _sandHazeReady = false;
+function sandHazeTex(){
+  if (_sandHazeTex) return _sandHazeTex;
+  const S = 256, cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const c = cv.getContext('2d'), r = () => Math.random();
+  for (let i = 0; i < 48; i++) {
+    const x = r() * S, y = r() * S, rad = 26 + r() * 74, a = 0.025 + r() * 0.06;
+    for (const dx of [-S, 0, S]) for (const dy of [-S, 0, S]) {   // kiedotut kopiot → saumaton tiili
+      const g = c.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rad);
+      g.addColorStop(0, `rgba(198,120,76,${a})`); g.addColorStop(1, 'rgba(198,120,76,0)');
+      c.fillStyle = g; c.fillRect(x + dx - rad, y + dy - rad, rad * 2, rad * 2);
+    }
+  }
+  _sandHazeTex = cv.toDataURL();
+  return _sandHazeTex;
+}
+
 // lähestyvä pölyseinä (rintama): leveä shader-taso, joka billoaa pölyä ja saapuu
 // kaukaa pelaajaa kohti tuulen suunnasta
 function makeDustWall(cfg){
+  // lähestyvä rintama hieman PUNERTAVAMPI kuin ympäröivä pöly (Marsin ruosteenpunainen hiekka)
+  const wallCol = new THREE.Color(cfg.fog ? cfg.fog.color : cfg.sky).lerp(new THREE.Color(0x8a3b1f), 0.38);
   const u = { uTime: { value: 0 }, uOpacity: { value: 0 },
-    uColor: { value: new THREE.Color(cfg.fog ? cfg.fog.color : cfg.sky) } };
+    uColor: { value: wallCol } };
   return new THREE.ShaderMaterial({
     uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), u),
     transparent: true, depthWrite: false, fog: true, side: THREE.DoubleSide,
@@ -392,10 +415,28 @@ function updateStorm(dt){
 
   // näkyvyys: sumu tihenee voimakkaasti ja värjäytyy, taivas pölyyntyy
   if (sc && sc.fog) {
-    sc.fog.far = fx.baseFar * (1 - 0.93 * vis);
-    sc.fog.near = fx.baseNear * (1 - 0.75 * vis);
+    sc.fog.far = fx.baseFar * (1 - 0.95 * vis);
+    sc.fog.near = fx.baseNear * (1 - 0.8 * vis);
     sc.fog.color.lerp(fx.dustCol, vis * 0.85);
     if (sc.background && sc.background.isColor) sc.background.lerp(fx.dustCol, vis * 0.6);
+  }
+
+  // FOV-hiekkasavu: ruudun peittävä ajautuva pölyusva (näkyvyys huononee + savumainen efekti)
+  if (sandHazeEl) {
+    if (vis > 0.004) {
+      if (!_sandHazeReady) {
+        sandHazeEl.style.backgroundImage =
+          `radial-gradient(circle at 50% 50%, rgba(150,66,34,0) 20%, rgba(138,58,30,0.62) 100%), url(${sandHazeTex()})`;
+        sandHazeEl.style.backgroundRepeat = 'no-repeat, repeat';
+        sandHazeEl.style.backgroundSize = 'cover, 256px 256px';
+        _sandHazeReady = true;
+      }
+      const t = S.simTime;
+      sandHazeEl.style.backgroundPosition = `0 0, ${(-t * 95 % 100000).toFixed(1)}px ${(t * 36 % 100000).toFixed(1)}px`;
+      sandHazeEl.style.opacity = Math.min(0.62, vis * 0.82).toFixed(3);
+    } else if (sandHazeEl.style.opacity !== '0') {
+      sandHazeEl.style.opacity = '0';
+    }
   }
 
   if (vis < 0.004) { fx.seg.visible = false; return; }
@@ -1597,6 +1638,16 @@ function usFlagTexture(){
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; _usFlagTex = t; return t;
 }
 
+/* Pinnalle sijoitettavien objektien varjoasetus: HEITTÄVÄT varjon maahan mutta
+   EIVÄT VASTAANOTA sitä. Sileät pinnat varjostaisivat itseään matalalla auringolla
+   (varjon bias skaalautuu auringon korkeudella → ~0 horisontilla → loivat paneelit
+   tummuvat ja niihin tulee paksuneva tekseliraidoitus = itsevarjostusakne). Maasto
+   vastaanottaa varjot, joten objektien varjot näkyvät yhä maassa. KÄYTÄ TÄTÄ kaikille
+   pinnalle lisättäville rakennelmille/laitteille (laskeutuja, lippu, tulevat objektit). */
+export function setPropShadows(obj){
+  obj.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+}
+
 function makeLanderModule(){
   const g = new THREE.Group();
   const foil   = new THREE.MeshStandardMaterial({ color: 0xc69a2e, metalness: 0.55, roughness: 0.45, flatShading: true });
@@ -1612,7 +1663,7 @@ function makeLanderModule(){
     strut(g, silver, new THREE.Vector3(dx * 1.35, 0.65, dz * 1.35), foot, 0.05); // vinotuki
     const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.12, 12), silver); pad.position.copy(foot); g.add(pad);
   }
-  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  setPropShadows(g);   // heittää varjon, ei vastaanota (ei itsevarjostusaknea matalalla auringolla)
   return g;
 }
 
@@ -1624,7 +1675,7 @@ function makeFlag(){
   const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 0.66),
     new THREE.MeshStandardMaterial({ map: usFlagTexture(), side: THREE.DoubleSide, roughness: 0.9, metalness: 0 }));
   cloth.position.set(0.62, 2.59, 0); g.add(cloth);
-  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  setPropShadows(g);   // heittää varjon, ei vastaanota
   return g;
 }
 
@@ -1673,7 +1724,7 @@ function normalizeModel(root, targetSize){
   g.scale.setScalar(targetSize / maxDim);
   g.traverse(o => {
     if (!o.isMesh) return;
-    o.castShadow = true; o.receiveShadow = true;
+    o.castShadow = true; o.receiveShadow = false;   // pintaobjektit: heittää varjon, ei vastaanota (ks. setPropShadows)
     // Rikkinäinen normaalikartta (normalScale 0,0 + ei tangentteja geometriassa)
     // tekee materiaalista pikimustan lähietäisyydellä — kaukaa mip-tasot
     // keskiarvoistavat sen neutraaliksi, joten vika näkyy vain läheltä. Poista.
@@ -2254,6 +2305,7 @@ function leaveSurfaceScene(){
   S.shuttlePos = null;
   S.mode = 'space';
   whiteOutEl.style.opacity = '0';
+  if (sandHazeEl) sandHazeEl.style.opacity = '0';   // hiekkamyrskyn FOV-usva pois
   setHeatShimmer(0, 0);
   if (daylight && daylight.envRT) daylight.envRT.dispose();
   renderPass.scene = scene;

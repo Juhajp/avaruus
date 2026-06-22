@@ -1334,6 +1334,13 @@ function makeShuttleModel(withBlinkers = true){
   const darkMat = toonMat({ color: 0x34383f, map: subtleTex() });
   const glassMat = toonMat({ color: 0x0d1118, side: THREE.DoubleSide });
   const stripeMat = toonMat({ color: 0xbe2222, map: subtleTex() });
+  // VARJON ITSEAKNE (sahalaitaisuus/värinä pystypinnoilla): DoubleSide-materiaali
+  // heittää varjon MOLEMMILTA puolilta → valaistut etupinnat varjostavat itseään
+  // (korostui kun maaston varjon syvyyskate tiukennettiin). shadowSide = BackSide
+  // → vain takapinnat varjokarttaan → etupinnat eivät akneudu. (FrontSide-mat.
+  // saavat tämän jo oletuksena, siksi kivissä ei aknea — sukkulan runko on
+  // DoubleSide ja tarvitsee tämän eksplisiittisesti.)
+  for (const m of [hullMat, nacMat, darkMat, glassMat, stripeMat]) m.shadowSide = THREE.BackSide;
   const redGlow = new THREE.MeshBasicMaterial();
   redGlow.color.setRGB(1.15, 0.35, 0.25);
   const blueGlow = new THREE.MeshBasicMaterial();
@@ -1521,7 +1528,13 @@ function parkShuttle(){
   const qYaw = new THREE.Quaternion().setFromAxisAngle(up, S.yaw + 0.45);
   m.quaternion.multiplyQuaternions(qTilt, qYaw);   // suuntaus ensin, sitten kallistus rinteeseen
   m.position.set(px, sd.h(px, pz) + 1.43, pz);     // jalakset maahan
-  m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  // Sukkula HEITTÄÄ varjon maahan mutta EI VASTAANOTA varjoa: sileä runko
+  // varjostaisi itseään (itsevarjostusakne) matalalla auringolla, koska varjon
+  // bias skaalautuu auringon korkeudella → ~0 horisontilla → loiva paneeli
+  // tummuu ja siihen ilmestyy paksuneva tekseliraidoitus. Vastaanoton pois
+  // kytkeminen poistaa raidat; toon-varjostus (N·L) tummentaa silti aurinkoa
+  // poispäin olevat kyljet oikein.
+  m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
   sd.scene.add(m);
   shuttleSurf = m;
   S.shuttlePos = m.position.clone();   // kypäränäyttö lukee tästä (vältetään sirkulaarinen import)
