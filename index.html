@@ -105,6 +105,23 @@
   #startCard .go { margin-top:20px; font-size:14px; color:#fff; animation:blink 1.4s infinite; }
   @keyframes blink { 50% { opacity:0.35; } }
 
+  /* H = ohjeruutu (kaikki näppäinkomennot) */
+  #helpOverlay {
+    position:fixed; inset:0; z-index:55; display:none;
+    align-items:center; justify-content:center; cursor:pointer;
+    background:radial-gradient(ellipse at center, rgba(3,10,22,0.5), rgba(0,0,4,0.85));
+  }
+  #helpCard {
+    color:var(--hud); font-family: ui-monospace, Menlo, Consolas, monospace;
+    background:var(--panel-bg); border:1px solid var(--panel-border); border-radius:14px;
+    padding:26px 38px; max-width:620px; text-shadow:0 0 6px rgba(80,170,255,0.45);
+  }
+  #helpCard h1 { margin:0 0 16px 0; font-size:19px; letter-spacing:3px; }
+  #helpCard table { font-size:12px; border-collapse:collapse; }
+  #helpCard td { padding:3px 16px 3px 0; vertical-align:top; }
+  #helpCard td:first-child { color:#aef7c1; white-space:nowrap; }
+  #helpCard .go { margin-top:16px; font-size:11px; color:var(--hud-dim); }
+
   /* ---- komentosiltatila (3D-ohjaamo renderöidään cockpit.js:ssä;
           luokka säätää vain HUD-paneelien asettelun) ----
      NOPEUS/KOHDE-paneelit piilossa — tiedot on integroitu kojelaudan
@@ -159,9 +176,9 @@
   }
 
   /* ---- pintamoodi ---- */
+  /* infolaatikko (vas. ylä) poistettu pinnalta — tiedot kypärävisiirin näytöillä */
   #surfacePanel { top:16px; left:16px; display:none; max-width:360px; }
   #surfacePanel #surfInfo { line-height:1.55; color:var(--hud-dim); }
-  body.surface #surfacePanel { display:block; }
   body.surface #speedPanel, body.surface #targetPanel, body.surface #bodyBar,
   body.surface #hint, body.surface #labels { display:none !important; }
   body.surface #crosshair { display:block; opacity:0.6; }   /* tähtäin louhintaa varten */
@@ -173,7 +190,7 @@
     color:#cfe6d6; text-shadow:0 0 6px rgba(60,180,120,0.4); pointer-events:none;
     line-height:1.7;
   }
-  body.surface #miningHud { display:block; }
+  /* mineraalien lista (oik. ylä) poistettu — kerätyt mineraalit visiirin vasemmalla näytöllä */
   #miningHud b { color:#fff; font-weight:700; }
   #miningHud .mhMade { color:#9fd0ff; text-shadow:0 0 6px rgba(80,150,255,0.4); }
   #miningHud .mhDim { color:var(--hud-dim); }
@@ -346,6 +363,30 @@
   <div id="startCard">
     <h1>AURINKOKUNTA</h1>
     <div class="go" id="bootStatus">Ladataan (Three.js)…</div>
+  </div>
+</div>
+
+<div id="helpOverlay">
+  <div id="helpCard">
+    <h1>NÄPPÄINKOMENNOT</h1>
+    <table>
+      <tr><td>Hiiri</td><td>katselusuunta (hiirilukko, tai vedä nappi pohjassa)</td></tr>
+      <tr><td>W / S &nbsp;tai rulla</td><td>kaasuvipu eteen / taakse (Shift = nopeampi säätö)</td></tr>
+      <tr><td>Q / E</td><td>kallistus (roll)</td></tr>
+      <tr><td>X &nbsp;/&nbsp; M</td><td>kaasu nollaan (liu'u) / täysi työntö eteen</td></tr>
+      <tr><td>0 – 9</td><td>valitse kohde (0 = Aurinko … 8 = Neptunus, 9 = Kuu)</td></tr>
+      <tr><td>F (pidä)</td><td>käänny kohti kohdetta</td></tr>
+      <tr><td>R</td><td>pikasiirtymä valitun kohteen luo</td></tr>
+      <tr><td>G</td><td>laskeudu pinnalle (kiviplaneetan kiertoradalla)</td></tr>
+      <tr><td>O</td><td>kiertoradat näkyviin / pois</td></tr>
+      <tr><td>V</td><td>ohjaamo / ulkonäkymä takaviistosta</td></tr>
+      <tr><td>J / K</td><td>käytä happisäiliö / runkopaneeli (täytä happi / korjaa runko)</td></tr>
+      <tr><td>Pinnalla</td><td>WASD = liiku · Shift = juokse · tähtää + hiiren vasen / Space = louhi · C = jalostus</td></tr>
+      <tr><td>X</td><td>vaihda ase / hakku (pinnalla) — asetilassa hiiren vasen ampuu laseria</td></tr>
+      <tr><td>B</td><td>palaa alukselle (pinnalla pysäköidyn sukkulan vierestä)</td></tr>
+      <tr><td>H</td><td>näytä / piilota tämä ohje</td></tr>
+    </table>
+    <div class="go">H tai klikkaus sulkee</div>
   </div>
 </div>
 

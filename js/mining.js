@@ -61,7 +61,11 @@ let ORE = ORE_SETS.Mars;   // aktiivinen setti (valitaan initMiningissä)
 function pickOre(){ const r = Math.random(); let a = 0, tot = 0; for (const o of ORE) tot += o.w; for (const o of ORE) { a += o.w / tot; if (r < a) return o; } return ORE[0]; }
 
 const COUNT = 26, NEAR = 25, FAR = 150;   // esiintymäpooli levitetty laajemmalle alueelle
-const REACH = 14, AIM_COS = 0.975;   // kantama (m, 3D), tähtäyskartio ~13°
+// hakun kantama (3D-etäisyys silmästä kohteen tähtäyspisteeseen): lyhyt, kuten
+// hakulla kuuluu — täytyy seistä kohteen vieressä. Silmä on ~2,4 m maasta, joten
+// viereisen (törmäyssäde 1,5 m) esiintymän etäisyys on jo ~2,2 m → 4 m antaa varan
+// mutta estää louhinnan metrien päästä.
+const REACH = 4, AIM_COS = 0.975;   // kantama (m, 3D), tähtäyskartio ~13°
 // louhinta-aika riippuu mineraalista: mitä ENEMMÄN jalostukseen tarvitaan, sitä
 // nopeampi louhia (käänteinen suhde). Hitain (jalostustarve 2) = 3,6 s ≈ 3×
 // vanhasta (1,2 s), nopein (tarve 4) = 1,8 s. Yhteisaika per jaloste pysyy ~7,2 s.
@@ -120,6 +124,20 @@ let _prevPh = 0;                     // edellinen iskuvaihe (impaktin tunnistus)
 const FINAL_BURST  = { count: 24, scaleMin: 0.9, scaleRng: 1.6, speedMin: 2.4, speedRng: 4.2, lifeMin: 0.6, lifeRng: 0.5, spread: 0.35 };
 // pienet sirut joka hakuniskulla (kivi/mineraali/objekti) — PIENET sirpaleet
 const STRIKE_BURST = { count: 5,  scaleMin: 0.12, scaleRng: 0.22, speedMin: 1.1, speedRng: 1.9, lifeMin: 0.3, lifeRng: 0.3, spread: 0.16 };
+
+// ---- ase (semiautomaattinen laser) ----
+let weaponMode = false;             // false = hakku, true = ase (X vaihtaa pinnalla)
+let recoil = 0, _gunT = 0;          // rekyyli (vaikuttaa VAIN aseeseen) + huojunta-aika
+let _fireCd = 0, _prevFire = false; // laukauksen jäähtymisaika + edellinen liipaisin (semi-auto = nouseva reuna)
+const BEAM_POOL = 12, BEAM_W = 0.16, BEAM_LIFE = 0.16;
+const GUN_DMG = 1, DEP_HP = 3;     // laserin vahinko per laukaus + mineraalin piilo-osumapisteet
+let beams = [], beamGeo = null, _beamTex = null;
+let _gunHitHandler = null;          // surface.js rekisteröi kivien/sukkulan osumakäsittelyn
+export function setGunHitHandler(fn){ _gunHitHandler = fn; }
+const GUN_POS = new THREE.Vector3(0.34, -0.40, -0.55);
+const GUN_ROT = new THREE.Vector3(0.03, -0.12, 0.0);
+const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3();
+const _bm = new THREE.Matrix4(), _muz = new THREE.Vector3();
 
 /* ---- ensimmäisen persoonan louhintatyökalu (kameran lapsi) ----
    Octagonaalinen metallihakku oikeassa alakulmassa; heiluu kaarella kun
@@ -185,6 +203,7 @@ function buildTool(){
   head.rotation.set(0.22, Math.PI / 2 - 0.35, 0);   // 90° − 20°, kallistus eteen-alas
   g.add(head);
   addOutlines(g, 0.012);   // cell shading: musta ääriviiva (käänteinen kuori)
+  g.traverse(o => { if (o.isMesh) o.userData.viewmodel = true; });   // hakun iskuraycast ohittaa itsensä
   g.position.copy(TOOL_POS);
   g.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z);
   g.visible = false;
@@ -215,6 +234,175 @@ function updateTool(dt, swinging){
   );
 }
 
+/* ---- laserase (kameran lapsi, vaihtoehto hakulle) ----
+   Realistinen sci-fi-laserkivääri (bittikarttatekstuuri + cell-shading). Ampuu
+   semiautomaattisesti (laukaus per liipaisinpainallus) katkonaisia, lattamaisia
+   lasersäteitä. Rekyyli liikuttaa VAIN asetta (ei pelaajaa). */
+function beamDashTex(){
+  if (_beamTex) return _beamTex;
+  const w = 16, h = 64, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d'); c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
+  for (let y = 0; y < h; y++) {
+    const ph = (y / h * 3) % 1;            // ~3 katkoa per tekstuuri
+    if (ph >= 0.6) continue;               // tauko (katkonainen)
+    for (let x = 0; x < w; x++) {
+      const dx = Math.abs(x - (w - 1) / 2) / ((w - 1) / 2);   // 0 keskellä, 1 reunoilla
+      const v = Math.round(255 * Math.pow(1 - dx, 2));        // kirkas keskisäie
+      c.fillStyle = `rgb(${v},${v},${v})`; c.fillRect(x, y, 1, 1);
+    }
+  }
+  _beamTex = new THREE.CanvasTexture(cv);
+  return _beamTex;
+}
+// pehmeä pyöreä hehku (suuliekki) — ilman tätä litteä quad näkyy valkoisena suorakaiteena
+let _flashTex = null;
+function flashTex(){
+  if (_flashTex) return _flashTex;
+  const s = 64, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const c = cv.getContext('2d');
+  const g = c.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0.0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,225,180,0.65)');
+  g.addColorStop(1.0, 'rgba(0,0,0,0)');
+  c.fillStyle = g; c.fillRect(0, 0, s, s);
+  _flashTex = new THREE.CanvasTexture(cv);
+  return _flashTex;
+}
+function makeBeamMat(){
+  const t = beamDashTex().clone(); t.needsUpdate = true;
+  t.wrapT = THREE.RepeatWrapping; t.wrapS = THREE.ClampToEdgeWrapping;
+  const m = new THREE.MeshBasicMaterial({ map: t, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0, side: THREE.DoubleSide });
+  m.color.setRGB(2.8, 0.65, 0.4);   // kuuma oranssipunainen → hehkuu bloomissa
+  return m;
+}
+// KAKSI ristikkäistä lattaa (Y = pituus, X/Z = leveys) → litteä mutta näkyy joka
+// suunnasta (yksi latta katoaisi reunastaan kun ammutaan suoraan katseen suuntaan)
+function makeBeamGeo(){
+  const g = new THREE.BufferGeometry();
+  const pos = [
+    -0.5, -0.5, 0,  0.5, -0.5, 0,  0.5, 0.5, 0,  -0.5, 0.5, 0,   // latta XY
+    0, -0.5, -0.5,  0, -0.5, 0.5,  0, 0.5, 0.5,  0, 0.5, -0.5,   // latta ZY
+  ];
+  const uv = [0, 0, 1, 0, 1, 1, 0, 1,  0, 0, 1, 0, 1, 1, 0, 1];   // V pituuden suuntaan (dashit)
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+  return g;
+}
+let gun = null, _muzzleFlash = null;
+function buildGun(){
+  const g = new THREE.Group();
+  // CELL SHADING + bittikarttatekstuuri (kuten hakku); otsalamppu → näkyy kaikissa valoissa
+  const bodyMat = toonMat({ color: 0x6f7681 }); loadToolTex(bodyMat, 'metal_plate_02', 2, 1);
+  const darkMat = toonMat({ color: 0x33373d }); loadToolTex(darkMat, 'metal_plate', 1, 1);
+  addToolHeadlamp(bodyMat); addToolHeadlamp(darkMat);
+  const box = (mat, w, h, d, x, y, z, rx, ry, rz) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); if (rx || ry || rz) m.rotation.set(rx || 0, ry || 0, rz || 0); g.add(m); return m; };
+  box(bodyMat, 0.15, 0.17, 0.5, 0, 0, 0);                       // runko/lukko
+  box(bodyMat, 0.10, 0.10, 0.32, 0, 0.02, -0.34);              // piippusuojus
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.04, 0.5, 10), darkMat);
+  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, -0.5); g.add(barrel);   // piippu
+  box(darkMat, 0.07, 0.21, 0.1, 0, -0.17, 0.08, -0.26);        // kahva
+  box(bodyMat, 0.09, 0.13, 0.22, 0, -0.02, 0.33);             // perä
+  box(darkMat, 0.03, 0.055, 0.2, 0, 0.13, -0.04);            // tähtäin/kisko
+  addOutlines(g, 0.01);   // cell shading: musta ääriviiva
+  // hehkuvat osat (MeshBasic, kirkkaat → bloom): suuliekkirengas + energiakenno
+  const emit = new THREE.MeshBasicMaterial(); emit.color.setRGB(2.6, 0.7, 0.4);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.013, 8, 18), emit); ring.position.set(0, 0.02, -0.77); g.add(ring);
+  const cell = new THREE.MeshBasicMaterial(); cell.color.setRGB(0.4, 1.6, 2.3);
+  box(cell, 0.02, 0.06, 0.26, 0.082, 0.0, 0.02);             // sininen energiakenno kyljessä
+  g.traverse(o => { if (o.isMesh) o.userData.viewmodel = true; });   // raycastit ohittavat aseen
+  // suuliekki: kirkas kiekko piipun kärjessä, kääntyy katselijaa kohti, syttyy laukauksessa
+  const fm = new THREE.MeshBasicMaterial({ map: flashTex(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, opacity: 0 });
+  fm.color.setRGB(3.2, 1.3, 0.7);
+  _muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.34), fm);
+  _muzzleFlash.position.set(0, 0.02, -0.82); g.add(_muzzleFlash);
+  g.position.copy(GUN_POS); g.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z);
+  g.visible = false; camera.add(g);
+  return g;
+}
+gun = buildGun();
+function updateGun(dt){
+  _gunT += dt;
+  recoil += (0 - recoil) * Math.min(1, dt * 14);   // rekyyli laantuu nopeasti
+  gun.position.set(GUN_POS.x, GUN_POS.y + Math.sin(_gunT * 1.6) * 0.004, GUN_POS.z + recoil * 0.14);
+  gun.rotation.set(GUN_ROT.x - recoil * 0.22, GUN_ROT.y + Math.sin(_gunT * 1.3) * 0.006, GUN_ROT.z);
+  if (_muzzleFlash) _muzzleFlash.material.opacity = Math.max(0, recoil * 1.3 - 0.25);
+}
+// ensimmäinen kiinteä osuma edessä (maasto/kivi/mineraali/objekti); palauttaa intersectionin
+function gunRaycast(){
+  _ray.set(camera.position, _fwd); _ray.near = 0.3; _ray.far = 140;
+  const objs = scene.children.filter(o => o !== camera);
+  const hits = _ray.intersectObjects(objs, true);
+  for (const h of hits) {
+    const o = h.object;
+    if (!o.visible || !o.material) continue;
+    if (o.userData && (o.userData.debris || o.userData.beam)) continue;
+    if (o.material.isMeshBasicMaterial) continue;   // ääriviivat / hehkut
+    return h;
+  }
+  return null;
+}
+// pieni iskupurske (kivi/mineraali) annetun materiaalin värissä — surface.js käyttää tätä kiville
+export function spawnHitDebris(x, y, z, material, big){
+  emitBurst(x, y, z, material, big ? FINAL_BURST : STRIKE_BURST);
+}
+// laserin osuma: mineraalit hoidetaan tässä (HP + tuhoutuminen + malmi), muut (kivet/sukkula)
+// rekisteröidyssä käsittelijässä (surface.js)
+function applyGunDamage(h){
+  const o = h.object;
+  const dep = deposits.find(d => o.parent === d.mesh);
+  if (dep) { damageDeposit(dep, h.point); return; }
+  if (_gunHitHandler) _gunHitHandler(h);
+}
+function damageDeposit(d, point){
+  spawnHitDebris(point.x, point.y, point.z, oreMats[d.type], false);   // pieni malmisirupurske osumaan
+  d.hp -= GUN_DMG;
+  if (d.hp <= 0) {                                   // tuhoutuu → iso purske + malmi varastoon + ilmestyy muualle
+    S.inv[d.type] = (S.inv[d.type] || 0) + 1;
+    spawnBurst(d.x, d.y + 0.5, d.z, d.type);
+    if (d === mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
+    relocate(d, camera.position.x, camera.position.z);
+    renderHud(); pulse();
+  }
+}
+function fireGun(){
+  if (!scene || !beams.length) return;
+  camera.getWorldDirection(_fwd); camera.updateMatrixWorld();
+  _muz.set(0.22, -0.14, -1.4).applyMatrix4(camera.matrixWorld);   // suupiipun pää maailmassa
+  const hit = gunRaycast();
+  const len = Math.max(2, (hit ? hit.distance : 140) - 0.3);
+  const b = beams.find(x => x.life <= 0) || beams[0];
+  _by.copy(_muz).addScaledVector(_fwd, len * 0.5);                // keskipiste
+  _bz.copy(camera.position).sub(_by); _bz.addScaledVector(_fwd, -_bz.dot(_fwd));   // leveä sivu kohti kameraa (kohtisuoraan säteeseen)
+  if (_bz.lengthSq() < 1e-6) _bz.set(0, 1, 0);
+  _bz.normalize(); _bx.crossVectors(_fwd, _bz).normalize();
+  _bm.makeBasis(_bx, _fwd, _bz);                                  // X=leveys, Y=pituus(säde), Z=normaali
+  b.mesh.position.copy(_by);
+  b.mesh.quaternion.setFromRotationMatrix(_bm);
+  b.mesh.scale.set(BEAM_W, len, BEAM_W);   // X/Z = leveys (ristikkäiset latat), Y = pituus
+  b.mesh.material.map.repeat.set(1, Math.max(2, len * 0.4));      // lisää katkoja pidempään säteeseen
+  b.mesh.material.opacity = 1; b.mesh.visible = true;
+  b.life = b.max = BEAM_LIFE;
+  recoil = 1;   // rekyyli vain aseeseen
+  if (hit) applyGunDamage(hit);   // vahinko osumakohteeseen
+}
+function updateBeams(dt){
+  for (const b of beams) {
+    if (b.life <= 0) continue;
+    b.life -= dt;
+    if (b.life <= 0) { b.mesh.visible = false; continue; }
+    b.mesh.material.opacity = b.life / b.max;
+  }
+}
+// X (pinnalla) vaihtaa aseen ja hakun välillä
+export function toggleWeapon(){
+  if (!active) return;
+  weaponMode = !weaponMode;
+  recoil = 0;
+  if (mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
+}
+export function isWeapon(){ return weaponMode; }
+
 function makeDeposit(){
   const g = new THREE.Group();
   // kivimäinen lohkareklusteri (kuten tavalliset kivet), tyvi osin maan alle
@@ -229,7 +417,7 @@ function makeDeposit(){
     g.add(m);
   }
   addOutlines(g, 0.03);   // cell shading: musta ääriviiva (käänteinen kuori)
-  return { mesh: g, type: 'rauta', x: 0, z: 0, y: 0, pop: 1 };
+  return { mesh: g, type: 'rauta', x: 0, z: 0, y: 0, pop: 1, hp: DEP_HP };
 }
 function setOre(d, ore){
   d.type = ore.type;
@@ -254,6 +442,7 @@ function relocate(d, px, pz){
     m.position.y = heightFn(d.x + m.position.x, d.z + m.position.z) - d.y + s * 0.15;
   }
   setOre(d, pickOre());
+  d.hp = DEP_HP;                                // nollaa piilo-osumapisteet
   d.pop = 0;                                    // kasvaa 0→1 (ilmestymisanimaatio)
   d.mesh.scale.setScalar(0.001);
 }
@@ -291,6 +480,16 @@ export function initMining(sc, name, hFn){
     sc.add(m);
     bursts.push({ mesh: m, vel: new THREE.Vector3(), spin: new THREE.Vector3(), life: 0, max: 0, base: 1 });
   }
+  // laserin säde-pooli (lattamaiset, katkonaiset säteet)
+  beamGeo = beamGeo || makeBeamGeo();
+  beams = [];
+  for (let i = 0; i < BEAM_POOL; i++) {
+    const m = new THREE.Mesh(beamGeo, makeBeamMat());
+    m.visible = false; m.frustumCulled = false; m.renderOrder = 5;
+    m.userData.beam = true;
+    sc.add(m);
+    beams.push({ mesh: m, life: 0, max: 0 });
+  }
   renderHud();
 }
 // sinkoa kivensiruja annetulla materiaalilla ja parametreilla (o = FINAL/STRIKE_BURST)
@@ -320,13 +519,16 @@ function raycastHit(){
   camera.getWorldDirection(_fwd);
   _ray.set(camera.position, _fwd);
   _ray.near = 0.2; _ray.far = REACH;
-  const hits = _ray.intersectObjects(scene.children, true);
+  // EI kameran lapsia (hakku, ohjaamo, ulkomallit) eikä maastoa → vain kiinteät
+  // maailman kohteet. Muuten ilmaan/maahan lyönti tai katselumallin osuma sinkoaisi siruja.
+  const objs = scene.children.filter(o => o !== camera);
+  const hits = _ray.intersectObjects(objs, true);
   for (const h of hits) {
     const o = h.object;
     if (!o.visible || !o.material) continue;
-    if (o.userData && o.userData.debris) continue;        // omat sirut
+    if (o.userData && (o.userData.debris || o.userData.terrain)) continue;   // omat sirut / maasto
     if (o.material.isMeshBasicMaterial) continue;          // mustat ääriviivat / HUD-tasot
-    return h;
+    return h;   // vain kiinteä kohde (kivi/mineraali/objekti) → muuten null = ei siruja (ilma/maa)
   }
   return null;
 }
@@ -356,6 +558,9 @@ export function clearMining(){
   bursts = []; burstGeo = null;
   _lmb = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
+  // ase: nollaa tila ja palaa hakkuun seuraavalle pintakäynnille
+  beams = []; weaponMode = false; recoil = 0; _prevFire = false; _fireCd = 0;
+  if (gun) { gun.visible = false; gun.position.copy(GUN_POS); gun.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z); }
   renderMineBar();
   renderHud();
 }
@@ -455,10 +660,33 @@ function aimedDeposit(){
   return best;
 }
 export function updateMining(dt, px, pz){
-  // louhintatyökalu: näkyy louhittavalla pinnalla (Mars/Kuu), heiluu kun louhitaan
-  tool.visible = active;
-  const swinging = active && (_lmb || S.keys.Space);
+  // työkalu/ase näkyy louhittavalla pinnalla (Mars/Kuu); X vaihtaa niiden välillä
+  tool.visible = active && !weaponMode;
+  if (gun) gun.visible = active && weaponMode;
+  updateBeams(dt);
+  const fireInput = active && (_lmb || S.keys.Space);
+
+  if (weaponMode) {
+    // ---- ASE ----
+    updateGun(dt);
+    _fireCd -= dt;
+    if (fireInput && !_prevFire && _fireCd <= 0) { fireGun(); _fireCd = 0.16; }   // semi-auto: laukaus per painallus
+    _prevFire = fireInput;
+    if (!active) return;
+    updateBursts(dt);
+    if (mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
+    for (const d of deposits) {   // esiintymien kierrätys + kasvuanimaatio jatkuu
+      if (Math.hypot(d.x - px, d.z - pz) > FAR + 40) relocate(d, px, pz);
+      if (d.pop < 1) { d.pop = Math.min(1, d.pop + dt * 3.5); d.mesh.scale.setScalar(d.pop); }
+    }
+    renderMineBar();
+    return;
+  }
+
+  // ---- HAKKU ----
+  const swinging = fireInput;
   updateTool(dt, swinging);
+  _prevFire = fireInput;
   if (!active) return;
   updateBursts(dt);
   // ISKUSIRUT: joka hakuniskun impaktilla (iskuvaihe ylittää 0,5) sinkoa pieniä
@@ -520,6 +748,14 @@ export function toggleCraft(){
 }
 
 /* ---- HUD ---- */
+// kerätyt mineraalit visiirin vasemmalle näytölle (surface.js piirtää):
+// raaka-aineet ensin, jalosteet perään; vain ne joita on varastossa
+export function inventory(){
+  const out = [];
+  for (const k of RAW)  if ((S.inv[k] || 0) > 0) out.push({ name: ITEM_NAMES[k], count: S.inv[k], made: false });
+  for (const k of MADE) if ((S.inv[k] || 0) > 0) out.push({ name: ITEM_NAMES[k], count: S.inv[k], made: true });
+  return out;
+}
 function line(ids){ return ids.filter(k => (S.inv[k] || 0) > 0).map(k => `${ITEM_NAMES[k]} <b>${S.inv[k]}</b>`).join('  ·  '); }
 export function renderHud(){
   const el = document.getElementById('miningHud');

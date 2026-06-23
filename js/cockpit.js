@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { scene, camera, renderer, AU, C_KMS } from './core.js';
-import { loadPH, surfDebug } from './surface.js';
+import { loadPH, surfDebug, setShuttleDestroyer } from './surface.js';
 import { bodies } from './bodies.js';
 import { S } from './state.js';
 import { toonMat, addOutlines } from './toon.js';
@@ -1534,11 +1534,19 @@ function parkShuttle(){
   // tummuu ja siihen ilmestyy paksuneva tekseliraidoitus. Vastaanoton pois
   // kytkeminen poistaa raidat; toon-varjostus (N·L) tummentaa silti aurinkoa
   // poispäin olevat kyljet oikein.
-  m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; o.userData.shuttle = true; } });   // laser tunnistaa sukkulan
   sd.scene.add(m);
   shuttleSurf = m;
   S.shuttlePos = m.position.clone();   // kypäränäyttö lukee tästä (vältetään sirkulaarinen import)
+  S.shuttleHp = null;                  // nollaa piilo-osumapisteet (surface.js alustaa SHUTTLE_HP:hen)
 }
+/* laserin tuhoama sukkula: piilota malli ja katkaise paluu (B) — surface.js kutsuu */
+function destroyParkedShuttle(){
+  if (shuttleSurf) { shuttleSurf.visible = false; if (shuttleSurf.parent) shuttleSurf.parent.remove(shuttleSurf); }
+  shuttleSurf = null;
+  S.shuttlePos = null; S.shuttleHp = null;
+}
+setShuttleDestroyer(destroyParkedShuttle);
 
 /* etäisyyssovitus: lähellä planeetan pintaa (tai matalalennossa maata)
    ulkomalli vedetään lähemmäs kameraa ja kutistetaan samassa suhteessa —

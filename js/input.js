@@ -3,7 +3,7 @@ import { renderer } from './core.js';
 import { bodies, orbitLines } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent, aimingAtShuttle } from './surface.js';
 import { toggleShipView, nearParkedShuttle } from './cockpit.js';
-import { toggleCraft, craftRecipe, isCraftOpen, setMining } from './mining.js';
+import { toggleCraft, craftRecipe, isCraftOpen, setMining, toggleWeapon } from './mining.js';
 import { useItem } from './resources.js';
 import { S, clampThrottle } from './state.js';
 
@@ -35,6 +35,10 @@ overlay.addEventListener('click', () => {
 renderer.domElement.addEventListener('click', () => {
   if (overlay.style.display === 'none') tryPointerLock();
 });
+
+// ohjeruutu (H) — klikkaus sulkee
+const helpOverlay = document.getElementById('helpOverlay');
+helpOverlay.addEventListener('click', () => { helpOverlay.style.display = 'none'; });
 
 // varajärjestelmä: katselu hiirellä vetämällä, jos hiirilukkoa ei saada
 renderer.domElement.addEventListener('mousedown', (e) => {
@@ -161,12 +165,13 @@ addEventListener('keydown', (e) => {
   // käytä jalostustuote: J = happisäiliö → happi, K = runkopaneeli → runko (toimii kaikissa tiloissa)
   if (e.code === 'KeyJ') { useItem('happi'); return; }
   if (e.code === 'KeyK') { useItem('paneeli'); return; }
-  if (e.code === 'KeyX') S.targetFrac = 0;
+  if (e.code === 'KeyX') { if (S.mode === 'surface') { toggleWeapon(); return; } S.targetFrac = 0; }
   if (e.code === 'KeyM') S.targetFrac = 1.0;   // täysi työntö
   if (e.code === 'KeyO') orbitLines.visible = !orbitLines.visible;
   if (e.code === 'KeyV') toggleShipView();
   if (e.code === 'KeyH') {
-    overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+    const help = document.getElementById('helpOverlay');
+    help.style.display = help.style.display === 'flex' ? 'none' : 'flex';
   }
   if (S.mode === 'space') {
     if (e.code === 'KeyR') quickTravel();

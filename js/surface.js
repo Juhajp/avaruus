@@ -8,7 +8,7 @@ import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
 import { makeSky } from './sky.js';
 import { NOISE_GLSL } from './shaders.js';
-import { initMining, updateMining, clearMining, setMineralEnv, setMineralRock, resolveCollision } from './mining.js';
+import { initMining, updateMining, clearMining, setMineralEnv, setMineralRock, resolveCollision, inventory, spawnHitDebris, setGunHitHandler } from './mining.js';
 import { S } from './state.js';
 import { toonMat, expandGeo, outlineMaterial } from './toon.js';
 
@@ -313,8 +313,8 @@ function makeDustWall(cfg){
       varying vec2 vUv;
       void main(){
         vUv = uv;
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_Position = projectionMatrix * mv;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);   // fog_vertex tarvitsee tämän nimen
+        gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
         #include <logdepthbuf_vertex>
       }`,
@@ -327,7 +327,8 @@ function makeDustWall(cfg){
       void main(){
         #include <logdepthbuf_fragment>
         vec2 p = vec2(vUv.x * 7.0 - uTime * 0.06, vUv.y * 3.0 - uTime * 0.02);
-        float n = snoise(p) * 0.5 + snoise(p * 2.3 + 11.0) * 0.32 + snoise(p * 5.0 + 3.0) * 0.18 + 0.5;
+        // snoise on vain vec3-versiona → nostetaan p vec3:ksi
+        float n = snoise(vec3(p, 0.0)) * 0.5 + snoise(vec3(p * 2.3 + 11.0, 1.7)) * 0.32 + snoise(vec3(p * 5.0 + 3.0, 4.1)) * 0.18 + 0.5;
         n = clamp(n, 0.0, 1.0);
         float vert = smoothstep(1.0, 0.02, vUv.y);     // tiheämpi alhaalla, häipyy ylös
         float a = vert * (0.12 + 0.88 * n) * uOpacity;  // pölläytetty: voimakas kohinakontrasti
@@ -1136,6 +1137,7 @@ function getRoadStrip(dir){
     g.rotateX(-Math.PI / 2);
     m = new THREE.Mesh(g, t.roadMat);
     m.userData.dir = dir;
+    m.userData.terrain = true;   // tie = maastoa → ei iskusiruja
     m.receiveShadow = true;
     t.sc.add(m);
   }
@@ -1258,6 +1260,7 @@ function buildQueuedTile(){
     mesh = new THREE.Mesh(makeTileGeo(LOD_SEGS[lod]), t.mat);
     mesh.castShadow = false;   // maasto ei heitä varjoa itseensä → ei kahlaavan kulman aknea;
     mesh.receiveShadow = true;  // vain kivet/esiintymät heittävät varjon, ne pysyvät kiinni
+    mesh.userData.terrain = true;   // hakun iskuraycast ohittaa → maahan/ilmaan lyönti ei sinkoa siruja
 
   }
   if (!mesh.parent) t.sc.add(mesh);
@@ -1332,6 +1335,13 @@ function addScatter(sc, geo, mat, count, W, place, seedOff = 0, opts = {}){
     sct.bx[i] = (hash2(i + seedOff, 91) - 0.5) * W;
     sct.bz[i] = (hash2(i + seedOff, 92) - 0.5) * W;
   }
+  // ammuttavat (kivet): piilo-osumapisteet per instanssi + tuhottu-lippu
+  if (opts.hp) {
+    sct.hp0 = opts.hp;
+    sct.hp = new Float32Array(count).fill(opts.hp);
+    sct.dead = new Uint8Array(count);
+    mesh.userData.scatter = sct;   // laserin raycast tunnistaa kiven tästä
+  }
   // cell shading: käänteinen kuori omana instanssimeshinä (jakaa instanssimatriisit)
   if (opts.outline) {
     const om = new THREE.InstancedMesh(expandGeo(geo, opts.outline), outlineMaterial(), count);
@@ -1353,6 +1363,7 @@ function updateScatter(ax, az){
       const kz = Math.round((az - s.bz[i]) / s.W);
       if (kx === s.kx[i] && kz === s.kz[i]) continue;
       s.kx[i] = kx; s.kz[i] = kz;
+      if (s.hp) { s.hp[i] = s.hp0; s.dead[i] = 0; }   // uusi solukopio → ehjä kivi takaisin (HP nollataan)
       s.place(i, s.bx[i] + kx * s.W, s.bz[i] + kz * s.W, _m4s, _rqs, _res, _rss);
       s.mesh.setMatrixAt(i, _m4s);
       if (s.outline) s.outline.setMatrixAt(i, _m4s);
@@ -1393,6 +1404,69 @@ function resolveStaticCollision(x, z){
   _col2[0] = x; _col2[1] = z; return _col2;
 }
 const _col2 = [0, 0];
+
+/* ---- laserin osumat kiviin ja sukkulaan (mining.js kutsuu setGunHitHandlerin kautta) ---- */
+const _zeroM = new THREE.Matrix4().makeScale(0, 0, 0).setPosition(0, -3000, 0);
+const _dn = new THREE.Vector3();
+// hide a single instance (kivi tuhottu) — meshistä ja ääriviivasta
+function killScatterInstance(s, i){
+  s.dead[i] = 1;
+  s.mesh.setMatrixAt(i, _zeroM); s.mesh.instanceMatrix.needsUpdate = true;
+  if (s.outline) { s.outline.setMatrixAt(i, _zeroM); s.outline.instanceMatrix.needsUpdate = true; }
+}
+function damageScatter(s, i, point, mat){
+  if (!s.hp || s.dead[i]) return;
+  const small = !!s._pebble;
+  spawnHitDebris(point.x, point.y, point.z, mat, false);   // pieni kivensirupurske osumaan
+  s.hp[i] -= 1;
+  if (s.hp[i] <= 0) {
+    spawnHitDebris(point.x, point.y, point.z, mat, !small);   // tuhoutuu → isompi purske (ei pikkukivelle)
+    killScatterInstance(s, i);
+  }
+}
+// sukkulan osuma: tummentava palojälki (decal) + piilo-osumapisteet (S.shuttleHp)
+const SHUTTLE_HP = 14;
+let _scorchTex = null, _scorches = [];
+function scorchTex(){
+  if (_scorchTex) return _scorchTex;
+  const sz = 64, cv = document.createElement('canvas'); cv.width = cv.height = sz;
+  const c = cv.getContext('2d');
+  const g = c.createRadialGradient(sz / 2, sz / 2, 0, sz / 2, sz / 2, sz / 2);
+  g.addColorStop(0, 'rgba(10,8,6,0.95)'); g.addColorStop(0.55, 'rgba(20,14,10,0.7)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = g; c.fillRect(0, 0, sz, sz);
+  _scorchTex = new THREE.CanvasTexture(cv); return _scorchTex;
+}
+function addScorch(h){
+  if (!surfaceScene) return;
+  // maailmanormaali osumakohdassa
+  _dn.set(0, 0, 1);
+  if (h.face) _dn.copy(h.face.normal).transformDirection(h.object.matrixWorld);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5),
+    new THREE.MeshBasicMaterial({ map: scorchTex(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+  m.position.copy(h.point).addScaledVector(_dn, 0.02);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _dn);
+  m.userData.debris = true;   // raycastit/laser ohittavat palojäljen
+  surfaceScene.add(m); _scorches.push(m);
+  if (_scorches.length > 40) { const old = _scorches.shift(); old.parent && old.parent.remove(old); old.geometry.dispose(); old.material.dispose(); }
+}
+let _shuttleDestroyer = null;   // cockpit.js rekisteröi (omistaa sukkulamallin)
+export function setShuttleDestroyer(fn){ _shuttleDestroyer = fn; }
+function damageShuttle(h){
+  addScorch(h);   // tummentava palojälki osumaan
+  if (S.shuttleHp == null) S.shuttleHp = SHUTTLE_HP;
+  S.shuttleHp -= 1;
+  if (S.shuttleHp <= 0) {
+    for (let k = 0; k < 3; k++) spawnHitDebris(h.point.x, h.point.y, h.point.z, h.object.material, true);   // räjähdyssirut
+    if (_shuttleDestroyer) _shuttleDestroyer();   // sukkula piiloon (cockpit.js)
+    S.shuttleHp = null;
+  }
+}
+// rekisteröi laserin osumakäsittely (kivet + sukkula); mineraalit hoituu mining.js:ssä
+setGunHitHandler((h) => {
+  const o = h.object;
+  if (o.userData && o.userData.scatter && h.instanceId != null) { damageScatter(o.userData.scatter, h.instanceId, h.point, o.material); return; }
+  if (o.userData && o.userData.shuttle) damageShuttle(h);
+});
 
 /* ---- kasvillisuus ja kivivariaatiot (tiekartan vaihe 3) ---- */
 
@@ -1929,7 +2003,7 @@ function buildSurfaceScene(name){
           const hl = Math.min(surfHeightFn(x, z), surfHeightFn(x - rr, z), surfHeightFn(x + rr, z),
                               surfHeightFn(x, z - rr), surfHeightFn(x, z + rr));
           m4.compose(_vp.set(x, hl + s * 0.12, z), rq, rs);
-        }, vr * 1000 + 1, { outline: 0.035, collide: 0.62 });
+        }, vr * 1000 + 1, { outline: 0.035, collide: 0.62, hp: 3 });   // isot kivet: 3 osumaa
       rocks.castShadow = true;
       rocks.receiveShadow = true;
     }
@@ -1951,7 +2025,8 @@ function buildSurfaceScene(name){
                     + surfHeightFn(x, z - rr) + surfHeightFn(x, z + rr)) * 0.25;
         const hg = Math.min(surfHeightFn(x, z), hAvg);
         m4.compose(_vp.set(x, hg - s * 0.04, z), rq, rs);
-      });
+      }, 0, { hp: 1 });   // pikkukivet: 1 osuma
+    pebbles.userData.scatter._pebble = true;   // pikkukiven sirut pienemmät
     // pikkukivet EIVÄT heitä varjoa: 1300 pientä heittäjää tuottaisi tiheän kentän
     // ohuita varjoja, jotka vaeltavat herkimmin (ja maksavat varjorenderissä);
     // todelliset pikkukivet eivät juuri varjosta. Isot kivet (W 2200) varjostavat yhä.
@@ -2300,8 +2375,7 @@ function enterSurfaceScene(b, mode){
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
   clearMining();
-  if (helmetCanvas) { helmetCanvas.style.display = 'none'; hudReturnEl.style.display = 'none'; }
-  const sp = document.getElementById('surfacePanel'); if (sp) sp.style.display = '';   // palauta muille planeetoille
+  if (visorEl) { visorEl.style.display = 'none'; hudReturnEl.style.display = 'none'; }
   S.shuttlePos = null;
   S.mode = 'space';
   whiteOutEl.style.opacity = '0';
@@ -2324,6 +2398,7 @@ function leaveSurfaceScene(){
   terrain = null;
   scatters = [];
   obstacles = [];
+  _scorches = [];   // sukkulan palojäljet hävitetään scenen mukana
   stormFx = null; storm.intens = 0; storm.startT = -1; storm.endT = -1; storm.lastSol = null;
   if (helmetLight) helmetLight.intensity = 0;
 }
@@ -2361,7 +2436,11 @@ const _hFwd = new THREE.Vector3();
 const HUD_MONO = 'ui-monospace, "SF Mono", Menlo, monospace';
 const RADAR_RANGE = 180;   // tutkan kantama (m)
 const NAME_RANGE = 12;     // kohde nimetään kun näin lähellä
-let helmetCanvas = null, helmetCtx = null, hudReturnEl = null;
+// kypärävisiiri: KOLME erillistä SUORAA, SAMANKOKOISTA näyttöä rivissä
+// (vasen = kerätyt mineraalit, keski = tutka/kohde, oikea = happi + runko)
+let visorEl = null, hudReturnEl = null;
+let hudL = null, hudC = null, hudR = null, ctxL = null, ctxC = null, ctxR = null;
+const HUD_W = 270, HUD_H = 150;   // kaikki näytöt samankokoisia
 
 /* tutkan pulssiääni: hiljainen "bleep" joka pyyhkäisyllä (WebAudio, ei
    tiedostoa). Soi vasta pelaajan eleen jälkeen — autoplay-rajoitus. */
@@ -2399,90 +2478,145 @@ function detectContacts(){
   return list;
 }
 function buildHud(){
-  helmetCanvas = document.createElement('canvas'); helmetCanvas.width = 440; helmetCanvas.height = 150;
-  helmetCtx = helmetCanvas.getContext('2d');
-  helmetCanvas.id = 'helmetHud';
-  helmetCanvas.style.cssText = 'position:fixed;left:50%;bottom:5.5%;width:440px;height:150px;'
-    + 'transform:translateX(-50%) perspective(1000px) rotateX(16deg);transform-origin:center bottom;'
-    + 'mix-blend-mode:screen;opacity:0.92;pointer-events:none;z-index:6;display:none';
-  document.body.appendChild(helmetCanvas);
+  // kolme SUORAA, SAMANKOKOISTA näyttöä rivissä (sama kevyt rotateX-kallistus → visiirin tuntu)
+  visorEl = document.createElement('div'); visorEl.id = 'visorHud';
+  visorEl.style.cssText = 'position:fixed;left:50%;bottom:5%;transform:translateX(-50%);'
+    + 'display:none;align-items:flex-end;gap:12px;z-index:6;pointer-events:none;';
+  const TF = 'perspective(1300px) rotateX(10deg)';
+  const DH = 116;
+  const mk = () => {
+    const cv = document.createElement('canvas'); cv.width = HUD_W; cv.height = HUD_H;
+    cv.style.cssText = `height:${DH}px;width:${(DH * HUD_W / HUD_H).toFixed(0)}px;`
+      + `mix-blend-mode:screen;opacity:0.92;transform:${TF};transform-origin:center bottom;`;
+    visorEl.appendChild(cv); return cv;
+  };
+  hudL = mk(); hudC = mk(); hudR = mk();   // vasen: mineraalit · keski: tutka · oikea: happi+runko
+  ctxL = hudL.getContext('2d'); ctxC = hudC.getContext('2d'); ctxR = hudR.getContext('2d');
+  document.body.appendChild(visorEl);
   hudReturnEl = document.createElement('div'); hudReturnEl.id = 'hudReturn';
   hudReturnEl.style.cssText = 'position:fixed;left:50%;bottom:34%;transform:translateX(-50%);z-index:6;pointer-events:none;'
     + 'display:none;color:#7af0ff;font:700 17px ' + HUD_MONO + ';letter-spacing:3px;text-shadow:0 0 10px #1aa0c8;mix-blend-mode:screen';
   hudReturnEl.textContent = '↩ PALUU  ( B )';
   document.body.appendChild(hudReturnEl);
 }
-function drawRadar(contacts, nearest, fwdAng){
-  const c = helmetCtx, W = helmetCanvas.width, H = helmetCanvas.height;
+// yhteinen näytön kehys + lasikiilto
+const _CYAN = '#62e8ff', _DIM = 'rgba(108,228,255,0.5)';
+function screenFrame(c, W, H, title){
   c.clearRect(0, 0, W, H);
-  const cyan = '#62e8ff', dim = 'rgba(108,228,255,0.5)';
-  c.strokeStyle = 'rgba(108,228,255,0.28)'; c.lineWidth = 1.5; c.shadowColor = cyan; c.shadowBlur = 7;
-  c.beginPath(); c.roundRect(5, 5, W - 10, H - 10, 16); c.stroke(); c.shadowBlur = 0;
-  // tutkaympyrä + kehärenkaat + ristikko
-  const cx = 80, cy = H / 2 + 2, R = 62;
+  c.strokeStyle = 'rgba(108,228,255,0.28)'; c.lineWidth = 1.5; c.shadowColor = _CYAN; c.shadowBlur = 7;
+  c.beginPath(); c.roundRect(4, 4, W - 8, H - 8, 14); c.stroke(); c.shadowBlur = 0;
+  if (title) {
+    c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+    c.fillStyle = _DIM; c.font = '700 10px ' + HUD_MONO; c.shadowColor = _CYAN; c.shadowBlur = 3;
+    c.fillText(title, 14, 22); c.shadowBlur = 0;
+  }
+}
+function screenSheen(c, W, H){
+  const g = c.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, 'rgba(180,240,255,0.10)'); g.addColorStop(0.5, 'rgba(180,240,255,0)');
+  c.fillStyle = g; c.beginPath(); c.roundRect(5, 5, W - 10, H - 10, 12); c.fill();
+}
+// VASEN näyttö: kerätyt mineraalit
+function drawMinerals(c, W, H){
+  screenFrame(c, W, H, 'MINERAALIT');
+  const inv = inventory();
+  c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+  if (!inv.length) {
+    c.fillStyle = _DIM; c.font = '700 12px ' + HUD_MONO; c.fillText('— ei vielä —', 16, 80);
+  } else {
+    let y = 46;
+    for (const it of inv.slice(0, 8)) {
+      c.fillStyle = it.made ? '#9fd0ff' : '#cfe6d6';
+      c.shadowColor = it.made ? 'rgba(120,180,255,0.5)' : 'rgba(120,220,160,0.4)'; c.shadowBlur = 4;
+      c.font = '700 12px ' + HUD_MONO; c.fillText(it.name, 16, y);
+      c.fillStyle = '#fff'; c.textAlign = 'right'; c.fillText(String(it.count), W - 16, y);
+      c.textAlign = 'left'; c.shadowBlur = 0;
+      y += 18;
+    }
+  }
+  screenSheen(c, W, H);
+}
+// KESKI näyttö: tutka + kohde (entinen layout)
+function drawRadar(contacts, nearest, fwdAng){
+  const c = ctxC, W = HUD_W, H = HUD_H;
+  screenFrame(c, W, H, null);
+  const cyan = _CYAN, dim = _DIM;
+  const cx = 56, cy = H / 2 + 2, R = 42;
   c.strokeStyle = 'rgba(108,228,255,0.5)'; c.lineWidth = 1.4; c.shadowColor = cyan; c.shadowBlur = 5;
   c.beginPath(); c.arc(cx, cy, R, 0, 6.2832); c.stroke(); c.shadowBlur = 0;
   c.strokeStyle = 'rgba(108,228,255,0.20)'; c.lineWidth = 1;
   c.beginPath(); c.arc(cx, cy, R * 0.66, 0, 6.2832); c.stroke();
   c.beginPath(); c.arc(cx, cy, R * 0.33, 0, 6.2832); c.stroke();
   c.beginPath(); c.moveTo(cx - R, cy); c.lineTo(cx + R, cy); c.moveTo(cx, cy - R); c.lineTo(cx, cy + R); c.stroke();
-  // pulssi: laajeneva rengas keskeltä ulospäin (toistuva); ääni mykistetty
-  const phase = (S.simTime * 0.55) % 1;
-  const pulseR = phase * R;
+  const phase = (S.simTime * 0.55) % 1, pulseR = phase * R;
   c.strokeStyle = `rgba(120,240,255,${(0.55 * (1 - phase)).toFixed(2)})`; c.lineWidth = 1.6;
   c.shadowColor = cyan; c.shadowBlur = 6;
   c.beginPath(); c.arc(cx, cy, pulseR, 0, 6.2832); c.stroke(); c.shadowBlur = 0;
-  // pelaaja keskellä (kolmio = eteen)
   c.fillStyle = 'rgba(108,228,255,0.9)';
   c.beginPath(); c.moveTo(cx, cy - 6); c.lineTo(cx - 4, cy + 4); c.lineTo(cx + 4, cy + 4); c.closePath(); c.fill();
-  // blipit: kirkastuvat kun pulssirengas ohittaa niiden etäisyyden
   for (const ct of contacts) {
     const rel = Math.atan2(ct.x - surfX, ct.z - surfZ) - fwdAng;
     const rr = Math.min(R, ct.d / RADAR_RANGE * R);
-    const bx = cx - Math.sin(rel) * rr, by = cy - Math.cos(rel) * rr;   // -sin: pelaajan oikea = ruudun oikea
-    const age = ((phase - rr / R) % 1 + 1) % 1;     // kuinka kauan pulssin ohituksesta
+    const bx = cx - Math.sin(rel) * rr, by = cy - Math.cos(rel) * rr;
+    const age = ((phase - rr / R) % 1 + 1) % 1;
     const ping = 0.32 + 0.68 * Math.exp(-age * 4.0);
     c.fillStyle = `rgba(${ct.big ? '120,240,255' : '255,200,90'},${ping.toFixed(2)})`;
     c.shadowColor = ct.big ? cyan : '#ffb000'; c.shadowBlur = 7 * ping;
     c.beginPath(); c.arc(bx, by, ct.big ? 4.5 : 3, 0, 6.2832); c.fill();
   }
   c.shadowBlur = 0;
-  if (nearest) {   // korosta lähin kontakti
+  if (nearest) {
     const rel = Math.atan2(nearest.x - surfX, nearest.z - surfZ) - fwdAng;
     const rr = Math.min(R, nearest.d / RADAR_RANGE * R);
     c.strokeStyle = '#eaffff'; c.lineWidth = 1.2;
     c.beginPath(); c.arc(cx - Math.sin(rel) * rr, cy - Math.cos(rel) * rr, 7, 0, 6.2832); c.stroke();
   }
-  // lukema oikealla
-  const tx = 178; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+  const tx = 110; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
   c.shadowColor = cyan; c.shadowBlur = 4;
-  c.fillStyle = dim; c.font = '700 11px ' + HUD_MONO; c.fillText('TUTKA · ' + contacts.length + ' KOHDETTA', tx, 30);
+  c.fillStyle = dim; c.font = '700 9px ' + HUD_MONO; c.fillText('TUTKA · ' + contacts.length + ' KOHDETTA', tx, 32);
   if (nearest) {
     const named = nearest.d <= NAME_RANGE;
-    c.fillStyle = '#e2f7ff'; c.font = '700 18px ' + HUD_MONO; c.fillText(named ? nearest.name : 'KOHDE', tx, 58);
-    c.fillStyle = dim; c.font = '700 11px ' + HUD_MONO; c.fillText('KOKO ≈ ' + nearest.sizeWord, tx, 78);
-    c.fillStyle = cyan; c.font = '700 30px ' + HUD_MONO; c.fillText('≈ ' + nearest.d.toFixed(0) + ' M', tx, 112);
+    c.fillStyle = '#e2f7ff'; c.font = '700 16px ' + HUD_MONO; c.fillText(named ? nearest.name : 'KOHDE', tx, 60);
+    c.fillStyle = dim; c.font = '700 10px ' + HUD_MONO; c.fillText('KOKO ≈ ' + nearest.sizeWord, tx, 80);
+    c.fillStyle = cyan; c.font = '700 24px ' + HUD_MONO; c.fillText('≈ ' + nearest.d.toFixed(0) + ' M', tx, 112);
   } else {
-    c.fillStyle = dim; c.font = '700 15px ' + HUD_MONO; c.fillText('EI KONTAKTEJA', tx, 66);
+    c.fillStyle = dim; c.font = '700 13px ' + HUD_MONO; c.fillText('EI KONTAKTEJA', tx, 70);
   }
   c.shadowBlur = 0;
-  // hento kiilto (lasiheijastus)
-  const g = c.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, 'rgba(180,240,255,0.10)'); g.addColorStop(0.5, 'rgba(180,240,255,0)');
-  c.fillStyle = g; c.beginPath(); c.roundRect(6, 6, W - 12, H - 12, 14); c.fill();
+  screenSheen(c, W, H);
+}
+// OIKEA näyttö: happi + runko (HP) (piirretään tasaiselle offscreenille)
+function drawVitals(c, W, H){
+  screenFrame(c, W, H, 'JÄRJESTELMÄ');
+  const bar = (label, v, y, hue) => {
+    v = Math.max(0, Math.min(1, v));
+    // väri: matala = punainen, korkea = vihreä/syaani
+    const col = v > 0.5 ? hue : (v > 0.25 ? '#ffd24a' : '#ff5a48');
+    c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+    c.fillStyle = _DIM; c.font = '700 11px ' + HUD_MONO; c.shadowBlur = 0; c.fillText(label, 16, y - 6);
+    c.fillStyle = '#fff'; c.textAlign = 'right'; c.fillText(Math.round(v * 100) + '%', W - 16, y - 6);
+    c.textAlign = 'left';
+    const bx = 16, bw = W - 32, bh = 10;
+    c.strokeStyle = 'rgba(108,228,255,0.35)'; c.lineWidth = 1; c.strokeRect(bx, y, bw, bh);
+    c.fillStyle = col; c.shadowColor = col; c.shadowBlur = 6;
+    c.fillRect(bx + 1, y + 1, (bw - 2) * v, bh - 2); c.shadowBlur = 0;
+  };
+  bar('HAPPI', S.oxygen != null ? S.oxygen : 1, 58, '#5fe0a0');
+  bar('RUNKO', S.hull != null ? S.hull : 1, 104, '#62e8ff');
+  screenSheen(c, W, H);
 }
 function updateHelmetHud(){
-  if (!helmetCanvas) buildHud();
+  if (!visorEl) buildHud();
   const on = (S.mode === 'surface' || S.mode === 'descent') && surfaceBody && surfHeightFn;
-  if (!on) { helmetCanvas.style.display = 'none'; hudReturnEl.style.display = 'none'; return; }
-  const sp = document.getElementById('surfacePanel');
-  if (sp) sp.style.display = (surfaceBody.def.name === 'Kuu') ? 'none' : '';
+  if (!on) { visorEl.style.display = 'none'; hudReturnEl.style.display = 'none'; return; }
   camera.getWorldDirection(_hFwd);
   const fwdAng = Math.atan2(_hFwd.x, _hFwd.z);
   const contacts = detectContacts();
   let nearest = null; for (const ct of contacts) if (!nearest || ct.d < nearest.d) nearest = ct;
-  drawRadar(contacts, nearest, fwdAng);
-  helmetCanvas.style.display = 'block';
+  drawMinerals(ctxL, HUD_W, HUD_H);            // vasen: mineraalit
+  drawRadar(contacts, nearest, fwdAng);        // keski: tutka
+  drawVitals(ctxR, HUD_W, HUD_H);              // oikea: happi + runko
+  visorEl.style.display = 'flex';
   const nearSh = S.shuttlePos && Math.hypot(S.shuttlePos.x - surfX, S.shuttlePos.z - surfZ) < 10;
   hudReturnEl.style.display = (S.mode === 'surface' && (aimingAtShuttle() || nearSh)) ? 'block' : 'none';
 }
