@@ -129,9 +129,12 @@ const STRIKE_BURST = { count: 5,  scaleMin: 0.12, scaleRng: 0.22, speedMin: 1.1,
 let weaponMode = false;             // false = hakku, true = ase (X vaihtaa pinnalla)
 let recoil = 0, _gunT = 0;          // rekyyli (vaikuttaa VAIN aseeseen) + huojunta-aika
 let _fireCd = 0, _prevFire = false; // laukauksen jäähtymisaika + edellinen liipaisin (semi-auto = nouseva reuna)
-const BEAM_POOL = 12, BEAM_W = 0.16, BEAM_LIFE = 0.16;
+const BEAM_POOL = 12, BEAM_W = 0.24, BEAM_LIFE = 0.16;
+const SPARK_POOL = 96;             // hehkuvat pistehiukkaset jotka sinkoavat säteestä ulospäin
 const GUN_DMG = 1, DEP_HP = 3;     // laserin vahinko per laukaus + mineraalin piilo-osumapisteet
 let beams = [], beamGeo = null, _beamTex = null;
+let sparks = null, sparkGeo = null, sparkMat = null;   // säteen sirahtelevat kipinät (THREE.Points)
+let _spkPos = null, _spkVel = null, _spkLife = null, _spkMax = null, _spkSize = null, _spkHead = 0;
 let _gunHitHandler = null;          // surface.js rekisteröi kivien/sukkulan osumakäsittelyn
 export function setGunHitHandler(fn){ _gunHitHandler = fn; }
 const GUN_POS = new THREE.Vector3(0.34, -0.40, -0.55);
@@ -238,19 +241,26 @@ function updateTool(dt, swinging){
    Realistinen sci-fi-laserkivääri (bittikarttatekstuuri + cell-shading). Ampuu
    semiautomaattisesti (laukaus per liipaisinpainallus) katkonaisia, lattamaisia
    lasersäteitä. Rekyyli liikuttaa VAIN asetta (ei pelaajaa). */
-function beamDashTex(){
+// VÄRILLINEN, YHTENÄINEN säde (RGBA): valkohehkuinen ydin → oranssi → punainen
+// reuna; pituussuunnassa pehmeä energiamodulaatio (ei täysiä katkoja → tukevampi
+// muoto). Reunan alfahäivytys antaa pehmeän hehkukuoren.
+function beamCoreTex(){
   if (_beamTex) return _beamTex;
-  const w = 16, h = 64, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-  const c = cv.getContext('2d'); c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
+  const w = 32, h = 64, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d'); const id = c.createImageData(w, h);
   for (let y = 0; y < h; y++) {
-    const ph = (y / h * 3) % 1;            // ~3 katkoa per tekstuuri
-    if (ph >= 0.6) continue;               // tauko (katkonainen)
+    const flow = 0.8 + 0.2 * Math.sin(y / h * Math.PI * 6.0);   // hienovarainen energianvirta
     for (let x = 0; x < w; x++) {
-      const dx = Math.abs(x - (w - 1) / 2) / ((w - 1) / 2);   // 0 keskellä, 1 reunoilla
-      const v = Math.round(255 * Math.pow(1 - dx, 2));        // kirkas keskisäie
-      c.fillStyle = `rgb(${v},${v},${v})`; c.fillRect(x, y, 1, 1);
+      const dx = Math.abs(x - (w - 1) / 2) / ((w - 1) / 2);      // 0 keskellä, 1 reunalla
+      const core = Math.pow(1 - dx, 1.6);                        // kirkas keskisäie
+      const gg = Math.round(70 + 185 * Math.pow(core, 0.7));     // vihreä: oranssin verran keskellä
+      const bb = Math.round(25 + 205 * Math.pow(core, 2.4));     // sininen: vain ydin valkohehkuinen
+      const a  = Math.round(255 * core * flow);
+      const o = (y * w + x) * 4;
+      id.data[o] = 255; id.data[o + 1] = gg; id.data[o + 2] = bb; id.data[o + 3] = a;
     }
   }
+  c.putImageData(id, 0, 0);
   _beamTex = new THREE.CanvasTexture(cv);
   return _beamTex;
 }
@@ -269,11 +279,94 @@ function flashTex(){
   return _flashTex;
 }
 function makeBeamMat(){
-  const t = beamDashTex().clone(); t.needsUpdate = true;
+  const t = beamCoreTex().clone(); t.needsUpdate = true;
   t.wrapT = THREE.RepeatWrapping; t.wrapS = THREE.ClampToEdgeWrapping;
   const m = new THREE.MeshBasicMaterial({ map: t, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0, side: THREE.DoubleSide });
-  m.color.setRGB(2.8, 0.65, 0.4);   // kuuma oranssipunainen → hehkuu bloomissa
+  m.color.setRGB(1.7, 1.45, 1.4);   // kirkkauskerroin → valkohehkuinen ydin puhkeaa bloomiin
   return m;
+}
+// kipinäpooli: stateless-näköiset hehkupisteet (per-piste alfa+koko) jotka
+// sinkoavat säteestä kohtisuoraan ulos ja häipyvät. Pehmeä pyöreä piste.
+function makeSparks(){
+  const g = new THREE.BufferGeometry();
+  _spkPos = new Float32Array(SPARK_POOL * 3);
+  _spkVel = new Float32Array(SPARK_POOL * 3);
+  _spkLife = new Float32Array(SPARK_POOL);
+  _spkMax = new Float32Array(SPARK_POOL);
+  _spkSize = new Float32Array(SPARK_POOL);
+  g.setAttribute('position', new THREE.BufferAttribute(_spkPos, 3));
+  g.setAttribute('aA', new THREE.BufferAttribute(new Float32Array(SPARK_POOL), 1));   // alfa, alku 0 → ei näy
+  g.setAttribute('aS', new THREE.BufferAttribute(new Float32Array(SPARK_POOL), 1));   // pistekoko
+  sparkMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uColor: { value: new THREE.Color().setRGB(2.2, 1.05, 0.55) } },
+    vertexShader: `
+      attribute float aA; attribute float aS; varying float vA;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main(){
+        vA = aA;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = clamp(aS * 90.0 / max(1.0, -mvPosition.z), 1.0, 7.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `
+      varying float vA;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      uniform vec3 uColor;
+      void main(){
+        #include <logdepthbuf_fragment>
+        vec2 d = gl_PointCoord - 0.5;
+        float r = length(d);
+        if (r > 0.5) discard;
+        gl_FragColor = vec4(uColor, smoothstep(0.5, 0.0, r) * vA);
+      }`,
+  });
+  sparks = new THREE.Points(g, sparkMat);
+  sparks.frustumCulled = false; sparks.renderOrder = 6;
+  sparkGeo = g; _spkHead = 0;
+  return sparks;
+}
+// sinkoa kipinät säteen varrelta kohtisuoraan ulos (_fwd, _muz, _bx, _bz asetettu fireGunissa)
+function spawnSparks(len){
+  if (!sparks) return;
+  const aS = sparkGeo.attributes.aS.array;
+  const n = 8 + (Math.random() * 5 | 0);          // pieni määrä per laukaus
+  for (let k = 0; k < n; k++) {
+    const t = 0.04 + Math.random() * 0.92;        // kohta säteen varrella
+    const px = _muz.x + _fwd.x * len * t, py = _muz.y + _fwd.y * len * t, pz = _muz.z + _fwd.z * len * t;
+    const ang = Math.random() * 6.2832, ca = Math.cos(ang), sa = Math.sin(ang);
+    const ux = _bx.x * ca + _bz.x * sa, uy = _bx.y * ca + _bz.y * sa, uz = _bx.z * ca + _bz.z * sa;   // kohtisuora suunta
+    const sp = 1.6 + Math.random() * 3.2;
+    const i = _spkHead; _spkHead = (_spkHead + 1) % SPARK_POOL;
+    _spkPos[i * 3] = px; _spkPos[i * 3 + 1] = py; _spkPos[i * 3 + 2] = pz;
+    _spkVel[i * 3] = ux * sp + _fwd.x * sp * 0.12;
+    _spkVel[i * 3 + 1] = uy * sp + _fwd.y * sp * 0.12 + 0.5;     // pieni nosto
+    _spkVel[i * 3 + 2] = uz * sp + _fwd.z * sp * 0.12;
+    _spkMax[i] = _spkLife[i] = 0.16 + Math.random() * 0.26;
+    _spkSize[i] = 1.0 + Math.random() * 1.3;
+    aS[i] = _spkSize[i];
+  }
+  sparkGeo.attributes.position.needsUpdate = true;
+  sparkGeo.attributes.aS.needsUpdate = true;
+}
+function updateSparks(dt){
+  if (!sparks) return;
+  const pos = sparkGeo.attributes.position.array, aA = sparkGeo.attributes.aA.array;
+  let any = false;
+  for (let i = 0; i < SPARK_POOL; i++) {
+    if (_spkLife[i] <= 0) { if (aA[i] !== 0) { aA[i] = 0; any = true; } continue; }
+    _spkLife[i] -= dt;
+    if (_spkLife[i] <= 0) { aA[i] = 0; any = true; continue; }
+    const drag = 1 - Math.min(1, 2.6 * dt);
+    _spkVel[i * 3] *= drag; _spkVel[i * 3 + 1] -= 4.2 * dt; _spkVel[i * 3 + 2] *= drag;   // ilmanvastus + kevyt painovoima
+    pos[i * 3] += _spkVel[i * 3] * dt; pos[i * 3 + 1] += _spkVel[i * 3 + 1] * dt; pos[i * 3 + 2] += _spkVel[i * 3 + 2] * dt;
+    aA[i] = (_spkLife[i] / _spkMax[i]) * 0.7;       // himmeä (faint)
+    any = true;
+  }
+  if (any) { sparkGeo.attributes.position.needsUpdate = true; sparkGeo.attributes.aA.needsUpdate = true; }
 }
 // KAKSI ristikkäistä lattaa (Y = pituus, X/Z = leveys) → litteä mutta näkyy joka
 // suunnasta (yksi latta katoaisi reunastaan kun ammutaan suoraan katseen suuntaan)
@@ -383,6 +476,7 @@ function fireGun(){
   b.mesh.material.map.repeat.set(1, Math.max(2, len * 0.4));      // lisää katkoja pidempään säteeseen
   b.mesh.material.opacity = 1; b.mesh.visible = true;
   b.life = b.max = BEAM_LIFE;
+  spawnSparks(len);               // hehkukipinät säteestä ulos
   recoil = 1;   // rekyyli vain aseeseen
   if (hit) applyGunDamage(hit);   // vahinko osumakohteeseen
 }
@@ -490,6 +584,7 @@ export function initMining(sc, name, hFn){
     sc.add(m);
     beams.push({ mesh: m, life: 0, max: 0 });
   }
+  sc.add(makeSparks());   // kipinähiukkaset (Points)
   renderHud();
 }
 // sinkoa kivensiruja annetulla materiaalilla ja parametreilla (o = FINAL/STRIKE_BURST)
@@ -560,6 +655,7 @@ export function clearMining(){
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
   // ase: nollaa tila ja palaa hakkuun seuraavalle pintakäynnille
   beams = []; weaponMode = false; recoil = 0; _prevFire = false; _fireCd = 0;
+  sparks = null; sparkGeo = null; sparkMat = null; _spkHead = 0;
   if (gun) { gun.visible = false; gun.position.copy(GUN_POS); gun.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z); }
   renderMineBar();
   renderHud();
@@ -664,6 +760,7 @@ export function updateMining(dt, px, pz){
   tool.visible = active && !weaponMode;
   if (gun) gun.visible = active && weaponMode;
   updateBeams(dt);
+  updateSparks(dt);
   const fireInput = active && (_lmb || S.keys.Space);
 
   if (weaponMode) {
