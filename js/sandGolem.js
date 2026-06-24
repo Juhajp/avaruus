@@ -19,16 +19,17 @@
 import * as THREE from 'three';
 import { toonMat, addOutlines } from './toon.js';
 
-// mittasuhteet (yksiköt) — JÄYKKÄ, MASSIIVINEN kivigolem (kyyryssä, isot kädet,
-// pienet jalat, iso matala pää) referenssikuvan mukaan
-const TH = 0.62, SH = 0.62;          // lyhyet tukevat jalat
-const UA = 1.18, FA = 1.05;          // pitkät paksut kädet (ulottuvat lähes maahan)
-const HEADR = 0.58;                  // pää (pienempi)
-const HIPX = 1.12, SHX = 1.08;       // jalat vartalon SIVUILLA, leveät hartiat (puolikas)
-const PELVIS_Y = TH + SH;            // lantio (~1.24) jalkojen päällä
-const SHOULDER_Y = 1.7;              // hartian korkeus lantiosta
-const ARM_BASE = 0.12;               // käsien lepokulma (kyyryssä hieman eteen)
-const LEAN = 0.14;                   // vartalon etukumara
+// mittasuhteet (yksiköt) — KIVIKLUSTERIGOLEM joka kävelee gorillan tavoin
+// neljällä raajalla (referenssikuvan mukaan). Erittäin pitkät kädet jotka
+// ulottuvat maahan, kyyryssä kävelyasento.
+const TH = 1.0, SH = 0.95;           // pitkät jalat (kyyryssä taipuneina)
+const UA = 1.55, FA = 1.4;           // ERITTÄIN pitkät kädet (ulottuvat maahan)
+const HEADR = 0.52;                  // pää (pieni vartalon suhteen)
+const HIPX = 0.95, SHX = 1.4;        // leveä haara-asento, leveät hartiat
+const PELVIS_Y = TH + SH;            // lantio (~1.95) jalkojen päällä
+const SHOULDER_Y = 1.65;             // hartian korkeus lantiosta
+const ARM_BASE = 0;                  // kädet roikkuvat suoraan alas
+const LEAN = 0.5;                    // VAHVA etukumara (gorilla-asento)
 
 const HP_MAX = 30;                   // iso → kestää enemmän (pää/vartalo-osumat tappavat lopulta)
 const BITE_DMG = 0.34;               // iskun vahinko pelaajaan
@@ -49,27 +50,42 @@ function jitter(geo, amt){
   p.needsUpdate = true; geo.computeVertexNormals();
 }
 
-// proseduraalinen halkeillut kivipinta (terrakotta + tummat halkeamat + ylävalot)
+// proseduraalinen sammaleinen harmaakivipinta (tumma kivi + sammaleläiskät)
 let _rockTex = null;
 function rockTex(){
   if (_rockTex) return _rockTex;
   const s = 256, cv = document.createElement('canvas'); cv.width = cv.height = s;
   const c = cv.getContext('2d');
-  c.fillStyle = '#834a30'; c.fillRect(0, 0, s, s);   // tummempi pohja
-  // karkea rakeisuus (grunge)
+  c.fillStyle = '#3d3a35'; c.fillRect(0, 0, s, s);   // tumma harmaakivi (pohja)
+  // karkea rakeisuus
   for (let i = 0; i < 4200; i++) {
-    const x = Math.random() * s, y = Math.random() * s, r = 0.6 + Math.random() * 3.0;
-    c.fillStyle = Math.random() < 0.55 ? `rgba(40,18,10,${0.06 + Math.random() * 0.18})` : `rgba(176,118,82,${0.04 + Math.random() * 0.13})`;
+    const x = Math.random() * s, y = Math.random() * s, r = 0.6 + Math.random() * 2.6;
+    c.fillStyle = Math.random() < 0.55 ? `rgba(20,18,16,${0.05 + Math.random() * 0.18})` : `rgba(100,98,90,${0.04 + Math.random() * 0.13})`;
     c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill();
   }
-  // tummat likaläiskät (grime) — epätasaiset isot tahrat
-  for (let i = 0; i < 30; i++) {
-    const x = Math.random() * s, y = Math.random() * s, r = 8 + Math.random() * 34;
+  // SAMMAL: harvat, pehmeät vihertävänkeltaiset läiskät (vähemmistö pinnasta)
+  for (let i = 0; i < 14; i++) {
+    const x = Math.random() * s, y = Math.random() * s, r = 14 + Math.random() * 30;
     const g = c.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `rgba(24,11,6,${0.18 + Math.random() * 0.22})`); g.addColorStop(1, 'rgba(24,11,6,0)');
+    const hue = 75 + Math.random() * 20, sat = 22 + Math.random() * 18, lum = 22 + Math.random() * 10;
+    g.addColorStop(0, `hsla(${hue},${sat}%,${lum}%,${0.22 + Math.random() * 0.18})`);
+    g.addColorStop(1, `hsla(${hue},${sat}%,${lum}%,0)`);
     c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill();
   }
-  const crackle = (col, w, n, len) => {   // rosoiset halkeamat
+  // hienovaraiset sammaltäplät
+  for (let i = 0; i < 600; i++) {
+    const x = Math.random() * s, y = Math.random() * s, r = 0.5 + Math.random() * 1.2;
+    c.fillStyle = `hsla(${75 + Math.random() * 25},${28}%,${30 + Math.random() * 12}%,${0.13 + Math.random() * 0.13})`;
+    c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill();
+  }
+  // tummat likaläiskät
+  for (let i = 0; i < 22; i++) {
+    const x = Math.random() * s, y = Math.random() * s, r = 8 + Math.random() * 30;
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(12,10,8,${0.18 + Math.random() * 0.2})`); g.addColorStop(1, 'rgba(12,10,8,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill();
+  }
+  const crackle = (col, w, n, len) => {
     c.strokeStyle = col;
     for (let i = 0; i < n; i++) {
       let x = Math.random() * s, y = Math.random() * s;
@@ -79,9 +95,8 @@ function rockTex(){
       c.stroke();
     }
   };
-  crackle('rgba(16,7,3,0.9)', 2.8, 48, 70);       // tiheämmät syvät halkeamat
-  crackle('rgba(14,6,3,0.6)', 1.4, 60, 38);       // hienot säröt
-  crackle('rgba(196,148,112,0.35)', 1.0, 22, 46); // niukat vaaleat kohokuviot
+  crackle('rgba(8,7,5,0.85)', 2.2, 36, 60);
+  crackle('rgba(6,5,4,0.55)', 1.0, 48, 30);
   _rockTex = new THREE.CanvasTexture(cv);
   _rockTex.wrapS = _rockTex.wrapT = THREE.RepeatWrapping; _rockTex.repeat.set(1.6, 1.6);
   return _rockTex;
@@ -103,83 +118,109 @@ export class SandGolem {
 
   _build(){
     const g = new THREE.Group(); this.group = g;
-    // halkeillut kivipinta (terrakotta) + fasetoitu (flatShading) → lohkomainen kivi.
-    // DoubleSide: jitter voi kääntää yksittäisiä kolmioita sisäänpäin → FrontSide
-    // poistaisi ne (näkyy "katoavina" rei'inä). DoubleSide renderöi molemmat puolet.
+    // sammaleinen harmaa kivipinta + flatShading → lohkomainen, kasvoton golem
     this.sandMat = toonMat({ map: rockTex(), flatShading: true, side: THREE.DoubleSide });
-    this.sandMat.color.setRGB(0.6, 0.5, 0.44);             // tummempi kivipinta
-    this.sandMat.shadowSide = THREE.BackSide;               // ei itsevarjostusaknea
-    // tummat onkalot (silmät) — DoubleSide. (polygonOffset EI tehoa logaritmisen
-    // syvyyspuskurin kanssa, joten silmät sijoitetaan fyysisesti pinnan tasoon.)
-    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x0a0503, side: THREE.DoubleSide });
-    this.lift = new THREE.Group(); g.add(this.lift);        // emerge/kaatuminen
+    this.sandMat.color.setRGB(0.55, 0.55, 0.5);             // tumma harmaakivi (toon tummentaa lisää)
+    this.sandMat.shadowSide = THREE.BackSide;
+    this.lift = new THREE.Group(); g.add(this.lift);
     const pelvis = new THREE.Group(); pelvis.position.y = PELVIS_Y; this.lift.add(pelvis); this.pelvis = pelvis;
 
-    const cap = (len, rT, rB) => {                          // kapseli alaspäin nivelestä (0 → -len)
-      const geo = new THREE.CapsuleGeometry((rT + rB) / 2, Math.max(0.01, len - (rT + rB)), 5, 14);
-      jitter(geo, 0.035);
-      const m = new THREE.Mesh(geo, this.sandMat); m.position.y = -len / 2; return m;
-    };
-    const ball = (r, mat) => { const geo = new THREE.SphereGeometry(r, 13, 11); jitter(geo, r * 0.035); return new THREE.Mesh(geo, mat || this.sandMat); };
-    const ballAt = (r, x, y, z, mat) => { const m = ball(r, mat); m.position.set(x, y, z); return m; };
-    // ANGULAARINEN lohkare (matalapolyinen ikosaedri + voimakas jitter) → särmikäs,
-    // ei pyöreä. Käytetään päässä, nyrkeissä ja nivelissä.
-    const chunk = (r, detail) => { const geo = new THREE.IcosahedronGeometry(r, detail || 0); jitter(geo, r * 0.08); return new THREE.Mesh(geo, this.sandMat); };
-    const chunkAt = (r, x, y, z, detail) => { const m = chunk(r, detail); m.position.set(x, y, z); return m; };
     const joint = (parent, x, y, z) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
-
-    // ---- MASSIIVINEN pyöreä vartalo (limittäisistä lohkareista) ----
-    const spine = joint(pelvis, 0, 0, 0); this.spine = spine;
-    // päärynämäinen massa: ALAOSA LEVEÄ, yläosa kapeampi
-    const lower = ballAt(1.2, 0, 0.32, 0.16); lower.scale.set(1.5, 1.0, 1.38);     // leveä matala alavatsa
-    const mid = ballAt(1.05, 0, 0.92, 0.02); mid.scale.set(1.34, 1.12, 1.22);       // keskimassa
-    const upper = ballAt(0.84, 0, 1.55, -0.05); upper.scale.set(1.15, 1.12, 1.06);  // kapea hartiamassa (yläosa)
-    const neckBridge = chunkAt(0.6, 0, SHOULDER_Y, 0.45); neckBridge.scale.set(1.0, 0.9, 1.1);   // niska: silloittaa rungon ja pään (ei rakoa)
-    [lower, mid, upper, neckBridge].forEach(m => { m.userData.part = 'torso'; spine.add(m); });
-
-    // ---- ISO matala pää joka TYÖNTYY eteen ylävartalosta (kyyryssä) + tummat onkalot ----
-    const neck = joint(spine, 0, SHOULDER_Y - 0.02, 0.95); this.neck = neck;
-    const head = chunk(HEADR, 1); head.scale.set(1.12, 1.02, 1.06); head.position.set(0, 0.06, 0.2); neck.add(head);
-    head.userData.part = 'head';
-    // kaksi syvää tummaa kuoppaa pään ETUPINNALLE (kuten kuvassa) — muuten kasvoton.
-    // Lapsia HEAD-meshille → head-lokaalikoordinaatit (etunapa z ≈ HEADR).
-    // silmät: PIENET, EPÄSYMMETRISET ja EPÄMÄÄRÄISEN muotoiset tummat kuopat
-    const eye = (x, y, r, sx, sy, rot) => {
-      const geo = new THREE.IcosahedronGeometry(r, 0); jitter(geo, r * 0.12);   // hieman epämääräinen
-      const e = new THREE.Mesh(geo, mouthMat);
-      e.position.set(x, y, HEADR * 0.93); e.scale.set(sx, sy, 0.55); e.rotation.z = rot;
-      head.add(e); return e;
+    // PIENI KIVI: matalapolyinen ikosaedri + jitter → särmikäs lohkare
+    const rock = (r) => {
+      const rr = r * (0.75 + Math.random() * 0.5);
+      const geo = new THREE.IcosahedronGeometry(rr, 0); jitter(geo, rr * 0.18);
+      const m = new THREE.Mesh(geo, this.sandMat);
+      m.rotation.set(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
+      return m;
     };
-    eye(-0.15, 0.16, 0.058, 1.2, 0.8, 0.4);    // vasen: pieni, ylempänä, vino
-    eye(0.19, 0.10, 0.07, 0.8, 1.25, -0.6);     // oikea: hieman isompi, alempana, eri muoto/kulma
-    this.mouth = null;   // ei suuta lainkaan
+    // KASA pieniä kiviä annetussa ellipsoidialueessa: läpileikkaavat kerrokset
+    // täyttävät tilavuuden niin ettei sisäänpäin näy reikiä.
+    const cluster = (parent, opts, partTag) => {
+      const { cx = 0, cy = 0, cz = 0, sx = 1, sy = 1, sz = 1, n = 14, r = 0.32, jit = 0.15 } = opts;
+      for (let i = 0; i < n; i++) {
+        // fibonaccin spiraalimainen jakauma + jitteri → tasainen mutta epäsäännöllinen
+        const u = (i + 0.5) / n, theta = i * 2.39996, phi = Math.acos(1 - 2 * u);
+        const ux = Math.sin(phi) * Math.cos(theta), uy = Math.cos(phi), uz = Math.sin(phi) * Math.sin(theta);
+        const rad = 0.55 + Math.random() * 0.42;     // pisteet kuoren tuntumassa
+        const dx = ux * rad + (Math.random() - 0.5) * jit;
+        const dy = uy * rad + (Math.random() - 0.5) * jit;
+        const dz = uz * rad + (Math.random() - 0.5) * jit;
+        const m = rock(r);
+        m.position.set(cx + dx * sx, cy + dy * sy, cz + dz * sz);
+        if (partTag) m.userData.part = partTag;
+        parent.add(m);
+      }
+      // sisus: pari isompaa kiveä keskelle ettei tilavuus näy ontolta jos pintakivi siirtyy
+      for (let i = 0; i < Math.max(2, n / 7 | 0); i++) {
+        const m = rock(r * 1.5);
+        m.position.set(cx + (Math.random() - 0.5) * sx * 0.5, cy + (Math.random() - 0.5) * sy * 0.5, cz + (Math.random() - 0.5) * sz * 0.5);
+        if (partTag) m.userData.part = partTag;
+        parent.add(m);
+      }
+    };
+    // RAAJA kasattuna kapselin sijaan: kasa pieniä kiviä putkimaisesti pituussuunnassa
+    const limbCluster = (parent, len, rT, rB, n, partTag) => {
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        const y = -t * len;
+        const rad = rT + (rB - rT) * t;
+        const phi = Math.random() * 6.28;
+        const off = rad * (0.55 + Math.random() * 0.5);
+        const dx = Math.cos(phi) * off, dz = Math.sin(phi) * off;
+        const r = rad * 0.6;
+        const m = rock(r);
+        m.position.set(dx, y, dz);
+        if (partTag) m.userData.part = partTag;
+        parent.add(m);
+      }
+      // keskirivi täyttöä
+      for (let i = 0; i < Math.max(2, n / 3 | 0); i++) {
+        const t = (i + 0.5) / Math.max(2, n / 3);
+        const r = (rT + (rB - rT) * t) * 0.7;
+        const m = rock(r); m.position.y = -t * len;
+        if (partTag) m.userData.part = partTag;
+        parent.add(m);
+      }
+    };
 
-    // ---- paksut pitkät kädet (hartia → olka → kyynär → kyynärvarsi → nyrkki) ----
+    // ---- VARTALO: kiviklusteri (leveämpi alaosa, kapeampi yläosa) ----
+    const spine = joint(pelvis, 0, 0, 0); this.spine = spine;
+    cluster(spine, { cx: 0, cy: 0.35, cz: 0.05, sx: 1.4, sy: 0.95, sz: 1.25, n: 22, r: 0.36 }, 'torso');   // alavatsa
+    cluster(spine, { cx: 0, cy: 1.05, cz: 0,    sx: 1.3, sy: 1.0,  sz: 1.2,  n: 22, r: 0.34 }, 'torso');   // keskimassa
+    cluster(spine, { cx: 0, cy: 1.65, cz: 0,    sx: 1.45, sy: 0.7, sz: 1.2,  n: 18, r: 0.32 }, 'torso');   // hartiamassa (leveä yläosa)
+
+    // ---- PÄÄ: pieni kiviklusteri eteen-alas (kyyryssä), ei kasvopiirteitä ----
+    const neck = joint(spine, 0, SHOULDER_Y - 0.1, 0.42); this.neck = neck;
+    cluster(neck, { cx: 0, cy: 0.1, cz: 0.05, sx: 0.7, sy: 0.6, sz: 0.7, n: 14, r: 0.24 }, 'head');
+    this.mouth = null;
+
+    // ---- KÄDET: erittäin pitkät, ulottuvat maahan (gorilla-asento) ----
     const arm = (side) => {
-      const sh = joint(spine, side * SHX, SHOULDER_Y, 0.05);
-      spine.add(chunkAt(0.58, side * SHX, SHOULDER_Y, 0.05));   // hartialohkare (jää vartaloon)
-      const ua = cap(UA, 0.36, 0.32); sh.add(ua);
+      const sh = joint(spine, side * SHX, SHOULDER_Y - 0.15, 0.0);
+      cluster(spine, { cx: side * SHX, cy: SHOULDER_Y - 0.1, cz: 0.0, sx: 0.5, sy: 0.5, sz: 0.5, n: 9, r: 0.3 }, 'torso');   // hartiarykelmä jää vartaloon
+      limbCluster(sh, UA, 0.34, 0.3, 12, side < 0 ? 'larm' : 'rarm');
       const el = joint(sh, 0, -UA, 0);
-      el.add(chunk(0.44));                                       // kyynärlohkare (peittää taipeen)
-      const fa = cap(FA, 0.32, 0.27); el.add(fa);
-      const hand = chunk(0.44); hand.scale.set(1.0, 0.82, 1.15); hand.position.y = -FA - 0.08; el.add(hand);   // iso särmikäs nyrkki
-      const part = side < 0 ? 'larm' : 'rarm';
-      [ua, fa, hand].forEach(m => m.userData.part = part);
-      return { sh, el, ua, fa, side };
+      cluster(el, { cx: 0, cy: 0, cz: 0, sx: 0.45, sy: 0.45, sz: 0.45, n: 7, r: 0.28 }, side < 0 ? 'larm' : 'rarm');   // kyynärrykelmä
+      limbCluster(el, FA, 0.3, 0.26, 11, side < 0 ? 'larm' : 'rarm');
+      // nyrkki: tiivis klusteri kyynärvarren päässä
+      const hand = joint(el, 0, -FA - 0.1, 0);
+      cluster(hand, { cx: 0, cy: 0, cz: 0.05, sx: 0.55, sy: 0.55, sz: 0.65, n: 12, r: 0.3 }, side < 0 ? 'larm' : 'rarm');
+      return { sh, el, side };
     };
     this.armL = arm(-1); this.armR = arm(1);
 
-    // ---- lyhyet tukevat jalat (lonkka → reisi → polvi → sääri → jalka) ----
+    // ---- JALAT: pitkät, taipuneet (kyyryssä) ----
     const leg = (side) => {
       const hip = joint(pelvis, side * HIPX, 0, 0);
-      pelvis.add(chunkAt(0.58, side * HIPX, 0, 0));   // lonkkalohkare (jää lantioon)
-      const th = cap(TH, 0.42, 0.38); hip.add(th);
+      cluster(pelvis, { cx: side * HIPX, cy: 0, cz: 0, sx: 0.55, sy: 0.55, sz: 0.55, n: 9, r: 0.32 }, 'torso');   // lonkkarykelmä
+      limbCluster(hip, TH, 0.42, 0.36, 12, side < 0 ? 'lleg' : 'rleg');
       const kn = joint(hip, 0, -TH, 0);
-      kn.add(chunk(0.46));                              // polvilohkare (peittää taipeen)
-      const shn = cap(SH, 0.38, 0.36); kn.add(shn);
-      const foot = chunk(0.44); foot.scale.set(1.1, 0.65, 1.5); foot.position.set(0, -SH, 0.2); kn.add(foot);
-      const part = side < 0 ? 'lleg' : 'rleg';
-      [th, shn, foot].forEach(m => m.userData.part = part);
+      cluster(kn, { cx: 0, cy: 0, cz: 0, sx: 0.5, sy: 0.5, sz: 0.5, n: 8, r: 0.3 }, side < 0 ? 'lleg' : 'rleg');   // polvirykelmä
+      limbCluster(kn, SH, 0.36, 0.32, 11, side < 0 ? 'lleg' : 'rleg');
+      // jalkaterä: leveä klusteri säären päässä
+      const foot = joint(kn, 0, -SH, 0.15);
+      cluster(foot, { cx: 0, cy: 0, cz: 0, sx: 0.65, sy: 0.45, sz: 0.9, n: 11, r: 0.3 }, side < 0 ? 'lleg' : 'rleg');
       return { hip, kn };
     };
     this.legL = leg(-1); this.legR = leg(1);
@@ -296,35 +337,46 @@ export class SandGolem {
     const A = this.armL, B = this.armR, L = this.legL, R = this.legR;
     const walking = this.state === 'walk' && !this.fallen;
     const ph = this.walkPhase;
-    // lyhyet tukevat jalat: pieni heilahdus + polven taittuminen
     const lift = this.fallen ? 0 : 1;
-    L.hip.rotation.x = Math.sin(ph) * 0.34 * lift;
-    R.hip.rotation.x = Math.sin(ph + Math.PI) * 0.34 * lift;
-    L.kn.rotation.x = -Math.max(0, Math.sin(ph + Math.PI * 0.5)) * 0.7 * lift - 0.05;
-    R.kn.rotation.x = -Math.max(0, Math.sin(ph + Math.PI * 1.5)) * 0.7 * lift - 0.05;
-    // paksut kädet roikkuvat eteen-ulos ja heiluvat raskaasti (vastatahti)
-    A.sh.rotation.set(ARM_BASE + Math.sin(ph + Math.PI) * 0.26, 0, A.side * 0.2);
-    A.el.rotation.x = -0.3 - Math.max(0, Math.sin(ph)) * 0.22;
     let twist = 0;
+    // ---- KNUCKLE-WALK (gorillamainen 4-raajaliike): diagonaaliparit liikkuvat
+    // yhdessä. Vasen käsi + oikea jalka swing → oikea käsi + vasen jalka swing. ----
+    const swingArm = 0.55, swingLeg = 0.5;
+    // diagonaaliparit: A (vasen käsi) + R (oikea jalka), B (oikea käsi) + L (vasen jalka)
+    const phA = Math.sin(ph), phB = Math.sin(ph + Math.PI);
+    // jalat: lonkka taipuu eteen-taakse (taipuneessa asennossa), polvi taittuu astuessa
+    L.hip.rotation.x = 0.4 + phB * 0.4 * lift;                                   // taipunut + heilahdus
+    R.hip.rotation.x = 0.4 + phA * 0.4 * lift;
+    L.kn.rotation.x = -0.7 - Math.max(0, -phB) * 0.5 * lift;                     // polvi aina taipuneena
+    R.kn.rotation.x = -0.7 - Math.max(0, -phA) * 0.5 * lift;
+    // kädet riippuvat suoraan alas (knuckle-walk): olka eteenpäin, kyynärpää suora
+    // diagonaalinen swing: A (vasen) swingaa kun B (oikea) tukee maata
     if (this.state === 'attack') {
       const u = Math.min(1, this.t / ATTACK_T);
-      // PITKÄ vaakapyyhkäisy + vartalon kierto: käsi vaakaan, heilautus sivulta
-      // poikki edestä, ja koko ylävartalo kiertyy (spine.rotation.y) mukaan
+      // ISKUSSA golem nousee hetkellisesti pystyyn ja lyö oikealla kädellä
       let yaw;
-      if (u < 0.3) { const a = u / 0.3; yaw = 1.5 * a; twist = 0.6 * a; }                       // veto sivulle + kierto taakse
-      else if (u < 0.82) { const a = (u - 0.3) / 0.52; yaw = 1.5 - 3.4 * a; twist = 0.6 - 1.15 * a; }   // pitkä pyyhkäisy + kierron purku
-      else { yaw = -1.9; twist = -0.55; }                                                       // jää eteen poikki
-      B.sh.rotation.set(-1.35, B.side * yaw, 0);                   // olka vaakaan, heilautus rotation.y:llä
+      if (u < 0.3) { const a = u / 0.3; yaw = 1.5 * a; twist = 0.6 * a; }
+      else if (u < 0.82) { const a = (u - 0.3) / 0.52; yaw = 1.5 - 3.4 * a; twist = 0.6 - 1.15 * a; }
+      else { yaw = -1.9; twist = -0.55; }
+      B.sh.rotation.set(-1.35, B.side * yaw, 0);
       B.el.rotation.x = -0.45;
+      // vasen käsi tukena maassa iskun aikana
+      A.sh.rotation.set(0.05, 0, A.side * 0.15);
+      A.el.rotation.x = -0.05;
     } else {
-      B.sh.rotation.set(ARM_BASE + Math.sin(ph) * 0.26, 0, B.side * 0.2);
-      B.el.rotation.x = -0.3 - Math.max(0, Math.sin(ph + Math.PI)) * 0.22;
+      // VAS käsi: swingaa eteen kun phA > 0 (samaan aikaan oik jalka swingaa)
+      A.sh.rotation.set(phA * swingArm, 0, A.side * 0.15);
+      A.el.rotation.x = -0.05 - Math.max(0, -phA) * 0.15;   // suoristuu kun maassa
+      // OIK käsi: vastatahti
+      B.sh.rotation.set(phB * swingArm, 0, B.side * 0.15);
+      B.el.rotation.x = -0.05 - Math.max(0, -phB) * 0.15;
     }
-    // vartalo: etukumara (LEAN) + osuman nytkähdys taakse + raskas keinunta + iskukierto
-    this.spine.rotation.x = LEAN - this._recoil * 0.5 + (walking ? Math.sin(ph * 2) * 0.04 : 0);
-    this.spine.rotation.y = B.side * twist;   // ylävartalon kierto iskuun (lähtee sivulta)
-    this.spine.rotation.z = walking ? Math.sin(ph) * 0.07 : 0;
-    this.pelvis.position.y = PELVIS_Y + (walking ? Math.abs(Math.sin(ph)) * 0.07 : 0);
+    // vartalon kierto: hartiat heiluvat askelten mukana + iskukierto
+    this.spine.rotation.x = LEAN - this._recoil * 0.5 + (walking ? Math.sin(ph * 2) * 0.03 : 0);
+    this.spine.rotation.y = (walking ? phA * 0.08 : 0) + B.side * twist;
+    this.spine.rotation.z = walking ? phA * 0.04 : 0;
+    // lantio nousee/laskee diagonaaliparin mukaan
+    this.pelvis.position.y = PELVIS_Y + (walking ? Math.abs(Math.sin(ph)) * 0.08 : 0);
     // raajojen takaisinkasvu (skaalaus)
     for (const k in this.parts) { const p = this.parts[k]; if (!p.gone) p.grp.scale.setScalar(p.grow); }
   }
