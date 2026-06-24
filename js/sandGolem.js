@@ -103,24 +103,27 @@ export class SandGolem {
 
   _build(){
     const g = new THREE.Group(); this.group = g;
-    // halkeillut kivipinta (terrakotta) + fasetoitu (flatShading) → lohkomainen kivi
-    this.sandMat = toonMat({ map: rockTex(), flatShading: true });
+    // halkeillut kivipinta (terrakotta) + fasetoitu (flatShading) → lohkomainen kivi.
+    // DoubleSide: jitter voi kääntää yksittäisiä kolmioita sisäänpäin → FrontSide
+    // poistaisi ne (näkyy "katoavina" rei'inä). DoubleSide renderöi molemmat puolet.
+    this.sandMat = toonMat({ map: rockTex(), flatShading: true, side: THREE.DoubleSide });
     this.sandMat.color.setRGB(0.6, 0.5, 0.44);             // tummempi kivipinta
-    this.sandMat.shadowSide = THREE.BackSide;
-    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x0a0503 });   // tummat onkalot (silmät/suu)
+    this.sandMat.shadowSide = THREE.BackSide;               // ei itsevarjostusaknea
+    // tummat onkalot (silmät): polygonOffset → eivät z-taistele pään pinnan kanssa
+    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x0a0503, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     this.lift = new THREE.Group(); g.add(this.lift);        // emerge/kaatuminen
     const pelvis = new THREE.Group(); pelvis.position.y = PELVIS_Y; this.lift.add(pelvis); this.pelvis = pelvis;
 
     const cap = (len, rT, rB) => {                          // kapseli alaspäin nivelestä (0 → -len)
       const geo = new THREE.CapsuleGeometry((rT + rB) / 2, Math.max(0.01, len - (rT + rB)), 5, 14);
-      jitter(geo, 0.1);
+      jitter(geo, 0.07);
       const m = new THREE.Mesh(geo, this.sandMat); m.position.y = -len / 2; return m;
     };
-    const ball = (r, mat) => { const geo = new THREE.SphereGeometry(r, 13, 11); jitter(geo, r * 0.12); return new THREE.Mesh(geo, mat || this.sandMat); };
+    const ball = (r, mat) => { const geo = new THREE.SphereGeometry(r, 13, 11); jitter(geo, r * 0.08); return new THREE.Mesh(geo, mat || this.sandMat); };
     const ballAt = (r, x, y, z, mat) => { const m = ball(r, mat); m.position.set(x, y, z); return m; };
     // ANGULAARINEN lohkare (matalapolyinen ikosaedri + voimakas jitter) → särmikäs,
     // ei pyöreä. Käytetään päässä, nyrkeissä ja nivelissä.
-    const chunk = (r, detail) => { const geo = new THREE.IcosahedronGeometry(r, detail || 0); jitter(geo, r * 0.2); return new THREE.Mesh(geo, this.sandMat); };
+    const chunk = (r, detail) => { const geo = new THREE.IcosahedronGeometry(r, detail || 0); jitter(geo, r * 0.13); return new THREE.Mesh(geo, this.sandMat); };
     const chunkAt = (r, x, y, z, detail) => { const m = chunk(r, detail); m.position.set(x, y, z); return m; };
     const joint = (parent, x, y, z) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
 
@@ -140,7 +143,7 @@ export class SandGolem {
     // Lapsia HEAD-meshille → head-lokaalikoordinaatit (etunapa z ≈ HEADR).
     // silmät: PIENET, EPÄSYMMETRISET ja EPÄMÄÄRÄISEN muotoiset tummat kuopat
     const eye = (x, y, r, sx, sy, rot) => {
-      const geo = new THREE.IcosahedronGeometry(r, 0); jitter(geo, r * 0.45);   // särmikäs/epämääräinen
+      const geo = new THREE.IcosahedronGeometry(r, 0); jitter(geo, r * 0.25);   // särmikäs/epämääräinen
       const e = new THREE.Mesh(geo, mouthMat);
       e.position.set(x, y, HEADR * 0.93); e.scale.set(sx, sy, 0.55); e.rotation.z = rot;
       head.add(e); return e;
