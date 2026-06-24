@@ -12,6 +12,7 @@ import { initMining, updateMining, clearMining, setMineralEnv, setMineralRock, r
 import { S } from './state.js';
 import { toonMat, expandGeo, outlineMaterial } from './toon.js';
 import { RegolithWorm } from './regolithWorm.js';
+import { SandGolem } from './sandGolem.js';
 
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
 let pmrem = null;
@@ -1490,14 +1491,15 @@ function damageShuttle(h){
 // Mato on TOISTAISEKSI POIS KÄYTÖSTÄ (koodi jätetään paikoilleen — palataan myöhemmin).
 const WORM_ENABLED = false;
 let worm = null;
+let golem = null;
 const GUN_ENEMY_DMG = 1, PICK_ENEMY_DMG = 1;
 const hurtFlashEl = document.getElementById('hurtFlash');
 // etsi vihollisentiteetti osuman meshin vanhemmista
 function enemyOf(o){ while (o && !(o.userData && o.userData.enemy)) o = o.parent; return o ? o.userData.enemy : null; }
 function damageEnemy(enemy, h, amount){
   if (!enemy || !enemy.takeDamage) return;
-  spawnHitDebris(h.point.x, h.point.y, h.point.z, enemy.bodyMat || h.object.material, false);   // sirupurske osumaan
-  enemy.takeDamage(amount, h.point);
+  spawnHitDebris(h.point.x, h.point.y, h.point.z, enemy.bodyMat || enemy.sandMat || h.object.material, false);   // sirupurske osumaan
+  enemy.takeDamage(amount, h);   // koko osuma (sis. h.object) → entiteetti voi tunnistaa osuma-alueen
 }
 // pelaajan terveys + kuolema pinnalla
 let _surfaceDead = false;
@@ -1509,7 +1511,7 @@ function hurtPlayer(dmg){
     hurtFlashEl.getBoundingClientRect();
     hurtFlashEl.style.transition = 'opacity 0.6s ease'; hurtFlashEl.style.opacity = '0';
   }
-  if (S.health <= 0) surfaceDeath('Regolith-mato sai sinut.');
+  if (S.health <= 0) surfaceDeath('Hiekkagolem murskasi sinut.');
 }
 function surfaceDeath(reason){
   _surfaceDead = true;
@@ -1522,6 +1524,7 @@ document.getElementById('deathOverlay').addEventListener('click', () => {
   _surfaceDead = false;
   S.health = 1; surfX = 0; surfZ = 0;
   if (worm) worm.reset();
+  if (golem) golem.reset();
   document.getElementById('deathOverlay').style.display = 'none';
 });
 
@@ -2446,7 +2449,7 @@ function enterSurfaceScene(b, mode){
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
   clearMining();
-  worm = null;   // mato + kumpu ovat surfaceScenen lapsia → vapautuvat scenen dispose-traversessa
+  worm = null; golem = null;   // entiteetit ovat surfaceScenen lapsia → vapautuvat scenen dispose-traversessa
   _surfaceDead = false;
   S.wreckPos = null;   // hylyn törmäyseste pois scenen mukana
   if (visorEl) { visorEl.style.display = 'none'; hudReturnEl.style.display = 'none'; }
@@ -2481,12 +2484,15 @@ function enterSurface(b){
   enterSurfaceScene(b, 'surface');
   surfX = 0; surfZ = 0;
   S.health = 1; _surfaceDead = false;
+  const enemyBurst = (x, y, z, big, mat) => { for (let k = 0; k < (big ? 8 : 4); k++) spawnHitDebris(x, y + 0.3, z, mat, big && k < 2); };
   // Regolith-mato: vain Marsin pinnalla (kävelymoodi) — toistaiseksi pois käytöstä
   if (WORM_ENABLED && b.def.name === 'Mars') {
-    worm = new RegolithWorm(surfaceScene, surfHeightFn, {
-      bite: (dmg) => hurtPlayer(dmg),
-      burst: (x, y, z, big, mat) => { for (let k = 0; k < (big ? 8 : 4); k++) spawnHitDebris(x, y + 0.3, z, mat, big && k < 2); },
-    });
+    worm = new RegolithWorm(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
+  }
+  // Hiekkagolem: kiviplaneetoilla (Mars/Kuu/Merkurius/Venus/Maa)
+  if (b.def.name === 'Mars') {
+    golem = new SandGolem(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
+    golem._spawn(0, 0);   // ensimmäinen nousu pelaajan lähistölle
   }
   // vuorokausi alkaa aamupäivästä; aurinko selän taakse laskeutuessa,
   // jotta maisema näkyy valaistuna
@@ -2561,6 +2567,11 @@ function detectContacts(){
   if (worm && worm.alive && (worm.mound.visible || worm.group.visible)) {
     const d = Math.hypot(worm.gx - surfX, worm.gz - surfZ);
     if (d <= RADAR_RANGE) list.push({ x: worm.gx, z: worm.gz, name: 'REGOLITH-MATO', sizeWord: 'VIHOLLINEN', big: false, hostile: true, d });
+  }
+  // Hiekkagolem viholliskontaktina
+  if (golem && golem.alive && golem.group.visible) {
+    const d = Math.hypot(golem.gx - surfX, golem.gz - surfZ);
+    if (d <= RADAR_RANGE) list.push({ x: golem.gx, z: golem.gz, name: 'HIEKKAGOLEM', sizeWord: 'VIHOLLINEN', big: false, hostile: true, d });
   }
   return list;
 }
@@ -2754,15 +2765,14 @@ export function updateSurface(dt){
     surfHeightFn(surfX, surfZ) + 2.4 + bobY,
     surfZ + rZ * sway
   );
-  // vihollinen: päivitä mato + maan tärinä (kameran ravistus) sen mukaan
-  if (worm) {
-    worm.update(dt, surfX, surfZ, camera);
-    const tr = worm.tremor;
-    if (tr > 0.001) {
-      camera.position.x += (Math.random() - 0.5) * tr;
-      camera.position.y += (Math.random() - 0.5) * tr;
-      camera.position.z += (Math.random() - 0.5) * tr;
-    }
+  // viholliset: päivitä + maan tärinä (kameran ravistus) niiden mukaan
+  let tr = 0;
+  if (worm) { worm.update(dt, surfX, surfZ, camera); tr = Math.max(tr, worm.tremor); }
+  if (golem) { golem.update(dt, surfX, surfZ, camera); tr = Math.max(tr, golem.tremor); }
+  if (tr > 0.001) {
+    camera.position.x += (Math.random() - 0.5) * tr;
+    camera.position.y += (Math.random() - 0.5) * tr;
+    camera.position.z += (Math.random() - 0.5) * tr;
   }
   updateStorm(dt);   // myrskyn ajoitus, näkyvyys ja pölyjuovat (kameran ympärillä)
   updateHelmetHud();
@@ -2980,6 +2990,9 @@ export function surfDebug(){
     worm,
     wormState: () => worm ? { state: worm.state, hp: worm.hp, rise: +worm.rise.toFixed(2), gx: +worm.gx.toFixed(1), gz: +worm.gz.toFixed(1) } : null,
     wormStrike: () => { if (worm) worm.forceStrike(surfX, surfZ); },
+    golem: () => golem,
+    golemState: () => golem ? { state: golem.state, hp: golem.hp, fallen: golem.fallen, gx: +golem.gx.toFixed(1), gz: +golem.gz.toFixed(1), parts: Object.fromEntries(Object.entries(golem.parts).map(([k, p]) => [k, { hits: p.hits, gone: p.gone }])) } : null,
+    golemSpawn: (near) => { if (golem) golem._spawn(near ? surfX : golem.gx, near ? surfZ : golem.gz); },
     health: () => S.health,
     setHealth(v){ S.health = Math.max(0, Math.min(1, v)); },
     destroyShuttle(){ if (_shuttleDestroyer) _shuttleDestroyer(); },   // testaus: tuhoa pysäköity sukkula heti

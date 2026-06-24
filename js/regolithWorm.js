@@ -277,7 +277,8 @@ export class RegolithWorm {
   }
 
   // ---- vahinko (hakku/ase) ----
-  takeDamage(amount, point){
+  takeDamage(amount, hit){
+    const point = (hit && hit.point) ? hit.point : hit;   // surface.js antaa koko osuman; tukee myös pelkkää pistettä
     if (!this.group.visible || this.state === 'dead' || this.state === 'gone') return false;
     this.hp -= amount;
     this._flash = 1;
