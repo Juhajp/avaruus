@@ -109,21 +109,22 @@ export class SandGolem {
     this.sandMat = toonMat({ map: rockTex(), flatShading: true, side: THREE.DoubleSide });
     this.sandMat.color.setRGB(0.6, 0.5, 0.44);             // tummempi kivipinta
     this.sandMat.shadowSide = THREE.BackSide;               // ei itsevarjostusaknea
-    // tummat onkalot (silmät): polygonOffset → eivät z-taistele pään pinnan kanssa
-    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x0a0503, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    // tummat onkalot (silmät) — DoubleSide. (polygonOffset EI tehoa logaritmisen
+    // syvyyspuskurin kanssa, joten silmät sijoitetaan fyysisesti pinnan tasoon.)
+    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x0a0503, side: THREE.DoubleSide });
     this.lift = new THREE.Group(); g.add(this.lift);        // emerge/kaatuminen
     const pelvis = new THREE.Group(); pelvis.position.y = PELVIS_Y; this.lift.add(pelvis); this.pelvis = pelvis;
 
     const cap = (len, rT, rB) => {                          // kapseli alaspäin nivelestä (0 → -len)
       const geo = new THREE.CapsuleGeometry((rT + rB) / 2, Math.max(0.01, len - (rT + rB)), 5, 14);
-      jitter(geo, 0.07);
+      jitter(geo, 0.035);
       const m = new THREE.Mesh(geo, this.sandMat); m.position.y = -len / 2; return m;
     };
-    const ball = (r, mat) => { const geo = new THREE.SphereGeometry(r, 13, 11); jitter(geo, r * 0.08); return new THREE.Mesh(geo, mat || this.sandMat); };
+    const ball = (r, mat) => { const geo = new THREE.SphereGeometry(r, 13, 11); jitter(geo, r * 0.035); return new THREE.Mesh(geo, mat || this.sandMat); };
     const ballAt = (r, x, y, z, mat) => { const m = ball(r, mat); m.position.set(x, y, z); return m; };
     // ANGULAARINEN lohkare (matalapolyinen ikosaedri + voimakas jitter) → särmikäs,
     // ei pyöreä. Käytetään päässä, nyrkeissä ja nivelissä.
-    const chunk = (r, detail) => { const geo = new THREE.IcosahedronGeometry(r, detail || 0); jitter(geo, r * 0.13); return new THREE.Mesh(geo, this.sandMat); };
+    const chunk = (r, detail) => { const geo = new THREE.IcosahedronGeometry(r, detail || 0); jitter(geo, r * 0.08); return new THREE.Mesh(geo, this.sandMat); };
     const chunkAt = (r, x, y, z, detail) => { const m = chunk(r, detail); m.position.set(x, y, z); return m; };
     const joint = (parent, x, y, z) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
 
@@ -133,17 +134,18 @@ export class SandGolem {
     const lower = ballAt(1.2, 0, 0.32, 0.16); lower.scale.set(1.5, 1.0, 1.38);     // leveä matala alavatsa
     const mid = ballAt(1.05, 0, 0.92, 0.02); mid.scale.set(1.34, 1.12, 1.22);       // keskimassa
     const upper = ballAt(0.84, 0, 1.55, -0.05); upper.scale.set(1.15, 1.12, 1.06);  // kapea hartiamassa (yläosa)
-    [lower, mid, upper].forEach(m => { m.userData.part = 'torso'; spine.add(m); });
+    const neckBridge = chunkAt(0.6, 0, SHOULDER_Y, 0.45); neckBridge.scale.set(1.0, 0.9, 1.1);   // niska: silloittaa rungon ja pään (ei rakoa)
+    [lower, mid, upper, neckBridge].forEach(m => { m.userData.part = 'torso'; spine.add(m); });
 
     // ---- ISO matala pää joka TYÖNTYY eteen ylävartalosta (kyyryssä) + tummat onkalot ----
-    const neck = joint(spine, 0, SHOULDER_Y - 0.05, 0.88); this.neck = neck;
-    const head = chunk(HEADR, 1); head.scale.set(1.1, 1.0, 1.05); head.position.set(0, 0.05, 0.22); neck.add(head);
+    const neck = joint(spine, 0, SHOULDER_Y - 0.02, 0.95); this.neck = neck;
+    const head = chunk(HEADR, 1); head.scale.set(1.12, 1.02, 1.06); head.position.set(0, 0.06, 0.2); neck.add(head);
     head.userData.part = 'head';
     // kaksi syvää tummaa kuoppaa pään ETUPINNALLE (kuten kuvassa) — muuten kasvoton.
     // Lapsia HEAD-meshille → head-lokaalikoordinaatit (etunapa z ≈ HEADR).
     // silmät: PIENET, EPÄSYMMETRISET ja EPÄMÄÄRÄISEN muotoiset tummat kuopat
     const eye = (x, y, r, sx, sy, rot) => {
-      const geo = new THREE.IcosahedronGeometry(r, 0); jitter(geo, r * 0.25);   // särmikäs/epämääräinen
+      const geo = new THREE.IcosahedronGeometry(r, 0); jitter(geo, r * 0.12);   // hieman epämääräinen
       const e = new THREE.Mesh(geo, mouthMat);
       e.position.set(x, y, HEADR * 0.93); e.scale.set(sx, sy, 0.55); e.rotation.z = rot;
       head.add(e); return e;
@@ -155,11 +157,11 @@ export class SandGolem {
     // ---- paksut pitkät kädet (hartia → olka → kyynär → kyynärvarsi → nyrkki) ----
     const arm = (side) => {
       const sh = joint(spine, side * SHX, SHOULDER_Y, 0.05);
-      spine.add(chunkAt(0.52, side * SHX, SHOULDER_Y, 0.05));   // hartialohkare (jää vartaloon)
-      const ua = cap(UA, 0.36, 0.3); sh.add(ua);
+      spine.add(chunkAt(0.58, side * SHX, SHOULDER_Y, 0.05));   // hartialohkare (jää vartaloon)
+      const ua = cap(UA, 0.36, 0.32); sh.add(ua);
       const el = joint(sh, 0, -UA, 0);
-      el.add(chunk(0.34));                                       // kyynärlohkare (särmikäs)
-      const fa = cap(FA, 0.3, 0.26); el.add(fa);
+      el.add(chunk(0.44));                                       // kyynärlohkare (peittää taipeen)
+      const fa = cap(FA, 0.32, 0.27); el.add(fa);
       const hand = chunk(0.44); hand.scale.set(1.0, 0.82, 1.15); hand.position.y = -FA - 0.08; el.add(hand);   // iso särmikäs nyrkki
       const part = side < 0 ? 'larm' : 'rarm';
       [ua, fa, hand].forEach(m => m.userData.part = part);
@@ -170,11 +172,11 @@ export class SandGolem {
     // ---- lyhyet tukevat jalat (lonkka → reisi → polvi → sääri → jalka) ----
     const leg = (side) => {
       const hip = joint(pelvis, side * HIPX, 0, 0);
-      pelvis.add(chunkAt(0.52, side * HIPX, 0, 0));   // lonkkalohkare (jää lantioon)
-      const th = cap(TH, 0.4, 0.36); hip.add(th);
+      pelvis.add(chunkAt(0.58, side * HIPX, 0, 0));   // lonkkalohkare (jää lantioon)
+      const th = cap(TH, 0.42, 0.38); hip.add(th);
       const kn = joint(hip, 0, -TH, 0);
-      kn.add(chunk(0.36));                              // polvilohkare (särmikäs)
-      const shn = cap(SH, 0.36, 0.34); kn.add(shn);
+      kn.add(chunk(0.46));                              // polvilohkare (peittää taipeen)
+      const shn = cap(SH, 0.38, 0.36); kn.add(shn);
       const foot = chunk(0.44); foot.scale.set(1.1, 0.65, 1.5); foot.position.set(0, -SH, 0.2); kn.add(foot);
       const part = side < 0 ? 'lleg' : 'rleg';
       [th, shn, foot].forEach(m => m.userData.part = part);
