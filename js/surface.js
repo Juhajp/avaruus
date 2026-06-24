@@ -1426,15 +1426,34 @@ function damageScatter(s, i, point, mat){
 }
 // sukkulan osuma: tummentava palojälki (decal) + piilo-osumapisteet (S.shuttleHp)
 const SHUTTLE_HP = 14;
-let _scorchTex = null, _scorches = [];
+let _scorchTexes = [], _scorches = [];
+// EPÄSÄÄNNÖLLINEN palojälki: päällekkäisiä epäkeskisiä tummia läikkiä + reunan
+// karstaroiskeita → ei tasaisen pyöreä vaan rosoinen. Useita variantteja +
+// satunnainen kierto/venytys per osuma → jäljet eivät näytä leimasimelta.
 function scorchTex(){
-  if (_scorchTex) return _scorchTex;
-  const sz = 64, cv = document.createElement('canvas'); cv.width = cv.height = sz;
-  const c = cv.getContext('2d');
-  const g = c.createRadialGradient(sz / 2, sz / 2, 0, sz / 2, sz / 2, sz / 2);
-  g.addColorStop(0, 'rgba(10,8,6,0.95)'); g.addColorStop(0.55, 'rgba(20,14,10,0.7)'); g.addColorStop(1, 'rgba(0,0,0,0)');
-  c.fillStyle = g; c.fillRect(0, 0, sz, sz);
-  _scorchTex = new THREE.CanvasTexture(cv); return _scorchTex;
+  if (!_scorchTexes.length) {
+    for (let v = 0; v < 4; v++) {
+      const sz = 64, cv = document.createElement('canvas'); cv.width = cv.height = sz;
+      const c = cv.getContext('2d');
+      const blobs = 5 + (Math.random() * 4 | 0);
+      for (let i = 0; i < blobs; i++) {
+        const ang = Math.random() * 6.2832, rad = Math.random() * sz * 0.22;
+        const bx = sz / 2 + Math.cos(ang) * rad, by = sz / 2 + Math.sin(ang) * rad;
+        const br = sz * (0.12 + Math.random() * 0.24), a = 0.5 + Math.random() * 0.45;
+        const g = c.createRadialGradient(bx, by, 0, bx, by, br);
+        g.addColorStop(0, `rgba(8,6,5,${a})`); g.addColorStop(0.6, `rgba(18,12,9,${a * 0.55})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = g; c.beginPath(); c.arc(bx, by, br, 0, 6.2832); c.fill();
+      }
+      for (let i = 0; i < 8; i++) {   // pieniä karstaroiskeita reunoille
+        const ang = Math.random() * 6.2832, rad = sz * (0.2 + Math.random() * 0.26);
+        const px = sz / 2 + Math.cos(ang) * rad, py = sz / 2 + Math.sin(ang) * rad;
+        c.fillStyle = `rgba(10,7,5,${0.3 + Math.random() * 0.3})`;
+        c.beginPath(); c.arc(px, py, sz * (0.02 + Math.random() * 0.045), 0, 6.2832); c.fill();
+      }
+      _scorchTexes.push(new THREE.CanvasTexture(cv));
+    }
+  }
+  return _scorchTexes[(Math.random() * _scorchTexes.length) | 0];
 }
 function addScorch(h){
   if (!surfaceScene) return;
@@ -1445,6 +1464,9 @@ function addScorch(h){
     new THREE.MeshBasicMaterial({ map: scorchTex(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
   m.position.copy(h.point).addScaledVector(_dn, 0.02);
   m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _dn);
+  m.rotateZ(Math.random() * Math.PI * 2);   // satunnainen kierto normaalin ympäri
+  const s = 0.4 + Math.random() * 0.3;       // epäsymmetrinen skaala lisää rosoa
+  m.scale.set(s, s * (0.78 + Math.random() * 0.44), 1);
   m.userData.debris = true;   // raycastit/laser ohittavat palojäljen
   surfaceScene.add(m); _scorches.push(m);
   if (_scorches.length > 40) { const old = _scorches.shift(); old.parent && old.parent.remove(old); old.geometry.dispose(); old.material.dispose(); }
