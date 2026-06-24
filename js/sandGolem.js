@@ -24,7 +24,7 @@ import { toonMat, addOutlines } from './toon.js';
 const TH = 0.62, SH = 0.62;          // lyhyet tukevat jalat
 const UA = 1.18, FA = 1.05;          // pitkät paksut kädet (ulottuvat lähes maahan)
 const HEADR = 0.58;                  // pää (pienempi)
-const HIPX = 0.52, SHX = 1.08;       // leveät lonkat ja hartiat (puolikas)
+const HIPX = 1.12, SHX = 1.08;       // jalat vartalon SIVUILLA, leveät hartiat (puolikas)
 const PELVIS_Y = TH + SH;            // lantio (~1.24) jalkojen päällä
 const SHOULDER_Y = 1.7;              // hartian korkeus lantiosta
 const ARM_BASE = 0.12;               // käsien lepokulma (kyyryssä hieman eteen)
@@ -33,6 +33,7 @@ const LEAN = 0.14;                   // vartalon etukumara
 const HP_MAX = 30;                   // iso → kestää enemmän (pää/vartalo-osumat tappavat lopulta)
 const BITE_DMG = 0.34;               // iskun vahinko pelaajaan
 const ATTACK_RANGE = 3.8;            // iso ulottuvuus
+const ATTACK_T = 1.25;               // iskun kesto (pitkä vaakapyyhkäisy)
 const SPEED = 2.2;                   // raskas könytys
 const EMERGE_T = 3.6, DEAD_T = 2.0, RESPAWN_T = 16;
 const REGROW_T = 9;                  // raajan takaisinkasvu
@@ -258,13 +259,12 @@ export class SandGolem {
   _attack(dt, px, pz, dist){
     this._face(px, pz, dt * 1.5);
     if (this.fallen) { this._setState('walk'); return; }
-    const T = 0.95;
-    // isku osuu ~55 % swingistä
-    if (!this._bitDone && this.t >= T * 0.55) {
+    // isku osuu ~55 % swingistä (vaakapyyhkäisyn keskivaihe)
+    if (!this._bitDone && this.t >= ATTACK_T * 0.55) {
       this._bitDone = true;
-      if (dist < ATTACK_RANGE + 0.8 && this.cbs.bite) { this.cbs.bite(BITE_DMG); this._tremor = 0.12; }
+      if (dist < ATTACK_RANGE + 0.8 && this.cbs.bite) { this.cbs.bite(BITE_DMG); this._tremor = 0.14; }
     }
-    if (this.t >= T) { this._atkCd = 1.1; this._setState('walk'); }
+    if (this.t >= ATTACK_T) { this._atkCd = 1.2; this._setState('walk'); }
   }
 
   _dead(dt){
@@ -300,21 +300,24 @@ export class SandGolem {
     // paksut kädet roikkuvat eteen-ulos ja heiluvat raskaasti (vastatahti)
     A.sh.rotation.set(ARM_BASE + Math.sin(ph + Math.PI) * 0.26, 0, A.side * 0.2);
     A.el.rotation.x = -0.3 - Math.max(0, Math.sin(ph)) * 0.22;
+    let twist = 0;
     if (this.state === 'attack') {
-      const u = Math.min(1, this.t / 0.95);
-      // VAAKApyyhkäisy: käsi nostetaan vaakaan ja heilautetaan sivulta poikki edestä
+      const u = Math.min(1, this.t / ATTACK_T);
+      // PITKÄ vaakapyyhkäisy + vartalon kierto: käsi vaakaan, heilautus sivulta
+      // poikki edestä, ja koko ylävartalo kiertyy (spine.rotation.y) mukaan
       let yaw;
-      if (u < 0.32) yaw = 1.05 * (u / 0.32);                       // veto sivulle (takakierto)
-      else if (u < 0.78) yaw = 1.05 - 2.5 * ((u - 0.32) / 0.46);   // nopea vaakapyyhkäisy poikki
-      else yaw = -1.45;                                            // jää eteen
-      B.sh.rotation.set(-1.4, B.side * yaw, 0);                    // olka vaakaan, heilautus rotation.y:llä
-      B.el.rotation.x = -0.5;
+      if (u < 0.3) { const a = u / 0.3; yaw = 1.5 * a; twist = 0.6 * a; }                       // veto sivulle + kierto taakse
+      else if (u < 0.82) { const a = (u - 0.3) / 0.52; yaw = 1.5 - 3.4 * a; twist = 0.6 - 1.15 * a; }   // pitkä pyyhkäisy + kierron purku
+      else { yaw = -1.9; twist = -0.55; }                                                       // jää eteen poikki
+      B.sh.rotation.set(-1.35, B.side * yaw, 0);                   // olka vaakaan, heilautus rotation.y:llä
+      B.el.rotation.x = -0.45;
     } else {
       B.sh.rotation.set(ARM_BASE + Math.sin(ph) * 0.26, 0, B.side * 0.2);
       B.el.rotation.x = -0.3 - Math.max(0, Math.sin(ph + Math.PI)) * 0.22;
     }
-    // vartalo: etukumara (LEAN) + osuman nytkähdys taakse + raskas keinunta
+    // vartalo: etukumara (LEAN) + osuman nytkähdys taakse + raskas keinunta + iskukierto
     this.spine.rotation.x = LEAN - this._recoil * 0.5 + (walking ? Math.sin(ph * 2) * 0.04 : 0);
+    this.spine.rotation.y = B.side * twist;   // ylävartalon kierto iskuun (lähtee sivulta)
     this.spine.rotation.z = walking ? Math.sin(ph) * 0.07 : 0;
     this.pelvis.position.y = PELVIS_Y + (walking ? Math.abs(Math.sin(ph)) * 0.07 : 0);
     // raajojen takaisinkasvu (skaalaus)
