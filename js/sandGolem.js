@@ -23,7 +23,7 @@ import { toonMat, addOutlines } from './toon.js';
 // pienet jalat, iso matala pää) referenssikuvan mukaan
 const TH = 0.62, SH = 0.62;          // lyhyet tukevat jalat
 const UA = 1.18, FA = 1.05;          // pitkät paksut kädet (ulottuvat lähes maahan)
-const HEADR = 0.86;                  // iso pää
+const HEADR = 0.58;                  // pää (pienempi)
 const HIPX = 0.52, SHX = 1.08;       // leveät lonkat ja hartiat (puolikas)
 const PELVIS_Y = TH + SH;            // lantio (~1.24) jalkojen päällä
 const SHOULDER_Y = 1.7;              // hartian korkeus lantiosta
@@ -93,7 +93,7 @@ export class SandGolem {
     const g = new THREE.Group(); this.group = g;
     // halkeillut kivipinta (terrakotta) + fasetoitu (flatShading) → lohkomainen kivi
     this.sandMat = toonMat({ map: rockTex(), flatShading: true });
-    this.sandMat.color.setRGB(1.15, 1.1, 1.05);            // hieman kirkkaampi (toon-ramppi tummentaa)
+    this.sandMat.color.setRGB(0.6, 0.5, 0.44);             // tummempi kivipinta
     this.sandMat.shadowSide = THREE.BackSide;
     const mouthMat = new THREE.MeshBasicMaterial({ color: 0x0a0503 });   // tummat onkalot (silmät/suu)
     this.lift = new THREE.Group(); g.add(this.lift);        // emerge/kaatuminen
@@ -124,10 +124,9 @@ export class SandGolem {
     // kaksi syvää tummaa kuoppaa pään ETUPINNALLE (kuten kuvassa) — muuten kasvoton.
     // Lapsia HEAD-meshille → head-lokaalikoordinaatit (etunapa z ≈ HEADR).
     const hole = (x, y, z, sx, sy, sz, r) => { const e = new THREE.Mesh(new THREE.SphereGeometry(r || 0.2, 10, 8), mouthMat); e.position.set(x, y, z); e.scale.set(sx, sy, sz); head.add(e); return e; };
-    hole(-0.26, 0.16, HEADR * 0.86, 1.0, 1.3, 0.7);
-    hole(0.26, 0.16, HEADR * 0.86, 1.0, 1.3, 0.7);
-    // suu: leveä tumma onkalo alaspäin kasvoilla, aukeaa iskiessä
-    const mouth = hole(0, -0.22, HEADR * 0.84, 1.8, 0.12, 0.7); this.mouth = mouth;
+    hole(-0.2, 0.12, HEADR * 0.9, 1.0, 1.15, 0.6, 0.11);   // pienet silmäkuopat
+    hole(0.2, 0.12, HEADR * 0.9, 1.0, 1.15, 0.6, 0.11);
+    this.mouth = null;   // ei suuta lainkaan
 
     // ---- paksut pitkät kädet (hartia → olka → kyynär → kyynärvarsi → nyrkki) ----
     const arm = (side) => {
@@ -240,9 +239,7 @@ export class SandGolem {
     this._face(px, pz, dt * 1.5);
     if (this.fallen) { this._setState('walk'); return; }
     const T = 0.95;
-    // suu auki swingin ajan; isku osuu ~55 % kohdalla
-    if (this.t > T * 0.2 && this.t < T * 0.8) this.mouthOpen = Math.min(1, this.mouthOpen + dt * 8);
-    else this.mouthOpen = Math.max(0, this.mouthOpen - dt * 6);
+    // isku osuu ~55 % swingistä
     if (!this._bitDone && this.t >= T * 0.55) {
       this._bitDone = true;
       if (dist < ATTACK_RANGE + 0.8 && this.cbs.bite) { this.cbs.bite(BITE_DMG); this._tremor = 0.12; }
@@ -272,10 +269,6 @@ export class SandGolem {
   // asento: kävely / isku / kaatuminen + recoil
   _pose(dt){
     const A = this.armL, B = this.armR, L = this.legL, R = this.legR;
-    if (this.mouthOpen === undefined) this.mouthOpen = 0;
-    // kasvoton lepotilassa: suu näkyy VAIN auetessaan (iskun aikana)
-    this.mouth.visible = this.mouthOpen > 0.03;
-    this.mouth.scale.y = 0.12 + this.mouthOpen * 0.95;
     const walking = this.state === 'walk' && !this.fallen;
     const ph = this.walkPhase;
     // lyhyet tukevat jalat: pieni heilahdus + polven taittuminen
