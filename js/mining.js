@@ -138,6 +138,8 @@ let sparks = null, sparkGeo = null, sparkMat = null;   // suuliekin kipinät (TH
 let _spkPos = null, _spkVel = null, _spkLife = null, _spkMax = null, _spkSize = null, _spkHead = 0;
 let _gunHitHandler = null;          // surface.js rekisteröi kivien/sukkulan osumakäsittelyn
 export function setGunHitHandler(fn){ _gunHitHandler = fn; }
+let _pickHitHandler = null;         // surface.js rekisteröi vihollisen hakkuosuman
+export function setPickaxeHitHandler(fn){ _pickHitHandler = fn; }
 const GUN_POS = new THREE.Vector3(0.34, -0.40, -0.55);
 const GUN_ROT = new THREE.Vector3(0.03, -0.12, 0.0);
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3();
@@ -597,7 +599,11 @@ function emitStrikeDebris(){
     return;
   }
   const h = raycastHit();
-  if (h) emitBurst(h.point.x, h.point.y, h.point.z, h.object.material, STRIKE_BURST);
+  if (!h) return;
+  // vihollinen (esim. Regolith-mato): hoidetaan rekisteröidyssä käsittelijässä
+  let o = h.object; while (o && !(o.userData && o.userData.enemy)) o = o.parent;
+  if (o && _pickHitHandler) { _pickHitHandler(h); return; }
+  emitBurst(h.point.x, h.point.y, h.point.z, h.object.material, STRIKE_BURST);
 }
 function updateBursts(dt){
   for (const b of bursts) {

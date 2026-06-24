@@ -8,9 +8,10 @@ import { resetWarp } from './warp.js';
 import { LANDING_MAX_EFF, IMPACT_MAX, destroyShip, hideReentryFx } from './reentry.js';
 import { makeSky } from './sky.js';
 import { NOISE_GLSL } from './shaders.js';
-import { initMining, updateMining, clearMining, setMineralEnv, setMineralRock, resolveCollision, inventory, spawnHitDebris, setGunHitHandler } from './mining.js';
+import { initMining, updateMining, clearMining, setMineralEnv, setMineralRock, resolveCollision, inventory, spawnHitDebris, setGunHitHandler, setPickaxeHitHandler } from './mining.js';
 import { S } from './state.js';
 import { toonMat, expandGeo, outlineMaterial } from './toon.js';
+import { RegolithWorm } from './regolithWorm.js';
 
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
 let pmrem = null;
@@ -1483,11 +1484,55 @@ function damageShuttle(h){
     S.shuttleHp = null;
   }
 }
-// rekisteröi laserin osumakäsittely (kivet + sukkula); mineraalit hoituu mining.js:ssä
+// ---- viholliset (Regolith-mato): vahinko hakulla/aseella + pelaajan terveys ----
+let worm = null;
+const GUN_ENEMY_DMG = 1, PICK_ENEMY_DMG = 1;
+const hurtFlashEl = document.getElementById('hurtFlash');
+// etsi vihollisentiteetti osuman meshin vanhemmista
+function enemyOf(o){ while (o && !(o.userData && o.userData.enemy)) o = o.parent; return o ? o.userData.enemy : null; }
+function damageEnemy(enemy, h, amount){
+  if (!enemy || !enemy.takeDamage) return;
+  spawnHitDebris(h.point.x, h.point.y, h.point.z, enemy.bodyMat || h.object.material, false);   // sirupurske osumaan
+  enemy.takeDamage(amount, h.point);
+}
+// pelaajan terveys + kuolema pinnalla
+let _surfaceDead = false;
+function hurtPlayer(dmg){
+  if (S.mode !== 'surface' || _surfaceDead) return;
+  S.health = Math.max(0, (S.health != null ? S.health : 1) - dmg);
+  if (hurtFlashEl) {   // punainen vauriovälähdys
+    hurtFlashEl.style.transition = 'none'; hurtFlashEl.style.opacity = '0.9';
+    hurtFlashEl.getBoundingClientRect();
+    hurtFlashEl.style.transition = 'opacity 0.6s ease'; hurtFlashEl.style.opacity = '0';
+  }
+  if (S.health <= 0) surfaceDeath('Regolith-mato sai sinut.');
+}
+function surfaceDeath(reason){
+  _surfaceDead = true;
+  document.getElementById('deathReason').textContent = reason;
+  document.getElementById('deathOverlay').style.display = 'flex';
+}
+// kuolemaruudun klikkaus pinnalla: herää uudelleen aloituspisteeseen (ei avaruuteen)
+document.getElementById('deathOverlay').addEventListener('click', () => {
+  if (!_surfaceDead) return;
+  _surfaceDead = false;
+  S.health = 1; surfX = 0; surfZ = 0;
+  if (worm) worm.reset();
+  document.getElementById('deathOverlay').style.display = 'none';
+});
+
+// rekisteröi laserin osumakäsittely (kivet + sukkula + viholliset); mineraalit hoituu mining.js:ssä
 setGunHitHandler((h) => {
+  const enemy = enemyOf(h.object);
+  if (enemy) { damageEnemy(enemy, h, GUN_ENEMY_DMG); return; }
   const o = h.object;
   if (o.userData && o.userData.scatter && h.instanceId != null) { damageScatter(o.userData.scatter, h.instanceId, h.point, o.material); return; }
   if (o.userData && o.userData.shuttle) damageShuttle(h);
+});
+// hakun melee-osuma vihollisiin (mining.js kutsuu kun isku osuu vihollismeshiin)
+setPickaxeHitHandler((h) => {
+  const enemy = enemyOf(h.object);
+  if (enemy) damageEnemy(enemy, h, PICK_ENEMY_DMG);
 });
 
 /* ---- kasvillisuus ja kivivariaatiot (tiekartan vaihe 3) ---- */
@@ -2397,6 +2442,8 @@ function enterSurfaceScene(b, mode){
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
   clearMining();
+  worm = null;   // mato + kumpu ovat surfaceScenen lapsia → vapautuvat scenen dispose-traversessa
+  _surfaceDead = false;
   if (visorEl) { visorEl.style.display = 'none'; hudReturnEl.style.display = 'none'; }
   S.shuttlePos = null;
   S.mode = 'space';
@@ -2428,6 +2475,14 @@ function leaveSurfaceScene(){
 function enterSurface(b){
   enterSurfaceScene(b, 'surface');
   surfX = 0; surfZ = 0;
+  S.health = 1; _surfaceDead = false;
+  // Regolith-mato: vain Marsin pinnalla (kävelymoodi)
+  if (b.def.name === 'Mars') {
+    worm = new RegolithWorm(surfaceScene, surfHeightFn, {
+      bite: (dmg) => hurtPlayer(dmg),
+      burst: (x, y, z, big, mat) => { for (let k = 0; k < (big ? 8 : 4); k++) spawnHitDebris(x, y + 0.3, z, mat, big && k < 2); },
+    });
+  }
   // vuorokausi alkaa aamupäivästä; aurinko selän taakse laskeutuessa,
   // jotta maisema näkyy valaistuna
   sunDirAt(dayPhase0, _sunDir);
@@ -2497,6 +2552,11 @@ function detectContacts(){
   const push = (x, z, name, sizeWord, big) => { const d = Math.hypot(x - surfX, z - surfZ); if (d <= RADAR_RANGE) list.push({ x, z, name, sizeWord, big, d }); };
   if (surfaceBody && surfaceBody.def.name === 'Kuu') push(APOLLO_SITE.x, APOLLO_SITE.z, 'APOLLO-PAIKKA', 'SUURI', true);
   if (S.shuttlePos) push(S.shuttlePos.x, S.shuttlePos.z, 'SUKKULA', 'SUURI', true);
+  // Regolith-mato viholliskontaktina (punainen) — näkyy kun jäljittää/iskee
+  if (worm && worm.alive && (worm.mound.visible || worm.group.visible)) {
+    const d = Math.hypot(worm.gx - surfX, worm.gz - surfZ);
+    if (d <= RADAR_RANGE) list.push({ x: worm.gx, z: worm.gz, name: 'REGOLITH-MATO', sizeWord: 'VIHOLLINEN', big: false, hostile: true, d });
+  }
   return list;
 }
 function buildHud(){
@@ -2582,9 +2642,10 @@ function drawRadar(contacts, nearest, fwdAng){
     const bx = cx - Math.sin(rel) * rr, by = cy - Math.cos(rel) * rr;
     const age = ((phase - rr / R) % 1 + 1) % 1;
     const ping = 0.32 + 0.68 * Math.exp(-age * 4.0);
-    c.fillStyle = `rgba(${ct.big ? '120,240,255' : '255,200,90'},${ping.toFixed(2)})`;
-    c.shadowColor = ct.big ? cyan : '#ffb000'; c.shadowBlur = 7 * ping;
-    c.beginPath(); c.arc(bx, by, ct.big ? 4.5 : 3, 0, 6.2832); c.fill();
+    const rgb = ct.hostile ? '255,70,60' : (ct.big ? '120,240,255' : '255,200,90');
+    c.fillStyle = `rgba(${rgb},${ping.toFixed(2)})`;
+    c.shadowColor = ct.hostile ? '#ff3a30' : (ct.big ? cyan : '#ffb000'); c.shadowBlur = 7 * ping;
+    c.beginPath(); c.arc(bx, by, ct.hostile ? 4 : (ct.big ? 4.5 : 3), 0, 6.2832); c.fill();
   }
   c.shadowBlur = 0;
   if (nearest) {
@@ -2623,8 +2684,10 @@ function drawVitals(c, W, H){
     c.fillStyle = col; c.shadowColor = col; c.shadowBlur = 6;
     c.fillRect(bx + 1, y + 1, (bw - 2) * v, bh - 2); c.shadowBlur = 0;
   };
-  bar('HAPPI', S.oxygen != null ? S.oxygen : 1, 58, '#5fe0a0');
-  bar('RUNKO', S.hull != null ? S.hull : 1, 104, '#62e8ff');
+  // pinnalla pelaajan TERVEYS on olennaisin (viholliset) → kolme mittaria
+  bar('TERVEYS', S.health != null ? S.health : 1, 46, '#ff8a6a');
+  bar('HAPPI', S.oxygen != null ? S.oxygen : 1, 84, '#5fe0a0');
+  bar('RUNKO', S.hull != null ? S.hull : 1, 122, '#62e8ff');
   screenSheen(c, W, H);
 }
 function updateHelmetHud(){
@@ -2686,6 +2749,16 @@ export function updateSurface(dt){
     surfHeightFn(surfX, surfZ) + 2.4 + bobY,
     surfZ + rZ * sway
   );
+  // vihollinen: päivitä mato + maan tärinä (kameran ravistus) sen mukaan
+  if (worm) {
+    worm.update(dt, surfX, surfZ, camera);
+    const tr = worm.tremor;
+    if (tr > 0.001) {
+      camera.position.x += (Math.random() - 0.5) * tr;
+      camera.position.y += (Math.random() - 0.5) * tr;
+      camera.position.z += (Math.random() - 0.5) * tr;
+    }
+  }
   updateStorm(dt);   // myrskyn ajoitus, näkyvyys ja pölyjuovat (kameran ympärillä)
   updateHelmetHud();
 }
@@ -2899,5 +2972,10 @@ export function surfDebug(){
     setRoll(r){ descRoll = r; },
     storm: () => ({ intens: storm.intens, active: S.simTime < storm.endT, approach: (S.simTime - storm.startT) / STORM_APPROACH, windX: storm.windX, windZ: storm.windZ }),
     setStorm(on){ if (on) { storm.startT = S.simTime; storm.endT = S.simTime + 1e9; const a = Math.random() * 6.283; storm.windX = Math.cos(a); storm.windZ = Math.sin(a); } else { storm.endT = -1; } },
+    worm,
+    wormState: () => worm ? { state: worm.state, hp: worm.hp, rise: +worm.rise.toFixed(2), gx: +worm.gx.toFixed(1), gz: +worm.gz.toFixed(1) } : null,
+    wormStrike: () => { if (worm) worm.forceStrike(surfX, surfZ); },
+    health: () => S.health,
+    setHealth(v){ S.health = Math.max(0, Math.min(1, v)); },
   };
 }

@@ -16,6 +16,7 @@ export const S = {
   hullHeat: 0,       // rungon kuumennus 0–1 (ilmakehäsyöksy) — näkyy kojelaudalla
   hull: 1,           // rungon kestävyys 0–1 (vaurioituu kuumuudesta, korjataan runkopaneelilla)
   oxygen: 1,         // aluksen happi 0–1 (kuluu koko ajan, täytetään happisäiliöllä)
+  health: 1,         // pelaajan terveys pinnalla 0–1 (viholliset vahingoittavat; 0 = kuolema)
   inv: {},           // louhittu/jalostettu varasto: { resurssi-id: määrä }
   targetIdx: 8,      // Neptunus oletuskohteena
   keys: {},
