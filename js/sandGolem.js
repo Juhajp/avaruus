@@ -39,6 +39,8 @@ const REGROW_T = 9;                  // raajan takaisinkasvu
 const EMERGE_DEPTH = 5.2;            // syvyys josta nousee
 
 const _wp = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0), _nrm = new THREE.Vector3();
+const _qTilt = new THREE.Quaternion(), _qYaw = new THREE.Quaternion();
 
 function jitter(geo, amt){
   const p = geo.attributes.position;
@@ -52,24 +54,33 @@ function rockTex(){
   if (_rockTex) return _rockTex;
   const s = 256, cv = document.createElement('canvas'); cv.width = cv.height = s;
   const c = cv.getContext('2d');
-  c.fillStyle = '#9c5a3a'; c.fillRect(0, 0, s, s);
-  for (let i = 0; i < 2400; i++) {   // laikutus (kivimäinen sävyvaihtelu)
-    const x = Math.random() * s, y = Math.random() * s, r = 1 + Math.random() * 3.5;
-    c.fillStyle = Math.random() < 0.5 ? `rgba(58,28,16,${0.05 + Math.random() * 0.13})` : `rgba(196,134,92,${0.05 + Math.random() * 0.13})`;
+  c.fillStyle = '#834a30'; c.fillRect(0, 0, s, s);   // tummempi pohja
+  // karkea rakeisuus (grunge)
+  for (let i = 0; i < 4200; i++) {
+    const x = Math.random() * s, y = Math.random() * s, r = 0.6 + Math.random() * 3.0;
+    c.fillStyle = Math.random() < 0.55 ? `rgba(40,18,10,${0.06 + Math.random() * 0.18})` : `rgba(176,118,82,${0.04 + Math.random() * 0.13})`;
     c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill();
+  }
+  // tummat likaläiskät (grime) — epätasaiset isot tahrat
+  for (let i = 0; i < 30; i++) {
+    const x = Math.random() * s, y = Math.random() * s, r = 8 + Math.random() * 34;
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(24,11,6,${0.18 + Math.random() * 0.22})`); g.addColorStop(1, 'rgba(24,11,6,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill();
   }
   const crackle = (col, w, n, len) => {   // rosoiset halkeamat
     c.strokeStyle = col;
     for (let i = 0; i < n; i++) {
       let x = Math.random() * s, y = Math.random() * s;
-      c.lineWidth = w * (0.6 + Math.random()); c.beginPath(); c.moveTo(x, y);
-      const seg = 4 + (Math.random() * 6 | 0);
+      c.lineWidth = w * (0.5 + Math.random()); c.beginPath(); c.moveTo(x, y);
+      const seg = 4 + (Math.random() * 7 | 0);
       for (let k = 0; k < seg; k++) { x += (Math.random() - 0.5) * len; y += (Math.random() - 0.5) * len; c.lineTo(x, y); }
       c.stroke();
     }
   };
-  crackle('rgba(26,12,6,0.85)', 2.4, 28, 64);     // syvät tummat halkeamat
-  crackle('rgba(216,164,124,0.4)', 1.0, 20, 50);  // vaaleat ylävalot (kohokuvio)
+  crackle('rgba(16,7,3,0.9)', 2.8, 48, 70);       // tiheämmät syvät halkeamat
+  crackle('rgba(14,6,3,0.6)', 1.4, 60, 38);       // hienot säröt
+  crackle('rgba(196,148,112,0.35)', 1.0, 22, 46); // niukat vaaleat kohokuviot
   _rockTex = new THREE.CanvasTexture(cv);
   _rockTex.wrapS = _rockTex.wrapT = THREE.RepeatWrapping; _rockTex.repeat.set(1.6, 1.6);
   return _rockTex;
@@ -100,11 +111,11 @@ export class SandGolem {
     const pelvis = new THREE.Group(); pelvis.position.y = PELVIS_Y; this.lift.add(pelvis); this.pelvis = pelvis;
 
     const cap = (len, rT, rB) => {                          // kapseli alaspäin nivelestä (0 → -len)
-      const geo = new THREE.CapsuleGeometry((rT + rB) / 2, Math.max(0.01, len - (rT + rB)), 4, 12);
-      jitter(geo, 0.06);
+      const geo = new THREE.CapsuleGeometry((rT + rB) / 2, Math.max(0.01, len - (rT + rB)), 5, 14);
+      jitter(geo, 0.1);
       const m = new THREE.Mesh(geo, this.sandMat); m.position.y = -len / 2; return m;
     };
-    const ball = (r, mat) => { const geo = new THREE.SphereGeometry(r, 12, 10); jitter(geo, r * 0.07); return new THREE.Mesh(geo, mat || this.sandMat); };
+    const ball = (r, mat) => { const geo = new THREE.SphereGeometry(r, 13, 11); jitter(geo, r * 0.12); return new THREE.Mesh(geo, mat || this.sandMat); };
     const ballAt = (r, x, y, z, mat) => { const m = ball(r, mat); m.position.set(x, y, z); return m; };
     const joint = (parent, x, y, z) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
 
@@ -124,8 +135,8 @@ export class SandGolem {
     // kaksi syvää tummaa kuoppaa pään ETUPINNALLE (kuten kuvassa) — muuten kasvoton.
     // Lapsia HEAD-meshille → head-lokaalikoordinaatit (etunapa z ≈ HEADR).
     const hole = (x, y, z, sx, sy, sz, r) => { const e = new THREE.Mesh(new THREE.SphereGeometry(r || 0.2, 10, 8), mouthMat); e.position.set(x, y, z); e.scale.set(sx, sy, sz); head.add(e); return e; };
-    hole(-0.2, 0.12, HEADR * 0.9, 1.0, 1.15, 0.6, 0.11);   // pienet silmäkuopat
-    hole(0.2, 0.12, HEADR * 0.9, 1.0, 1.15, 0.6, 0.11);
+    hole(-0.17, 0.13, HEADR * 0.92, 1.0, 1.1, 0.6, 0.075);   // hyvin pienet silmäkuopat
+    hole(0.17, 0.13, HEADR * 0.92, 1.0, 1.1, 0.6, 0.075);
     this.mouth = null;   // ei suuta lainkaan
 
     // ---- paksut pitkät kädet (hartia → olka → kyynär → kyynärvarsi → nyrkki) ----
@@ -298,12 +309,24 @@ export class SandGolem {
   }
 
   _applyTransform(){
-    const gy = this.heightFn ? this.heightFn(this.gx, this.gz) : 0;
+    const h = this.heightFn;
+    const gy = h ? h(this.gx, this.gz) : 0;
+    // SLOPE-suuntaus: kallista golem maaston normaalin mukaan (keskidifferenssi) →
+    // jalat seuraavat rinnettä, runko ei uppoa ylämäkeen eikä leiju alamäessä
+    if (h) {
+      const e = 1.2;
+      const dhx = (h(this.gx + e, this.gz) - h(this.gx - e, this.gz)) / (2 * e);
+      const dhz = (h(this.gx, this.gz + e) - h(this.gx, this.gz - e)) / (2 * e);
+      _nrm.set(-dhx, 1, -dhz).normalize();
+    } else _nrm.set(0, 1, 0);
+    _qYaw.setFromAxisAngle(_up, this.facing);
+    _qTilt.setFromUnitVectors(_up, _nrm);
+    this.group.quaternion.multiplyQuaternions(_qTilt, _qYaw);   // suunta ensin, sitten kallistus rinteeseen
     this.group.position.set(this.gx, gy + (this._sink || 0), this.gz);
-    this.group.rotation.y = this.facing;
-    // emerge-nousu + kaatuminen (kierto eteen + lasku)
-    this.lift.position.y = (this._emergeY || 0) - this._fall * (PELVIS_Y * 0.55);
-    this.lift.rotation.x = this._fall * 1.45;
+    // emerge-nousu + kaatuminen: maltillinen etukallistus + pieni nosto, ettei
+    // eteen kurottava pää uppoa maahan (kierto jalkatason ympäri muuten upottaisi)
+    this.lift.position.y = (this._emergeY || 0) + this._fall * 0.35;
+    this.lift.rotation.x = this._fall * 1.05;
   }
 
   // ---- vahinko ----
