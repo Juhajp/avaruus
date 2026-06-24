@@ -314,24 +314,27 @@ function makeSparks(){
   sparkGeo = g; _spkHead = 0;
   return sparks;
 }
-// sinkoa kipinät SUUPIIPUSTA eteenpäin kapeana viuhkana (_muz, _fwd fireGunissa)
-function spawnMuzzleSparks(){
+// sinkoa kipinöitä PISTEESTÄ (origin) annettuun pääsuuntaan kapeana viuhkana.
+// Käytetään osumakohdassa: kipinät lentävät iskupisteestä ulospäin (kimmonta).
+const _sd = new THREE.Vector3();
+function spawnSparksAt(ox, oy, oz, dx, dy, dz){
   if (!sparks) return;
   const aS = sparkGeo.attributes.aS.array;
-  // kaksi kohtisuoraa akselia _fwd:lle
-  _bx.set(0, 1, 0); if (Math.abs(_fwd.y) > 0.9) _bx.set(1, 0, 0);
-  _bz.crossVectors(_fwd, _bx).normalize(); _bx.crossVectors(_bz, _fwd).normalize();
-  const n = 5 + (Math.random() * 4 | 0);          // pieni purske
+  _sd.set(dx, dy, dz); if (_sd.lengthSq() < 1e-6) _sd.set(0, 1, 0); _sd.normalize();
+  // kaksi kohtisuoraa akselia pääsuunnalle
+  _bx.set(0, 1, 0); if (Math.abs(_sd.y) > 0.9) _bx.set(1, 0, 0);
+  _bz.crossVectors(_sd, _bx).normalize(); _bx.crossVectors(_bz, _sd).normalize();
+  const n = 7 + (Math.random() * 6 | 0);          // pieni purske
   for (let k = 0; k < n; k++) {
     const ang = Math.random() * 6.2832, ca = Math.cos(ang), sa = Math.sin(ang);
     const ux = _bx.x * ca + _bz.x * sa, uy = _bx.y * ca + _bz.y * sa, uz = _bx.z * ca + _bz.z * sa;   // sivusuunta
-    const fwdSp = 4 + Math.random() * 6, sideSp = Math.random() * 2.6;
+    const fwdSp = 3 + Math.random() * 6, sideSp = Math.random() * 3.2;
     const i = _spkHead; _spkHead = (_spkHead + 1) % SPARK_POOL;
-    _spkPos[i * 3] = _muz.x; _spkPos[i * 3 + 1] = _muz.y; _spkPos[i * 3 + 2] = _muz.z;
-    _spkVel[i * 3] = _fwd.x * fwdSp + ux * sideSp;
-    _spkVel[i * 3 + 1] = _fwd.y * fwdSp + uy * sideSp + 0.3;
-    _spkVel[i * 3 + 2] = _fwd.z * fwdSp + uz * sideSp;
-    _spkMax[i] = _spkLife[i] = 0.10 + Math.random() * 0.16;       // lyhytikäisiä
+    _spkPos[i * 3] = ox; _spkPos[i * 3 + 1] = oy; _spkPos[i * 3 + 2] = oz;
+    _spkVel[i * 3] = _sd.x * fwdSp + ux * sideSp;
+    _spkVel[i * 3 + 1] = _sd.y * fwdSp + uy * sideSp + 0.6;   // pieni nosto
+    _spkVel[i * 3 + 2] = _sd.z * fwdSp + uz * sideSp;
+    _spkMax[i] = _spkLife[i] = 0.12 + Math.random() * 0.20;       // lyhytikäisiä
     _spkSize[i] = 1.0 + Math.random() * 1.4;
     aS[i] = _spkSize[i];
   }
@@ -442,13 +445,16 @@ function fireGun(){
   const hit = gunRaycast();                                       // näkymätön hitscan → vahinko
   recoil = 1;   // rekyyli + suuliekki (vain aseeseen)
   if (_muzzleFlash) _muzzleFlash.rotation.z = Math.random() * Math.PI * 2;   // satunnainen piikkikierto
-  spawnMuzzleSparks();            // kipinäpurske suupiipusta
-  // suuliekin hetkellinen valo: valaisee lähiympäristön pimeässä
-  if (flashLight) {
+  if (hit) {
+    // kipinät lentävät OSUMAKOHDASTA ulospäin (takaisin ampujaa kohti = kimmonta)
+    spawnSparksAt(hit.point.x, hit.point.y, hit.point.z, -_fwd.x, -_fwd.y, -_fwd.z);
+    if (flashLight) { flashLight.position.copy(hit.point).addScaledVector(_fwd, -0.3); _flLife = _flMax = FLASH_LIFE; }
+    applyGunDamage(hit);          // vahinko osumakohteeseen
+  } else if (flashLight) {
+    // ei osumaa: pelkkä suuliekin valo nokassa
     flashLight.position.copy(_muz).addScaledVector(_fwd, 0.3);
     _flLife = _flMax = FLASH_LIFE;
   }
-  if (hit) applyGunDamage(hit);   // vahinko osumakohteeseen
 }
 function updateFlash(dt){
   if (flashLight && _flLife > 0) {

@@ -1390,6 +1390,8 @@ function resolveStaticCollision(x, z){
   for (const o of obstacles) push(o.x, o.z, o.r + PLAYER_R);
   // pysäköity sukkula (cockpit.js asettaa S.shuttlePos pysäköidessä)
   if (S.shuttlePos) push(S.shuttlePos.x, S.shuttlePos.z, 3.0 + PLAYER_R);
+  // tuhoutuneen sukkulan hylky (cockpit.js asettaa S.wreckPos tuhoutuessa)
+  if (S.wreckPos) push(S.wreckPos.x, S.wreckPos.z, 3.0 + PLAYER_R);
   // isot kivet: instanssimatriisien vaakaskaalasta säde (pienet ohitetaan)
   for (const s of scatters) {
     if (!s.collide) continue;
@@ -2446,6 +2448,7 @@ function leaveSurfaceScene(){
   clearMining();
   worm = null;   // mato + kumpu ovat surfaceScenen lapsia → vapautuvat scenen dispose-traversessa
   _surfaceDead = false;
+  S.wreckPos = null;   // hylyn törmäyseste pois scenen mukana
   if (visorEl) { visorEl.style.display = 'none'; hudReturnEl.style.display = 'none'; }
   S.shuttlePos = null;
   S.mode = 'space';

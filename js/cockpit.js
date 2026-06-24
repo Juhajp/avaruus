@@ -1645,6 +1645,7 @@ export function nearParkedShuttle(){
 function parkShuttle(){
   const sd = surfDebug();
   if (!sd.scene) return;
+  S.wreckPos = null;                   // tuore sukkula → ei hylkyä
   const m = makeShuttleModel(false);   // pysäköitynä valot sammuksissa
   m.scale.setScalar(1.3);
   // viistosti pelaajan vasempaan etukulmaan, nokka saapumissuuntaan
@@ -1761,6 +1762,7 @@ function destroyParkedShuttle(){
   w.scale.setScalar(scl); w.position.copy(pos); w.quaternion.copy(quat);
   w.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
   sc.add(w); _wreck = w;
+  S.wreckPos = pos.clone();   // törmäyseste: pelaaja ei kävele hylyn läpi (surface.js)
 }
 setShuttleDestroyer(destroyParkedShuttle);
 
