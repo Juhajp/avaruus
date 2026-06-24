@@ -125,12 +125,11 @@ export class SandGolem {
 
     // ---- MASSIIVINEN pyöreä vartalo (limittäisistä lohkareista) ----
     const spine = joint(pelvis, 0, 0, 0); this.spine = spine;
-    const bodyParts = [
-      ballAt(1.12, 0, 0.95, 0),     // päämassa
-      ballAt(1.02, 0, 0.35, 0.2),   // pömppövatsa (eteen)
-      ballAt(0.92, 0, 1.5, -0.05),  // hartiamassa (ylä, hieman taakse → pää erottuu edestä)
-    ];
-    bodyParts.forEach(m => { m.scale.set(1.25, 1.12, 1.12); m.userData.part = 'torso'; spine.add(m); });
+    // päärynämäinen massa: ALAOSA LEVEÄ, yläosa kapeampi
+    const lower = ballAt(1.2, 0, 0.32, 0.16); lower.scale.set(1.5, 1.0, 1.38);     // leveä matala alavatsa
+    const mid = ballAt(1.05, 0, 0.92, 0.02); mid.scale.set(1.34, 1.12, 1.22);       // keskimassa
+    const upper = ballAt(0.84, 0, 1.55, -0.05); upper.scale.set(1.15, 1.12, 1.06);  // kapea hartiamassa (yläosa)
+    [lower, mid, upper].forEach(m => { m.userData.part = 'torso'; spine.add(m); });
 
     // ---- ISO matala pää joka TYÖNTYY eteen ylävartalosta (kyyryssä) + tummat onkalot ----
     const neck = joint(spine, 0, SHOULDER_Y - 0.05, 0.88); this.neck = neck;
@@ -138,9 +137,15 @@ export class SandGolem {
     head.userData.part = 'head';
     // kaksi syvää tummaa kuoppaa pään ETUPINNALLE (kuten kuvassa) — muuten kasvoton.
     // Lapsia HEAD-meshille → head-lokaalikoordinaatit (etunapa z ≈ HEADR).
-    const hole = (x, y, z, sx, sy, sz, r) => { const e = new THREE.Mesh(new THREE.SphereGeometry(r || 0.2, 10, 8), mouthMat); e.position.set(x, y, z); e.scale.set(sx, sy, sz); head.add(e); return e; };
-    hole(-0.17, 0.13, HEADR * 0.92, 1.0, 1.1, 0.6, 0.075);   // hyvin pienet silmäkuopat
-    hole(0.17, 0.13, HEADR * 0.92, 1.0, 1.1, 0.6, 0.075);
+    // silmät: PIENET, EPÄSYMMETRISET ja EPÄMÄÄRÄISEN muotoiset tummat kuopat
+    const eye = (x, y, r, sx, sy, rot) => {
+      const geo = new THREE.IcosahedronGeometry(r, 0); jitter(geo, r * 0.45);   // särmikäs/epämääräinen
+      const e = new THREE.Mesh(geo, mouthMat);
+      e.position.set(x, y, HEADR * 0.93); e.scale.set(sx, sy, 0.55); e.rotation.z = rot;
+      head.add(e); return e;
+    };
+    eye(-0.15, 0.16, 0.058, 1.2, 0.8, 0.4);    // vasen: pieni, ylempänä, vino
+    eye(0.19, 0.10, 0.07, 0.8, 1.25, -0.6);     // oikea: hieman isompi, alempana, eri muoto/kulma
     this.mouth = null;   // ei suuta lainkaan
 
     // ---- paksut pitkät kädet (hartia → olka → kyynär → kyynärvarsi → nyrkki) ----
@@ -297,9 +302,13 @@ export class SandGolem {
     A.el.rotation.x = -0.3 - Math.max(0, Math.sin(ph)) * 0.22;
     if (this.state === 'attack') {
       const u = Math.min(1, this.t / 0.95);
-      const swing = u < 0.4 ? -1.9 * (u / 0.4) : -1.9 + 3.4 * ((u - 0.4) / 0.6);   // nosto → murskaava isku alas
-      B.sh.rotation.set(swing, 0, B.side * 0.2 - 0.3 * Math.min(1, u * 2));
-      B.el.rotation.x = -0.25 - (1 - Math.min(1, Math.abs(u - 0.5) * 2)) * 0.9;
+      // VAAKApyyhkäisy: käsi nostetaan vaakaan ja heilautetaan sivulta poikki edestä
+      let yaw;
+      if (u < 0.32) yaw = 1.05 * (u / 0.32);                       // veto sivulle (takakierto)
+      else if (u < 0.78) yaw = 1.05 - 2.5 * ((u - 0.32) / 0.46);   // nopea vaakapyyhkäisy poikki
+      else yaw = -1.45;                                            // jää eteen
+      B.sh.rotation.set(-1.4, B.side * yaw, 0);                    // olka vaakaan, heilautus rotation.y:llä
+      B.el.rotation.x = -0.5;
     } else {
       B.sh.rotation.set(ARM_BASE + Math.sin(ph) * 0.26, 0, B.side * 0.2);
       B.el.rotation.x = -0.3 - Math.max(0, Math.sin(ph + Math.PI)) * 0.22;
