@@ -1327,20 +1327,16 @@ function makeShuttleModel(withBlinkers = true, wreck = false){
       const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep);
       mat.roughnessMap = c; mat.needsUpdate = true; });
   };
-  // hylyn noki-/palovyöhykkeet aukon ympärille (asetetaan wreck-haarassa)
-  let charMat = null, scorchMat = null;
   if (!wreck) {
     applyRealHull(hullMat, 0.45);
     applyRealHull(nacMat, 0.6);
   } else {
-    // hylky: likainen, himmennetty maalipinta (ei valokuvatekstuuria) — EI mustaa
-    // koko runkoa, jotta noetut reunat erottuvat. Aukon ympärille kaksi
-    // tummenevaa vyöhykettä: scorchMat (noki) → charMat (mustaksi palanut).
+    // hylky: likainen, himmennetty maalipinta (ei valokuvatekstuuria) — runkokuorelle
+    // käytetään erillistä tiheägridi-materiaalia jonka VERTEX-VÄREIHIN poltetaan
+    // realistinen noki-gradientti (musta reunalla → likainen runko ulospäin +
+    // läikkäkohina), ei tasaista värinvaihtoa. nac/cap käyttävät himmennettyä hullMat.
     hullMat.color.setRGB(0.5, 0.45, 0.4); hullMat.map = null;
     nacMat.color.setRGB(0.5, 0.45, 0.4); nacMat.map = null;
-    scorchMat = toonMat({ map: subtleTex() }); scorchMat.color.setRGB(0.14, 0.11, 0.09);
-    charMat = toonMat({ map: subtleTex() }); charMat.color.setRGB(0.035, 0.03, 0.025);
-    scorchMat.shadowSide = THREE.BackSide; charMat.shadowSide = THREE.BackSide;
   }
 
   // map: subtleTex() → ei tasaista yksiväristä pintaa (hienovarainen gradientti/laikutus)
@@ -1378,33 +1374,15 @@ function makeShuttleModel(withBlinkers = true, wreck = false){
     const s = SEC[si], p = CS[ci % 8];
     return [p[0] * s.sx, p[1] * s.sy + s.y, s.z];
   };
-  // HYLKY: paikallinen repaleinen aukko (sektiot SÄILYVÄT — vain räjähdyskeskuksen
-  // lähikvadit poistetaan, eivät kokonaista kaistaa). Aukko yläpuolella keskirungossa,
-  // levittyy kyljeltä kyljelle yli laen. hole[si][ci] = poistettu kvadi.
-  const NB = SEC.length - 1;
-  const bc = new THREE.Vector3(0.12, 0.66, -0.35);   // räjähdyskeskus (laki, keskirunko)
-  const HOLE_R = 0.95;
-  const _c4 = (si, ci) => { const a = sp(si, ci), b = sp(si, ci + 1), c = sp(si + 1, ci + 1), d = sp(si + 1, ci); return [(a[0]+b[0]+c[0]+d[0])/4, (a[1]+b[1]+c[1]+d[1])/4, (a[2]+b[2]+c[2]+d[2])/4]; };
-  const _dist = (p) => Math.hypot(p[0] - bc.x, p[1] - bc.y, p[2] - bc.z);
-  const hole = [];
-  if (wreck) for (let si = 0; si < NB; si++) { hole[si] = []; for (let ci = 0; ci < 8; ci++) hole[si][ci] = (_dist(_c4(si, ci)) + (Math.random() - 0.5) * 0.6) < HOLE_R; }
-  // panssarin pullistuma aukon ympärillä: työnnä kulmat ulospäin. PURE funktio
-  // pisteestä → jaetut kulmat siirtyvät identtisesti, ei rakoja kvadien väliin.
-  const dispPt = (p) => {
-    if (!wreck) return p;
-    const bulge = Math.max(0, (HOLE_R + 0.65 - _dist(p))) * 0.16;
-    if (bulge < 1e-3) return p;
-    const L = Math.hypot(p[0], p[1]) || 1;
-    return [p[0] + p[0] / L * bulge, p[1] + p[1] / L * bulge, p[2]];
-  };
-  const D = (si, ci) => dispPt(sp(si, ci));
-  for (let si = 0; si < NB; si++)
-    for (let ci = 0; ci < 8; ci++) {
-      if (wreck && hole[si][ci]) continue;
-      let mat = hullMat;
-      if (wreck) { const d = _dist(_c4(si, ci)); mat = d < HOLE_R + 0.55 ? charMat : (d < HOLE_R + 1.15 ? scorchMat : hullMat); }   // mustaksi palanut reuna → noki → likainen runko
-      quad(g, mat, D(si, ci), D(si, ci + 1), D(si + 1, ci + 1), D(si + 1, ci));
-    }
+  const bc = new THREE.Vector3(0.12, 0.62, -0.35);   // räjähdyskeskus (laki, keskirunko) — hylyn aukko
+  // EHJÄ runko: viistetty poikkileikkaus pyyhkäistynä sektioiden läpi. HYLYSSÄ
+  // runko korvataan tiheällä gridillä + epäsäännöllinen aukko + vertex-väri-noki —
+  // rakennetaan vasta mergeStaticin/addOutlinesin JÄLKEEN (säilyttää vertex-värit,
+  // ei sotke ääriviivakuorella). Tässä rakennetaan vain ehjä versio.
+  if (!wreck)
+    for (let si = 0; si < SEC.length - 1; si++)
+      for (let ci = 0; ci < 8; ci++)
+        quad(g, hullMat, sp(si, ci), sp(si, ci + 1), sp(si + 1, ci + 1), sp(si + 1, ci));
   // perä- ja keulakannet
   for (const [si, flip] of [[0, false], [SEC.length - 1, true]]) {
     const s = SEC[si];
@@ -1465,9 +1443,12 @@ function makeShuttleModel(withBlinkers = true, wreck = false){
     if (withBlinkers) blinker(g, s < 0 ? 0xff5340 : 0x46d06a, s * 1.36, -0.48, 1.85, 1.3, s);
   }
 
-  // kattodetaljit (viistetyt särmät) — antenni-"tappi" poistettu katolta
-  rbox(g, hullMat, 0.7, 0.12, 1.2, 0, 0.74, 0.9, 0.02);
-  rbox(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0, 0.015);
+  // kattodetaljit (viistetyt särmät) — antenni-"tappi" poistettu katolta.
+  // Hylyssä räjähdysaukon päällä olevat kattopaneelit jätetään pois.
+  if (!wreck) {
+    rbox(g, hullMat, 0.7, 0.12, 1.2, 0, 0.74, 0.9, 0.02);
+    rbox(g, darkMat, 0.32, 0.08, 0.5, 0.5, 0.72, 0.0, 0.015);
+  }
 
   // ---- yksityiskohdat: ohjaamon sivuikkunat, RCS-suuttimet, keulaputki ----
   // sivuikkunat: tummat lasiruudut etukabiinin kyljissä (kehys upotettuna)
@@ -1480,8 +1461,9 @@ function makeShuttleModel(withBlinkers = true, wreck = false){
   // RCS-ohjaussuuttimet vain kyljissä (keulan leijuvat suuttimet poistettu)
   for (const s of [-1, 1]) rcs(s * 1.0, 0.0, 1.9);
   // (keulan pitot-/anturiputki "piikki" poistettu)
-  // pari kohotettua selkäpaneelia (greeble) lakatulla rungolla (viistetyt särmät)
-  rbox(g, hullMat, 0.5, 0.05, 0.7, 0, 0.79, -0.4, 0.01);
+  // pari kohotettua selkäpaneelia (greeble) lakatulla rungolla (viistetyt särmät).
+  // Hylyssä keskirungon (aukon) päällinen paneeli pois; takimmainen säilyy.
+  if (!wreck) rbox(g, hullMat, 0.5, 0.05, 0.7, 0, 0.79, -0.4, 0.01);
   rbox(g, hullMat, 0.26, 0.04, 0.34, 0.32, 0.5, 1.55, 0.009);
 
   // oviaukon ääriviivat oikealle kyljelle (+x): suorakaide rungon pystypintaan,
@@ -1501,40 +1483,123 @@ function makeShuttleModel(withBlinkers = true, wreck = false){
     bar(g, darkMat, [DX, y0, z1], [DX, y1, z1], r, r, fl, n);   // etureuna
   }
 
-  // ---- HYLYN aukon reunat: repaleinen, kuumuudesta hehkuva reunus ----
-  // Vain aukon TODELLISEN rajan särmiin (poistettu kvadi vasten säilynyttä) →
-  // hehkurengas kiertää reiän muotoa, ei sektiorenkaita.
-  if (wreck) {
-    // maltillinen hehku: kuumat REUNAT (ei furnace) → mustat nokireunat erottuvat
-    const hot = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }); hot.color.setRGB(1.9, 0.6, 0.18);     // hehkuva reuna (lievä bloom)
-    const ember = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }); ember.color.setRGB(1.05, 0.3, 0.1); // himmeä hiillos
-    const nbHole = (si, ci) => (si < 0 || si >= NB) ? false : hole[si][(ci + 8) % 8];
-    const rim = (a, b) => {
-      bar(g, hot, a, b, 0.02, 0.02, 1);   // ohut hehkuva leikkausreuna kiertää aukkoa
-      if (Math.random() < 0.45) {         // vain osa särmistä saa repaleisen kielen → sisus jää tummaksi
-        const t = 0.3 + Math.random() * 0.4;
-        const ex = a[0] + (b[0] - a[0]) * t, ey = a[1] + (b[1] - a[1]) * t, ez = a[2] + (b[2] - a[2]) * t;
-        const inw = 0.1 + Math.random() * 0.18;   // lyhyt kieli (ei täytä reikää)
-        const px = ex + (bc.x - ex) * inw, py = ey + (bc.y - ey) * inw, pz = ez + (bc.z - ez) * inw;
-        const tri = new THREE.BufferGeometry();
-        tri.setAttribute('position', new THREE.Float32BufferAttribute([...a, ...b, px, py, pz], 3));
-        tri.computeVertexNormals();
-        g.add(new THREE.Mesh(tri, Math.random() < 0.35 ? hot : ember));
-      }
-    };
-    for (let si = 0; si < NB; si++)
-      for (let ci = 0; ci < 8; ci++) {
-        if (!hole[si][ci]) continue;
-        if (!nbHole(si, ci + 1)) rim(D(si, ci + 1), D(si + 1, ci + 1));   // särmä ci+1 (poikittain)
-        if (!nbHole(si, ci - 1)) rim(D(si, ci), D(si + 1, ci));            // särmä ci
-        if (!nbHole(si - 1, ci)) rim(D(si, ci), D(si, ci + 1));            // sektiosauma si
-        if (!nbHole(si + 1, ci)) rim(D(si + 1, ci), D(si + 1, ci + 1));    // sektiosauma si+1
-      }
-  }
-
   mergeStatic(g);
   addOutlines(g, 0.02);   // cell shading: musta ääriviiva (käänteinen kuori)
+  // HYLKY: tiheägridi-runko epäsäännöllisellä aukolla + vertex-väri-noki + hehkureunus.
+  // Rakennetaan vasta tässä (ei mukana mergeStaticissa/addOutlinesissa).
+  if (wreck) buildWreckHull(g, CS, SEC, bc);
   return g;
+}
+
+/* HYLYN runkokuori: korvaa ehjän sweep-rungon TIHEÄLLÄ gridillä, johon
+   leikataan EPÄSÄÄNNÖLLINEN (kohinamoduloitu) aukko räjähdyskeskuksen ympärille.
+   Realistinen palaminen poltetaan VERTEX-VÄREIHIN: musta hiili aukon reunalla →
+   ruskea noki → likainen runko ulospäin, läikkäkohinalla (ei tasaista väriä).
+   Lisäksi additiivinen kuumahehku-kerros hugaa aukon reunaa (häipyy ulospäin) ja
+   ohuet hehkuvat leikkausreunat. Tiheä gridi → aukon raja näyttää repaleiselta. */
+function buildWreckHull(g, CS, SEC, bc){
+  const NSEG = SEC.length - 1;          // 4 kaistaa → cv 0..NSEG
+  const NU = 80, NV = 40;               // NU jaollinen 8:lla → solut eivät ylitä oktagonin särmiä
+  const surfPt = (cu, cv) => {
+    const ci = Math.floor(cu) % 8, cf = cu - Math.floor(cu);
+    const P0 = CS[ci], P1 = CS[(ci + 1) % 8];
+    const px = P0[0] + (P1[0] - P0[0]) * cf, py = P0[1] + (P1[1] - P0[1]) * cf;
+    const si = Math.min(NSEG - 1, Math.floor(cv)), sf = cv - Math.min(NSEG - 1, Math.floor(cv));
+    const S0 = SEC[si], S1 = SEC[si + 1];
+    const sx = S0.sx + (S1.sx - S0.sx) * sf, sy = S0.sy + (S1.sy - S0.sy) * sf;
+    const oy = S0.y + (S1.y - S0.y) * sf, z = S0.z + (S1.z - S0.z) * sf;
+    return [px * sx, py * sy + oy, z];
+  };
+  // pseudokohina (summa siniaalloista) — irregulaarinen aukon raja + nokiläikät
+  const n3 = (x, y, z) => Math.sin(x * 1.7 + y * 2.3 + 1.3) * 0.5 + Math.sin(y * 3.1 + z * 1.9 + 0.7) * 0.3 + Math.sin(z * 2.7 + x * 2.1 + 2.1) * 0.2;
+  const HOLE_R = 1.0, SCORCH_W = 1.5, GLOW_W = 0.5;
+  const rEff = (p) => HOLE_R * (1 + 0.36 * n3(p[0] * 2.4, p[1] * 2.4, p[2] * 2.4) + 0.16 * n3(p[0] * 6.5, p[1] * 6.5, p[2] * 6.5));
+  const field = (p) => Math.hypot(p[0] - bc.x, p[1] - bc.y, p[2] - bc.z) - rEff(p);   // <0 = aukon sisällä
+  const mottle = (p) => 0.5 + 0.5 * Math.sin(p[0] * 5.3 + p[2] * 4.1) * Math.sin(p[1] * 6.7 + p[0] * 3.3);
+  const HULLC = [0.5, 0.45, 0.4], CHARC = [0.022, 0.018, 0.015];
+  const colOf = (p) => {
+    let s = Math.max(0, Math.min(1, field(p) / SCORCH_W));   // 0 reunalla → 1 kaukana
+    s = s * s;                                               // tummennus painottuu reunalle
+    const mo = mottle(p);
+    s = Math.max(0, Math.min(1, s * (0.55 + 0.55 * mo)));    // läikkäinen noki
+    return [CHARC[0] + (HULLC[0] - CHARC[0]) * s, CHARC[1] + (HULLC[1] - CHARC[1]) * s, CHARC[2] + (HULLC[2] - CHARC[2]) * s];
+  };
+  // gridipisteet
+  const G = [];
+  for (let iu = 0; iu <= NU; iu++) { G[iu] = []; for (let iv = 0; iv <= NV; iv++) G[iu][iv] = surfPt(iu / NU * 8, iv / NV * NSEG); }
+  const cellHole = [];
+  for (let iu = 0; iu < NU; iu++) { cellHole[iu] = []; for (let iv = 0; iv < NV; iv++) {
+    const a = G[iu][iv], b = G[iu + 1][iv], c = G[iu + 1][iv + 1], d = G[iu][iv + 1];
+    const cen = [(a[0] + b[0] + c[0] + d[0]) / 4, (a[1] + b[1] + c[1] + d[1]) / 4, (a[2] + b[2] + c[2] + d[2]) / 4];
+    cellHole[iu][iv] = field(cen) < 0;
+  } }
+  // per-vertex kuumahehkuväri (sileä, ei lohkomainen): täysi reunalla → 0 GLOW_W:n päässä
+  const glowCol = (p) => {
+    const w = Math.max(0, Math.min(1, 1 - field(p) / GLOW_W));
+    if (w <= 0) return null;
+    const ww = w * w; return [1.9 * ww, 0.6 * ww, 0.2 * ww];
+  };
+  const off = (p) => { const L = Math.hypot(p[0], p[1]) || 1; return [p[0] + p[0] / L * 0.02, p[1] + p[1] / L * 0.02, p[2]]; };
+  const Z = [0, 0, 0];
+  const pos = [], col = [], gpos = [], gcol = [];
+  const tri = (P, a, b, c) => { P.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]); };
+  for (let iu = 0; iu < NU; iu++) for (let iv = 0; iv < NV; iv++) {
+    if (cellHole[iu][iv]) continue;
+    const a = G[iu][iv], b = G[iu + 1][iv], c = G[iu + 1][iv + 1], d = G[iu][iv + 1];
+    const ca = colOf(a), cb = colOf(b), cc = colOf(c), cd = colOf(d);
+    tri(pos, a, b, c); col.push(...ca, ...cb, ...cc);
+    tri(pos, a, c, d); col.push(...ca, ...cc, ...cd);
+    // kuumahehku per-vertex aukon lähisoluihin (additiivinen, sileästi häipyvä)
+    const gA = glowCol(a), gB = glowCol(b), gC = glowCol(c), gD = glowCol(d);
+    if (gA || gB || gC || gD) {
+      const A = off(a), B = off(b), Cc = off(c), Dd = off(d);
+      tri(gpos, A, B, Cc); gcol.push(...(gA || Z), ...(gB || Z), ...(gC || Z));
+      tri(gpos, A, Cc, Dd); gcol.push(...(gA || Z), ...(gC || Z), ...(gD || Z));
+    }
+  }
+  // runkokuori (toon + vertex-värit)
+  const hullGeo = new THREE.BufferGeometry();
+  hullGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  hullGeo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  hullGeo.computeVertexNormals();
+  const hullMat = toonMat({ vertexColors: true, side: THREE.DoubleSide });
+  hullMat.shadowSide = THREE.BackSide;
+  const hullMesh = new THREE.Mesh(hullGeo, hullMat);
+  hullMesh.castShadow = true; hullMesh.receiveShadow = false;
+  g.add(hullMesh);
+  // hehkukerros
+  if (gpos.length) {
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.Float32BufferAttribute(gpos, 3));
+    gg.setAttribute('color', new THREE.Float32BufferAttribute(gcol, 3));
+    const gm = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    g.add(new THREE.Mesh(gg, gm));
+  }
+  // ohuet hehkuvat leikkausreunat aukon TODELLISTA rajaa pitkin (kept-solu vasten poistettua)
+  const hot = new THREE.MeshBasicMaterial(); hot.color.setRGB(2.4, 0.85, 0.3);
+  const epos = [];
+  const seg = (a, b) => { const wdt = 0.03; const L = Math.hypot(a[0], a[1]) || 1; const ox = a[0] / L * wdt, oy = a[1] / L * wdt; epos.push(a[0], a[1], a[2], b[0], b[1], b[2], b[0] + ox, b[1] + oy, b[2], a[0], a[1], a[2], b[0] + ox, b[1] + oy, b[2], a[0] + ox, a[1] + oy, a[2]); };
+  const isHole = (iu, iv) => (iv < 0 || iv >= NV) ? false : cellHole[(iu + NU) % NU][iv];
+  for (let iu = 0; iu < NU; iu++) for (let iv = 0; iv < NV; iv++) {
+    if (!cellHole[iu][iv]) continue;
+    if (!isHole(iu + 1, iv)) seg(G[iu + 1][iv], G[iu + 1][iv + 1]);
+    if (!isHole(iu - 1, iv)) seg(G[iu][iv], G[iu][iv + 1]);
+    if (!isHole(iu, iv + 1)) seg(G[iu][iv + 1], G[iu + 1][iv + 1]);
+    if (!isHole(iu, iv - 1)) seg(G[iu][iv], G[iu + 1][iv]);
+  }
+  if (epos.length) {
+    const eg = new THREE.BufferGeometry();
+    eg.setAttribute('position', new THREE.Float32BufferAttribute(epos, 3));
+    eg.computeVertexNormals();
+    g.add(new THREE.Mesh(eg, hot));
+  }
+  // tumma sisäonkalo aukon taakse → reiästä näkyy pimeyttä (ei valaistua sisäpintaa)
+  const cav = new THREE.Mesh(new THREE.IcosahedronGeometry(HOLE_R * 1.05, 1),
+    new THREE.MeshBasicMaterial({ color: 0x0a0807, side: THREE.BackSide }));
+  const L = Math.hypot(bc.x, bc.y) || 1;
+  cav.position.set(bc.x - bc.x / L * 0.75, bc.y - bc.y / L * 0.75, bc.z);   // työnnä rungon sisään
+  cav.scale.set(1.25, 0.7, 1.35);
+  g.add(cav);
 }
 
 function buildShuttle(){
