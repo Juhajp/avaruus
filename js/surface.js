@@ -1485,6 +1485,8 @@ function damageShuttle(h){
   }
 }
 // ---- viholliset (Regolith-mato): vahinko hakulla/aseella + pelaajan terveys ----
+// Mato on TOISTAISEKSI POIS KÄYTÖSTÄ (koodi jätetään paikoilleen — palataan myöhemmin).
+const WORM_ENABLED = false;
 let worm = null;
 const GUN_ENEMY_DMG = 1, PICK_ENEMY_DMG = 1;
 const hurtFlashEl = document.getElementById('hurtFlash');
@@ -2476,8 +2478,8 @@ function enterSurface(b){
   enterSurfaceScene(b, 'surface');
   surfX = 0; surfZ = 0;
   S.health = 1; _surfaceDead = false;
-  // Regolith-mato: vain Marsin pinnalla (kävelymoodi)
-  if (b.def.name === 'Mars') {
+  // Regolith-mato: vain Marsin pinnalla (kävelymoodi) — toistaiseksi pois käytöstä
+  if (WORM_ENABLED && b.def.name === 'Mars') {
     worm = new RegolithWorm(surfaceScene, surfHeightFn, {
       bite: (dmg) => hurtPlayer(dmg),
       burst: (x, y, z, big, mat) => { for (let k = 0; k < (big ? 8 : 4); k++) spawnHitDebris(x, y + 0.3, z, mat, big && k < 2); },
@@ -2977,5 +2979,6 @@ export function surfDebug(){
     wormStrike: () => { if (worm) worm.forceStrike(surfX, surfZ); },
     health: () => S.health,
     setHealth(v){ S.health = Math.max(0, Math.min(1, v)); },
+    destroyShuttle(){ if (_shuttleDestroyer) _shuttleDestroyer(); },   // testaus: tuhoa pysäköity sukkula heti
   };
 }

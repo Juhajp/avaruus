@@ -1303,7 +1303,7 @@ function shuttleEnvMap(){
    oktagonikonehtimot kiskomaisin laskujalaksin.
    makeShuttleModel rakentaa tuoreen mallin omine resursseineen —
    pinnalle pysäköity kopio saa tuhoutua scenen mukana */
-function makeShuttleModel(withBlinkers = true){
+function makeShuttleModel(withBlinkers = true, wreck = false){
   const g = new THREE.Group();
   const hull = makeShuttleHullTex();
   // CELL SHADING: MeshToonMaterial säilyttää tekstuurit (map/bumpMap) mutta
@@ -1327,13 +1327,20 @@ function makeShuttleModel(withBlinkers = true){
       const c = t.clone(); c.needsUpdate = true; c.repeat.set(rep, rep);
       mat.roughnessMap = c; mat.needsUpdate = true; });
   };
-  applyRealHull(hullMat, 0.45);
-  applyRealHull(nacMat, 0.6);
+  if (!wreck) {
+    applyRealHull(hullMat, 0.45);
+    applyRealHull(nacMat, 0.6);
+  } else {
+    // hylky: noettu, palanut pinta (ei valokuvatekstuuria) — tumma ruskeanharmaa
+    hullMat.color.setRGB(0.15, 0.13, 0.115); hullMat.map = null;
+    nacMat.color.setRGB(0.15, 0.13, 0.115); nacMat.map = null;
+  }
 
   // map: subtleTex() → ei tasaista yksiväristä pintaa (hienovarainen gradientti/laikutus)
   const darkMat = toonMat({ color: 0x34383f, map: subtleTex() });
   const glassMat = toonMat({ color: 0x0d1118, side: THREE.DoubleSide });
-  const stripeMat = toonMat({ color: 0xbe2222, map: subtleTex() });
+  const stripeMat = toonMat({ color: wreck ? 0x401411 : 0xbe2222, map: subtleTex() });
+  if (wreck) darkMat.color.setRGB(0.09, 0.08, 0.075);
   // VARJON ITSEAKNE (sahalaitaisuus/värinä pystypinnoilla): DoubleSide-materiaali
   // heittää varjon MOLEMMILTA puolilta → valaistut etupinnat varjostavat itseään
   // (korostui kun maaston varjon syvyyskate tiukennettiin). shadowSide = BackSide
@@ -1364,9 +1371,14 @@ function makeShuttleModel(withBlinkers = true){
     const s = SEC[si], p = CS[ci % 8];
     return [p[0] * s.sx, p[1] * s.sy + s.y, s.z];
   };
-  for (let si = 0; si < SEC.length - 1; si++)
+  // hylyssä keskimmäinen runkokaista (sektiot 1→2) puuttuu → iso reikä keskeltä,
+  // joka ulottuu kyljestä kylkeen (näkee läpi); etu- ja peräosa jäävät jäljelle
+  const HOLE_BAND = 1;
+  for (let si = 0; si < SEC.length - 1; si++) {
+    if (wreck && si === HOLE_BAND) continue;
     for (let ci = 0; ci < 8; ci++)
       quad(g, hullMat, sp(si, ci), sp(si, ci + 1), sp(si + 1, ci + 1), sp(si + 1, ci));
+  }
   // perä- ja keulakannet
   for (const [si, flip] of [[0, false], [SEC.length - 1, true]]) {
     const s = SEC[si];
@@ -1381,6 +1393,7 @@ function makeShuttleModel(withBlinkers = true){
   const stp = (si) => { const s = SEC[si]; return [1.065 * s.sx, 0.10 * s.sy + s.y, s.z]; };
   for (const side of [-1, 1])
     for (let si = 0; si < SEC.length - 1; si++) {
+      if (wreck && si === HOLE_BAND) continue;
       const a = stp(si), b = stp(si + 1);
       bar(g, stripeMat, [side * a[0], a[1], a[2]], [side * b[0], b[1], b[2]], 0.034);
     }
@@ -1449,8 +1462,9 @@ function makeShuttleModel(withBlinkers = true){
   // oviaukon ääriviivat oikealle kyljelle (+x): suorakaide rungon pystypintaan,
   // alaosasta katon puoliväliin. Ohuet tummat palkit (flat → litistyy runkoa
   // vasten) hieman pinnasta ulkona → näkyvä luukun reunus. Saa cell-shade-
-  // ääriviivan addOutlines-vaiheessa kuten muutkin meshit.
-  {
+  // ääriviivan addOutlines-vaiheessa kuten muutkin meshit. (Hylyssä luukku on
+  // räjähdysreiän kohdalla → jätetään pois.)
+  if (!wreck) {
     const DX = 1.05;            // hieman rungon pystypinnan (x≈1.03–1.05) ulkona
     const y0 = -0.36, y1 = 0.33;   // alaosasta katon puoliväliin
     const z0 = -0.35, z1 = 0.55;   // luukun leveys rungon pituussuunnassa
@@ -1460,6 +1474,34 @@ function makeShuttleModel(withBlinkers = true){
     bar(g, darkMat, [DX, y1, z0], [DX, y1, z1], r, r, fl, n);   // yläreuna
     bar(g, darkMat, [DX, y0, z0], [DX, y1, z0], r, r, fl, n);   // takareuna
     bar(g, darkMat, [DX, y0, z1], [DX, y1, z1], r, r, fl, n);   // etureuna
+  }
+
+  // ---- HYLYN räjähdysreiän reunat: repaleinen, kuumuudesta hehkuva reunus ----
+  if (wreck) {
+    const hot = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }); hot.color.setRGB(2.9, 0.9, 0.28);    // kirkas hehku → bloom
+    const ember = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }); ember.color.setRGB(1.7, 0.4, 0.13); // tummempi hiillos
+    for (const si of [HOLE_BAND, HOLE_BAND + 1]) {
+      const s = SEC[si], cy = s.y;
+      for (let ci = 0; ci < 8; ci++) {
+        const a = sp(si, ci), b = sp(si, ci + 1);
+        bar(g, hot, a, b, 0.028, 0.028, 1);   // hehkuva leikkausreuna kiertää aukon
+        const nSp = 1 + (Math.random() < 0.6 ? 1 : 0);   // 1–2 repaleista piikkiä per särmä
+        for (let k = 0; k < nSp; k++) {
+          const t = 0.2 + Math.random() * 0.6;
+          const ex = a[0] + (b[0] - a[0]) * t, ey = a[1] + (b[1] - a[1]) * t, ez = a[2] + (b[2] - a[2]) * t;
+          const inward = 0.18 + Math.random() * 0.5;     // sisään kohti akselia
+          const zdir = (si === HOLE_BAND) ? -1 : 1;       // reiän sisäpuolelle
+          const px = ex + (0 - ex) * inward, py = ey + (cy - ey) * inward, pz = ez + zdir * (0.1 + Math.random() * 0.45);
+          const tri = new THREE.BufferGeometry();
+          tri.setAttribute('position', new THREE.Float32BufferAttribute([...a, ...b, px, py, pz], 3));
+          tri.computeVertexNormals();
+          g.add(new THREE.Mesh(tri, Math.random() < 0.5 ? hot : ember));
+        }
+      }
+    }
+    // pari vääntynyttä rakennetukea aukon yli (tummaa, palanutta metallia)
+    for (let k = 0; k < 3; k++)
+      bar(g, darkMat, sp(HOLE_BAND, (k * 3) % 8), sp(HOLE_BAND + 1, (k * 3 + 4) % 8), 0.045, 0.025, 1);
   }
 
   mergeStatic(g);
@@ -1539,12 +1581,93 @@ function parkShuttle(){
   shuttleSurf = m;
   S.shuttlePos = m.position.clone();   // kypäränäyttö lukee tästä (vältetään sirkulaarinen import)
   S.shuttleHp = null;                  // nollaa piilo-osumapisteet (surface.js alustaa SHUTTLE_HP:hen)
+  _clearShuttleFx();                   // uusi scene → vanhat efektit/hylky pois viitteistä
 }
-/* laserin tuhoama sukkula: piilota malli ja katkaise paluu (B) — surface.js kutsuu */
+
+/* ---- sukkulan tuhoutuminen: räjähdys (välähdys + sirpaleet + savu) → hylky ----
+   _sfx = aktiiviset kertaefektit, joilla update(dt)->elossa? -metodi. */
+let _sfx = [], _wreck = null;
+function _clearShuttleFx(){
+  for (const fx of _sfx) if (fx.mesh && fx.mesh.parent) fx.mesh.parent.remove(fx.mesh);
+  _sfx = []; _wreck = null;
+}
+function updateShuttleFx(dt){
+  if (!_sfx.length) return;
+  for (let i = _sfx.length - 1; i >= 0; i--) {
+    const fx = _sfx[i];
+    if (!fx.update(dt)) { if (fx.mesh && fx.mesh.parent) fx.mesh.parent.remove(fx.mesh); _sfx.splice(i, 1); }
+  }
+}
+function spawnShuttleExplosion(sc, center, scl, hfn){
+  // 1) kirkas välähdys: additiivinen pallo + laajeneva paineaaltorengas (bloom)
+  const flashMat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(3.0, 2.7, 2.2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), flashMat);
+  flash.position.copy(center); flash.scale.setScalar(0.4 * scl); sc.add(flash);
+  _sfx.push({ mesh: flash, t: 0, max: 0.4, update(dt){ this.t += dt; const p = this.t / this.max; flash.scale.setScalar((0.4 + p * 2.8) * scl); flashMat.opacity = Math.max(0, 1 - p); return this.t < this.max; } });
+  const ringMat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(2.6, 1.4, 0.7), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.74, 28), ringMat);
+  ring.position.copy(center); ring.rotation.x = -Math.PI / 2; sc.add(ring);
+  _sfx.push({ mesh: ring, t: 0, max: 0.55, update(dt){ this.t += dt; const p = this.t / this.max; const s = (0.5 + p * 7) * scl; ring.scale.set(s, s, s); ringMat.opacity = Math.max(0, 0.85 * (1 - p)); return this.t < this.max; } });
+  // 2) sirpaleet: tummaa metallia, palanutta punaista + muutama hehkuva sirpale
+  const metal = toonMat({ color: 0x2a2622 }), red = toonMat({ color: 0x5a1410 });
+  const glow = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(2.4, 0.7, 0.25) });
+  for (let i = 0; i < 18; i++) {
+    const sz = (0.12 + Math.random() * 0.4) * scl;
+    const mat = Math.random() < 0.15 ? glow : (Math.random() < 0.3 ? red : metal);
+    const geo = Math.random() < 0.5 ? new THREE.BoxGeometry(sz, sz * 0.6, sz * 1.3) : new THREE.TetrahedronGeometry(sz);
+    const d = new THREE.Mesh(geo, mat); d.position.copy(center); d.castShadow = false; sc.add(d);
+    const vel = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.9 + 0.25, Math.random() - 0.5).normalize().multiplyScalar((4 + Math.random() * 8) * scl);
+    const spin = new THREE.Vector3((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+    let rest = false;
+    _sfx.push({ mesh: d, t: 0, max: 1.6 + Math.random() * 1.3, update(dt){
+      this.t += dt;
+      if (!rest) {
+        vel.y -= 15 * dt; d.position.addScaledVector(vel, dt);
+        const gy = hfn ? hfn(d.position.x, d.position.z) : 0;
+        if (d.position.y < gy + sz * 0.4) { d.position.y = gy + sz * 0.4; rest = true; }
+        d.rotation.x += spin.x * dt; d.rotation.y += spin.y * dt; d.rotation.z += spin.z * dt;
+      }
+      const p = this.t / this.max; if (p > 0.78) d.scale.setScalar(Math.max(0.001, 1 - (p - 0.78) / 0.22));
+      return this.t < this.max;
+    } });
+  }
+  // 3) savu: tummat laajenevat puffit; osa heti, osa viiveellä → hylky savuaa sekunteja
+  const puff = (delay) => _sfx.push({ t: -delay, max: 2.6 + Math.random() * 1.6, mesh: null, _m: null, _vy: 0, _made: false, update(dt){
+    this.t += dt; if (this.t < 0) return true;
+    if (!this._made) {
+      this._made = true;
+      this._m = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(0.12, 0.11, 0.1), transparent: true, depthWrite: false, opacity: 0 });
+      const s = new THREE.Mesh(new THREE.IcosahedronGeometry((0.5 + Math.random() * 0.6) * scl, 1), this._m);
+      s.position.copy(center).add(new THREE.Vector3((Math.random() - 0.5) * scl, Math.random() * 0.5 * scl, (Math.random() - 0.5) * scl));
+      this.mesh = s; this._vy = 0.8 + Math.random() * 1.1; sc.add(s);
+    }
+    const p = this.t / this.max;
+    this.mesh.position.y += this._vy * dt;
+    this.mesh.scale.setScalar(1 + p * 2.0);
+    this._m.opacity = Math.sin(Math.min(1, p) * Math.PI) * 0.55;
+    return this.t < this.max;
+  } });
+  for (let i = 0; i < 8; i++) puff(Math.random() * 0.15);
+  for (let i = 0; i < 10; i++) puff(0.5 + Math.random() * 5.0);   // savuava hylky muutaman sekunnin ajan
+}
+/* laserin tuhoama sukkula: räjähdys + jäljelle jäävä hylky (iso reikä, hehkuvat
+   reunat). Paluuta (B) ei enää ole — S.shuttlePos nollataan. surface.js kutsuu. */
 function destroyParkedShuttle(){
-  if (shuttleSurf) { shuttleSurf.visible = false; if (shuttleSurf.parent) shuttleSurf.parent.remove(shuttleSurf); }
+  const m = shuttleSurf;
   shuttleSurf = null;
   S.shuttlePos = null; S.shuttleHp = null;
+  if (!m) return;
+  const sc = m.parent; const pos = m.position.clone(); const quat = m.quaternion.clone(); const scl = m.scale.x;
+  const hfn = surfDebug().h;
+  if (sc) sc.remove(m);
+  if (!sc) return;
+  const center = pos.clone().add(new THREE.Vector3(0, 0.2 * scl, 0));
+  spawnShuttleExplosion(sc, center, scl, hfn);
+  // jäljelle jäävä hylky samaan asentoon — EI userData.shuttle (inertti, ei voi tuhota uudelleen)
+  const w = makeShuttleModel(false, true);
+  w.scale.setScalar(scl); w.position.copy(pos); w.quaternion.copy(quat);
+  w.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  sc.add(w); _wreck = w;
 }
 setShuttleDestroyer(destroyParkedShuttle);
 
@@ -1631,7 +1754,7 @@ export function updateCockpit(dt = 0.016){
   // hävitti pysäköidyn mallin resursseineen, pudota viite
   if (S.mode !== _prevMode) {
     if (S.mode === 'surface') parkShuttle();
-    else shuttleSurf = null;
+    else { shuttleSurf = null; _clearShuttleFx(); }
     _prevMode = S.mode;
   }
   bridgeCockpit.visible = S.mode === 'space' && !extView;
@@ -1661,6 +1784,7 @@ export function updateCockpit(dt = 0.016){
     const lvl = Math.pow(Math.min(1, (S.effFrac || 0) / 0.6), 0.8);
     falconGlow.color.setRGB(lvl * 0.85, lvl * 1.3, lvl * 1.95);
   }
+  updateShuttleFx(dt);   // sukkulan räjähdys/savu (vain pinnalla aktiivisia)
   const t = S.simTime;
   if (S.mode === 'surface') return;
   for (const b of _blinkers) {
