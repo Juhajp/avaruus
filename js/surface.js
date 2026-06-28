@@ -13,6 +13,7 @@ import { S } from './state.js';
 import { toonMat, expandGeo, outlineMaterial } from './toon.js';
 import { RegolithWorm } from './regolithWorm.js';
 import { SandGolem } from './sandGolem.js';
+import { GlbEnemy } from './glbEnemy.js';
 
 /* IBL: taivaasta generoitu ympäristökartta (päivitetään auringon liikkuessa) */
 let pmrem = null;
@@ -1490,6 +1491,8 @@ function damageShuttle(h){
 // ---- viholliset (Regolith-mato): vahinko hakulla/aseella + pelaajan terveys ----
 // Mato on TOISTAISEKSI POIS KÄYTÖSTÄ (koodi jätetään paikoilleen — palataan myöhemmin).
 const WORM_ENABLED = false;
+const GOLEM_ENABLED = false;       // hiekkagolem piilossa toistaiseksi (käytetään glb-vihollista)
+const GLB_ENEMY_ENABLED = true;    // uusi glb-mallin pohjainen vihollinen Marsilla
 let worm = null;
 let golem = null;
 const GUN_ENEMY_DMG = 1, PICK_ENEMY_DMG = 1;
@@ -2489,10 +2492,16 @@ function enterSurface(b){
   if (WORM_ENABLED && b.def.name === 'Mars') {
     worm = new RegolithWorm(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
   }
-  // Hiekkagolem: kiviplaneetoilla (Mars/Kuu/Merkurius/Venus/Maa)
-  if (b.def.name === 'Mars') {
+  // Hiekkagolem (toistaiseksi pois käytöstä, korvattu glb-vihollisella)
+  if (GOLEM_ENABLED && b.def.name === 'Mars') {
     golem = new SandGolem(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
-    golem._spawn(0, 0);   // ensimmäinen nousu pelaajan lähistölle
+    golem._spawn(0, 0);
+  }
+  // glb-vihollinen (Mixamo-rigattu hahmo: walk-animaatio + procedural arm-swing isku,
+  // raajat irtoavat bone.scale → 0, kasvavat takaisin). Lataa async, _spawn tapahtuu
+  // ensimmäisessä update()-kutsussa lataus valmiina.
+  if (GLB_ENEMY_ENABLED && b.def.name === 'Mars') {
+    golem = new GlbEnemy(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
   }
   // vuorokausi alkaa aamupäivästä; aurinko selän taakse laskeutuessa,
   // jotta maisema näkyy valaistuna
@@ -2569,7 +2578,7 @@ function detectContacts(){
     if (d <= RADAR_RANGE) list.push({ x: worm.gx, z: worm.gz, name: 'REGOLITH-MATO', sizeWord: 'VIHOLLINEN', big: false, hostile: true, d });
   }
   // Hiekkagolem viholliskontaktina
-  if (golem && golem.alive && golem.group.visible) {
+  if (golem && golem.alive && golem.group && golem.group.visible) {
     const d = Math.hypot(golem.gx - surfX, golem.gz - surfZ);
     if (d <= RADAR_RANGE) list.push({ x: golem.gx, z: golem.gz, name: 'HIEKKAGOLEM', sizeWord: 'VIHOLLINEN', big: false, hostile: true, d });
   }
