@@ -26,7 +26,9 @@ const TH = 1.15, SH = 1.05;          // pidemmät jalat (reisi + sääri)
 const UA = 1.05, FA = 0.95;          // lyhyemmät kädet
 const HEADR = 0.52;                  // pää (pieni vartalon suhteen)
 const HIPX = 0.95, SHX = 1.4;        // leveä haara-asento, leveät hartiat
-const PELVIS_Y = TH + SH;            // lantio (~1.95) jalkojen päällä
+const FOOT_LIFT = 1.2;               // jalkaterän + lonkkalohkareiden ulottuvuus nilkan alapuolelle
+const PELVIS_Y = TH + SH + FOOT_LIFT; // lantion vakiokorkeus (suora jalka, koko jalkaterä maassa)
+const SWING_FRAC = 0.32;             // raaja ilmassa tämän osan puolisyklistään
 const SHOULDER_Y = 1.65;             // hartian korkeus lantiosta
 const ARM_BASE = 0;                  // kädet roikkuvat suoraan alas
 const LEAN = 0.5;                    // VAHVA etukumara (gorilla-asento)
@@ -221,9 +223,9 @@ export class SandGolem {
       // NILKKA: oma niveloryhmä → jalkaterä pyörii erikseen pitäen pohjan vaakatasossa
       const ank = joint(kn, 0, -SH, 0);
       cluster(ank, { cx: 0, cy: 0, cz: 0, sx: 0.42, sy: 0.42, sz: 0.45, n: 7, r: 0.28 }, side < 0 ? 'lleg' : 'rleg');   // nilkkarykelmä
-      // jalkaterä: leveä klusteri nilkasta eteen
-      const foot = joint(ank, 0, -0.05, 0.18);
-      cluster(foot, { cx: 0, cy: 0, cz: 0, sx: 0.65, sy: 0.4, sz: 0.85, n: 11, r: 0.3 }, side < 0 ? 'lleg' : 'rleg');
+      // jalkaterä: leveä litteä klusteri nilkasta eteenpäin (lattajalka)
+      const foot = joint(ank, 0, -0.1, 0.25);
+      cluster(foot, { cx: 0, cy: 0, cz: 0, sx: 0.75, sy: 0.22, sz: 1.0, n: 11, r: 0.26 }, side < 0 ? 'lleg' : 'rleg');
       return { hip, kn, ank };
     };
     this.legL = leg(-1); this.legR = leg(1);
@@ -296,7 +298,15 @@ export class SandGolem {
     if (!this.fallen) {
       if (dist > ATTACK_RANGE) {
         const dx = px - this.gx, dz = pz - this.gz, d = Math.hypot(dx, dz) || 1;
-        this.gx += dx / d * SPEED * dt; this.gz += dz / d * SPEED * dt;
+        // PULSSATTU ETENEMINEN: kun raaja on ilmassa, runko hidastuu (vain yksi
+        // tukijalka); kahden jalan tuella runko etenee täydellä vauhdilla → painon
+        // siirto näkyy lurchina, ei tasaisena liu'utuksena
+        const cyc = ((this.walkPhase / (Math.PI * 2)) % 1 + 1) % 1;
+        const lc = (p) => { const q = ((p % 1) + 1) % 1; return q < SWING_FRAC ? Math.sin((q / SWING_FRAC) * Math.PI) : 0; };
+        const swingNow = Math.max(lc(cyc * 2), lc(cyc * 2 + 0.5));
+        const moveMul = 1.0 - swingNow * 0.85;            // peak swing: vain 15 % vauhtia
+        this.gx += dx / d * SPEED * moveMul * dt;
+        this.gz += dz / d * SPEED * moveMul * dt;
         this.walkPhase += dt * 1.9;     // erittäin hidas raskas tahti
       } else if (this._atkCd <= 0) {
         this._bitDone = false; this._setState('attack');
@@ -350,7 +360,6 @@ export class SandGolem {
     const cyc = ((ph / (Math.PI * 2)) % 1 + 1) % 1;
     const halfA = (cyc * 2) % 1;                   // A-pari (vas käsi + oik jalka): 0..1, 0..1 per syklillä
     const halfB = (cyc * 2 + 0.5) % 1;             // B-pari (oik käsi + vas jalka): puolen sweepin offset → vuorottelu
-    const SWING_FRAC = 0.32;                       // raaja ilmassa vain ~32 % puolisyklistä
     // KORKEUSKÄYRÄ: kellomainen nosto swing-vaiheessa, 0 stance:ssa
     const liftC = (p) => p < SWING_FRAC ? Math.sin((p / SWING_FRAC) * Math.PI) : 0;
     // ETEEN-SWING: -1 (takana, äsken planted) → +1 (edessä, plantaamassa), sitten ajelehtii
@@ -405,11 +414,17 @@ export class SandGolem {
     this.spine.rotation.x = LEAN + bodyPitch - this._recoil * 0.5;
     this.spine.rotation.y = (walking ? bodyRoll * 0.35 : 0) + B.side * twist;
     this.spine.rotation.z = walking ? bodyRoll : 0;
-    // PELVIS notkahtaa syvemmin kun toinen jalka on ilmassa
-    const pelvisDip = walking ? Math.max(lA, lB) * 0.18 : 0;
-    this.pelvis.position.y = PELVIS_Y - pelvisDip;
-
-    // (footfall tremor poistettu — ei jalkaiskupulssia)
+    // DYNAAMINEN LANTION KORKEUS: planted-jalka pidetään maassa (ei klippausta).
+    // Kummankin jalan vertikaalinen ulottuvuus polven kulmasta; pidempi jalka
+    // kannattaa kehoa → lantio seuraa sitä. Tämä korvaa staattisen pelvisDipin.
+    if (walking || this.state === 'attack') {
+      const legH = (hr, kr) => TH * Math.cos(hr) + SH * Math.cos(hr + kr);
+      const lh = legH(L.hip.rotation.x, L.kn.rotation.x);
+      const rh = legH(R.hip.rotation.x, R.kn.rotation.x);
+      this.pelvis.position.y = Math.max(lh, rh) + FOOT_LIFT;
+    } else {
+      this.pelvis.position.y = PELVIS_Y;
+    }
 
     // raajojen takaisinkasvu (skaalaus)
     for (const k in this.parts) { const p = this.parts[k]; if (!p.gone) p.grp.scale.setScalar(p.grow); }
