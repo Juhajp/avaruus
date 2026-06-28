@@ -299,16 +299,27 @@ export class SandGolem {
     if (!this.fallen) {
       if (dist > ATTACK_RANGE) {
         const dx = px - this.gx, dz = pz - this.gz, d = Math.hypot(dx, dz) || 1;
-        // PULSSATTU ETENEMINEN: kun raaja on ilmassa, runko hidastuu (vain yksi
-        // tukijalka); kahden jalan tuella runko etenee täydellä vauhdilla → painon
-        // siirto näkyy lurchina, ei tasaisena liu'utuksena
+        // PULSSATTU ETENEMINEN + SETTLE-TAUKO jokaisen askeleen jälkeen.
+        // Painava liike: (1) runko hidastuu raajan ollessa swingissä (yhden tukijalan
+        // kannatus) ja (2) heti footfall:n jälkeen ease-out-tauko jossa runko ja gait
+        // pysähtyvät hetkellisesti → paino tuntuu jokaisessa askeleessa.
         const cyc = ((this.walkPhase / (Math.PI * 2)) % 1 + 1) % 1;
+        const halfA = (cyc * 2) % 1, halfB = (cyc * 2 + 0.5) % 1;
         const lc = (p) => { const q = ((p % 1) + 1) % 1; return q < SWING_FRAC ? Math.sin((q / SWING_FRAC) * Math.PI) : 0; };
-        const swingNow = Math.max(lc(cyc * 2), lc(cyc * 2 + 0.5));
-        const moveMul = 1.0 - swingNow * 0.85;            // peak swing: vain 15 % vauhtia
+        const swingNow = Math.max(lc(halfA), lc(halfB));
+        // Settle-tauko ease-out (sharp at footfall, smoothly back to normal)
+        const PAUSE_WIN = 0.18;          // settle ikkuna puolisyklin osina
+        const ease = (t) => { const u = 1 - t; return u * u * u; };   // ease-out kuutio
+        const sincePlantA = ((halfA - SWING_FRAC) % 1 + 1) % 1;
+        const sincePlantB = ((halfB - SWING_FRAC) % 1 + 1) % 1;
+        const settleA = sincePlantA < PAUSE_WIN ? ease(sincePlantA / PAUSE_WIN) : 0;
+        const settleB = sincePlantB < PAUSE_WIN ? ease(sincePlantB / PAUSE_WIN) : 0;
+        const settle = Math.max(settleA, settleB);   // 1 heti footfall:n jälkeen, 0 muutoin
+        const gaitMul = 1.0 - settle * 0.75;          // gait pysähtyy lähes kokonaan footfall:n jälkeen
+        const moveMul = (1.0 - swingNow * 0.85) * gaitMul;
         this.gx += dx / d * SPEED * moveMul * dt;
         this.gz += dz / d * SPEED * moveMul * dt;
-        this.walkPhase += dt * 1.9;     // erittäin hidas raskas tahti
+        this.walkPhase += dt * 1.9 * gaitMul;   // settle-aukon aikana gait myös pysähtyy
       } else if (this._atkCd <= 0) {
         this._bitDone = false; this._setState('attack');
       }
@@ -372,9 +383,12 @@ export class SandGolem {
     const sA = swingC(halfA), sB = swingC(halfB);
 
     // JALAT: lonkka taipuu eteen swing-vaiheessa, polvi koukistuu lisää (ilmassa),
-    // NILKKA kompensoi → jalkaterä pysyy vaakatasossa eikä lävistä maata
-    L.hip.rotation.x = 0.4 + sB * 0.32 * lift;
-    R.hip.rotation.x = 0.4 + sA * 0.32 * lift;
+    // NILKKA kompensoi → jalkaterä pysyy vaakatasossa eikä lävistä maata.
+    // HUOM: model facing = +Z → positiivinen hip.rotation.x kääntää jalan tipun
+    // -Z suuntaan (taaksepäin). Eteenpäin swing vaatii NEGATIIVISEN muutoksen
+    // (jalka edessä = hipR negatiivinen).
+    L.hip.rotation.x = 0.4 - sB * 0.32 * lift;
+    R.hip.rotation.x = 0.4 - sA * 0.32 * lift;
     L.kn.rotation.x = -0.7 - lB * 0.5 * lift;
     R.kn.rotation.x = -0.7 - lA * 0.5 * lift;
     L.ank.rotation.x = -(L.hip.rotation.x + L.kn.rotation.x);
@@ -400,10 +414,11 @@ export class SandGolem {
       A.sh.rotation.set(0.1, 0, A.side * 0.15);
       A.el.rotation.x = -0.05;
     } else {
-      // KÄDET: vain MINIMAALINEN heilahdus (golem kävelee pääosin jaloillaan)
-      A.sh.rotation.set(sA * 0.1, 0, A.side * 0.15);
+      // KÄDET: vain MINIMAALINEN heilahdus (golem kävelee pääosin jaloillaan).
+      // HUOM: sama convention kuin jaloilla — eteen swing = NEGATIIVINEN hipR.
+      A.sh.rotation.set(-sA * 0.1, 0, A.side * 0.15);
       A.el.rotation.x = -0.18;
-      B.sh.rotation.set(sB * 0.1, 0, B.side * 0.15);
+      B.sh.rotation.set(-sB * 0.1, 0, B.side * 0.15);
       B.el.rotation.x = -0.18;
     }
 
