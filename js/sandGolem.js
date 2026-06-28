@@ -34,8 +34,8 @@ const LEAN = 0.5;                    // VAHVA etukumara (gorilla-asento)
 const HP_MAX = 30;                   // iso → kestää enemmän (pää/vartalo-osumat tappavat lopulta)
 const BITE_DMG = 0.34;               // iskun vahinko pelaajaan
 const ATTACK_RANGE = 3.8;            // iso ulottuvuus
-const ATTACK_T = 1.25;               // iskun kesto (pitkä vaakapyyhkäisy)
-const SPEED = 2.2;                   // raskas könytys
+const ATTACK_T = 1.65;               // pitkä iskun kesto (anticipation → snap → follow-through)
+const SPEED = 1.4;                   // hidas raskas könytys
 const EMERGE_T = 3.6, DEAD_T = 2.0, RESPAWN_T = 16;
 const REGROW_T = 9;                  // raajan takaisinkasvu
 const EMERGE_DEPTH = 5.2;            // syvyys josta nousee
@@ -294,7 +294,7 @@ export class SandGolem {
       if (dist > ATTACK_RANGE) {
         const dx = px - this.gx, dz = pz - this.gz, d = Math.hypot(dx, dz) || 1;
         this.gx += dx / d * SPEED * dt; this.gz += dz / d * SPEED * dt;
-        this.walkPhase += dt * 4.6;     // raskas, hidas tahti
+        this.walkPhase += dt * 3.0;     // hidas raskas tahti (asymmetrinen gait pose:ssa)
       } else if (this._atkCd <= 0) {
         this._bitDone = false; this._setState('attack');
       }
@@ -339,44 +339,79 @@ export class SandGolem {
     const ph = this.walkPhase;
     const lift = this.fallen ? 0 : 1;
     let twist = 0;
-    // ---- KNUCKLE-WALK (gorillamainen 4-raajaliike): diagonaaliparit liikkuvat
-    // yhdessä. Vasen käsi + oikea jalka swing → oikea käsi + vasen jalka swing. ----
-    const swingArm = 0.55, swingLeg = 0.5;
-    // diagonaaliparit: A (vasen käsi) + R (oikea jalka), B (oikea käsi) + L (vasen jalka)
-    const phA = Math.sin(ph), phB = Math.sin(ph + Math.PI);
-    // jalat: lonkka taipuu eteen-taakse (taipuneessa asennossa), polvi taittuu astuessa
-    L.hip.rotation.x = 0.4 + phB * 0.4 * lift;                                   // taipunut + heilahdus
-    R.hip.rotation.x = 0.4 + phA * 0.4 * lift;
-    L.kn.rotation.x = -0.7 - Math.max(0, -phB) * 0.5 * lift;                     // polvi aina taipuneena
-    R.kn.rotation.x = -0.7 - Math.max(0, -phA) * 0.5 * lift;
-    // kädet riippuvat suoraan alas (knuckle-walk): olka eteenpäin, kyynärpää suora
-    // diagonaalinen swing: A (vasen) swingaa kun B (oikea) tukee maata
+
+    // ---- PAINOTETTU KNUCKLE-WALK ----
+    // Gait-sykli (0..1) jaettu kahteen puolisykliin = kaksi diagonaaliparin askelta.
+    // Puolisyklin sisällä: SWING (raaja ilmassa, lyhyt) → STANCE (planted, pitkä) →
+    // raaja viipyy maassa suurimman osan ajasta → paino tuntuu jokaisessa askelessa.
+    const cyc = ((ph / (Math.PI * 2)) % 1 + 1) % 1;
+    const halfA = (cyc * 2) % 1;                   // A-pari (vas käsi + oik jalka): 0..1, 0..1 per syklillä
+    const halfB = (cyc * 2 + 0.5) % 1;             // B-pari (oik käsi + vas jalka): puolen sweepin offset → vuorottelu
+    const SWING_FRAC = 0.32;                       // raaja ilmassa vain ~32 % puolisyklistä
+    // KORKEUSKÄYRÄ: kellomainen nosto swing-vaiheessa, 0 stance:ssa
+    const liftC = (p) => p < SWING_FRAC ? Math.sin((p / SWING_FRAC) * Math.PI) : 0;
+    // ETEEN-SWING: -1 (takana, äsken planted) → +1 (edessä, plantaamassa), sitten ajelehtii
+    // hitaasti taakse stance-vaiheessa kun runko liikkuu raajan yli
+    const swingC = (p) => p < SWING_FRAC
+      ? (-1 + 2 * (p / SWING_FRAC))                // nopea swing eteen ilmassa
+      : (1 - 2 * ((p - SWING_FRAC) / (1 - SWING_FRAC)));   // hidas drift taakse maassa
+    const lA = liftC(halfA), lB = liftC(halfB);
+    const sA = swingC(halfA), sB = swingC(halfB);
+
+    // JALAT: lonkka taipuu eteen swing-vaiheessa, polvi koukistuu lisää (ilmassa)
+    L.hip.rotation.x = 0.4 + sB * 0.32 * lift;
+    R.hip.rotation.x = 0.4 + sA * 0.32 * lift;
+    L.kn.rotation.x = -0.7 - lB * 0.5 * lift;
+    R.kn.rotation.x = -0.7 - lA * 0.5 * lift;
+
     if (this.state === 'attack') {
       const u = Math.min(1, this.t / ATTACK_T);
-      // ISKUSSA golem nousee hetkellisesti pystyyn ja lyö oikealla kädellä
+      // ---- PAINOTETTU ISKU: HIDAS ANTICIPATION → SNAP → FOLLOW-THROUGH ----
       let yaw;
-      if (u < 0.3) { const a = u / 0.3; yaw = 1.5 * a; twist = 0.6 * a; }
-      else if (u < 0.82) { const a = (u - 0.3) / 0.52; yaw = 1.5 - 3.4 * a; twist = 0.6 - 1.15 * a; }
-      else { yaw = -1.9; twist = -0.55; }
+      if (u < 0.42) {                                  // anticipation: hidas kiihtyvä veto sivulle
+        const a = u / 0.42, ae = a * a;
+        yaw = 1.7 * ae; twist = 0.75 * ae;
+      } else if (u < 0.78) {                           // SNAP: nopea raskas pyyhkäisy poikki
+        const a = (u - 0.42) / 0.36;
+        yaw = 1.7 - 3.8 * a; twist = 0.75 - 1.5 * a;
+      } else {                                         // FOLLOW-THROUGH: liike jatkuu hitaasti
+        const a = (u - 0.78) / 0.22;
+        yaw = -2.1 + 0.18 * a; twist = -0.75 + 0.12 * a;
+      }
       B.sh.rotation.set(-1.35, B.side * yaw, 0);
       B.el.rotation.x = -0.45;
-      // vasen käsi tukena maassa iskun aikana
-      A.sh.rotation.set(0.05, 0, A.side * 0.15);
+      // tukikäsi maassa iskun aikana
+      A.sh.rotation.set(0.1, 0, A.side * 0.15);
       A.el.rotation.x = -0.05;
     } else {
-      // VAS käsi: swingaa eteen kun phA > 0 (samaan aikaan oik jalka swingaa)
-      A.sh.rotation.set(phA * swingArm, 0, A.side * 0.15);
-      A.el.rotation.x = -0.05 - Math.max(0, -phA) * 0.15;   // suoristuu kun maassa
-      // OIK käsi: vastatahti
-      B.sh.rotation.set(phB * swingArm, 0, B.side * 0.15);
-      B.el.rotation.x = -0.05 - Math.max(0, -phB) * 0.15;
+      // KÄDET: olka swingaa eteen samalla painokäyrällä kuin jalat, kyynärpää
+      // koukistuu kantamaan painoa stance-vaiheessa (suoristuu hieman swingiin)
+      A.sh.rotation.set(sA * 0.55, 0, A.side * 0.15);
+      A.el.rotation.x = -0.05 - (1 - lA) * 0.22;
+      B.sh.rotation.set(sB * 0.55, 0, B.side * 0.15);
+      B.el.rotation.x = -0.05 - (1 - lB) * 0.22;
     }
-    // vartalon kierto: hartiat heiluvat askelten mukana + iskukierto
-    this.spine.rotation.x = LEAN - this._recoil * 0.5 + (walking ? Math.sin(ph * 2) * 0.03 : 0);
-    this.spine.rotation.y = (walking ? phA * 0.08 : 0) + B.side * twist;
-    this.spine.rotation.z = walking ? phA * 0.04 : 0;
-    // lantio nousee/laskee diagonaaliparin mukaan
-    this.pelvis.position.y = PELVIS_Y + (walking ? Math.abs(Math.sin(ph)) * 0.08 : 0);
+
+    // ---- VARTALON PAINOMOTIIKKA ----
+    // Forward-back lurch: 2x per cycle, joka askelluksen kohdalla nykäisy eteen
+    const bodyPitch = walking ? Math.sin(cyc * 4 * Math.PI) * 0.07 : 0;
+    // Side roll: paino siirtyy puolelta toiselle 1x per syklillä (sininen aalto)
+    const bodyRoll = walking ? Math.sin(cyc * 2 * Math.PI) * 0.11 : 0;
+    this.spine.rotation.x = LEAN + bodyPitch - this._recoil * 0.5;
+    this.spine.rotation.y = (walking ? bodyRoll * 0.3 : 0) + B.side * twist;
+    this.spine.rotation.z = walking ? bodyRoll : 0;
+    // PELVIS notkahtaa kun toinen jalka on ilmassa (tukijalka puristuu)
+    const pelvisDip = walking ? Math.max(lA, lB) * 0.14 : 0;
+    this.pelvis.position.y = PELVIS_Y - pelvisDip;
+
+    // ---- FOOTFALL TREMOR: pulssi heti kun diagonaalipari iskee maahan ----
+    if (walking) {
+      // raaja iskee kun halfA tai halfB ylittää SWING_FRACin → lyhyt vaimeneva pulssi
+      const plant = (p) => { const t = (p - SWING_FRAC + 1) % 1; return t < 0.14 ? (1 - t / 0.14) : 0; };
+      const tr = (plant(halfA) + plant(halfB)) * 0.1;
+      if (tr > this._tremor) this._tremor = tr;
+    }
+
     // raajojen takaisinkasvu (skaalaus)
     for (const k in this.parts) { const p = this.parts[k]; if (!p.gone) p.grp.scale.setScalar(p.grow); }
   }
