@@ -22,8 +22,8 @@ import { toonMat, addOutlines } from './toon.js';
 // mittasuhteet (yksiköt) — KIVIKLUSTERIGOLEM joka kävelee gorillan tavoin
 // neljällä raajalla (referenssikuvan mukaan). Erittäin pitkät kädet jotka
 // ulottuvat maahan, kyyryssä kävelyasento.
-const TH = 1.0, SH = 0.95;           // pitkät jalat (kyyryssä taipuneina)
-const UA = 1.55, FA = 1.4;           // ERITTÄIN pitkät kädet (ulottuvat maahan)
+const TH = 1.15, SH = 1.05;          // pidemmät jalat (reisi + sääri)
+const UA = 1.05, FA = 0.95;          // lyhyemmät kädet
 const HEADR = 0.52;                  // pää (pieni vartalon suhteen)
 const HIPX = 0.95, SHX = 1.4;        // leveä haara-asento, leveät hartiat
 const PELVIS_Y = TH + SH;            // lantio (~1.95) jalkojen päällä
@@ -35,7 +35,7 @@ const HP_MAX = 30;                   // iso → kestää enemmän (pää/vartalo
 const BITE_DMG = 0.34;               // iskun vahinko pelaajaan
 const ATTACK_RANGE = 3.8;            // iso ulottuvuus
 const ATTACK_T = 1.65;               // pitkä iskun kesto (anticipation → snap → follow-through)
-const SPEED = 1.4;                   // hidas raskas könytys
+const SPEED = 0.85;                  // erittäin hidas, painava liike
 const EMERGE_T = 3.6, DEAD_T = 2.0, RESPAWN_T = 16;
 const REGROW_T = 9;                  // raajan takaisinkasvu
 const EMERGE_DEPTH = 5.2;            // syvyys josta nousee
@@ -218,10 +218,13 @@ export class SandGolem {
       const kn = joint(hip, 0, -TH, 0);
       cluster(kn, { cx: 0, cy: 0, cz: 0, sx: 0.5, sy: 0.5, sz: 0.5, n: 8, r: 0.3 }, side < 0 ? 'lleg' : 'rleg');   // polvirykelmä
       limbCluster(kn, SH, 0.36, 0.32, 11, side < 0 ? 'lleg' : 'rleg');
-      // jalkaterä: leveä klusteri säären päässä
-      const foot = joint(kn, 0, -SH, 0.15);
-      cluster(foot, { cx: 0, cy: 0, cz: 0, sx: 0.65, sy: 0.45, sz: 0.9, n: 11, r: 0.3 }, side < 0 ? 'lleg' : 'rleg');
-      return { hip, kn };
+      // NILKKA: oma niveloryhmä → jalkaterä pyörii erikseen pitäen pohjan vaakatasossa
+      const ank = joint(kn, 0, -SH, 0);
+      cluster(ank, { cx: 0, cy: 0, cz: 0, sx: 0.42, sy: 0.42, sz: 0.45, n: 7, r: 0.28 }, side < 0 ? 'lleg' : 'rleg');   // nilkkarykelmä
+      // jalkaterä: leveä klusteri nilkasta eteen
+      const foot = joint(ank, 0, -0.05, 0.18);
+      cluster(foot, { cx: 0, cy: 0, cz: 0, sx: 0.65, sy: 0.4, sz: 0.85, n: 11, r: 0.3 }, side < 0 ? 'lleg' : 'rleg');
+      return { hip, kn, ank };
     };
     this.legL = leg(-1); this.legR = leg(1);
 
@@ -294,7 +297,7 @@ export class SandGolem {
       if (dist > ATTACK_RANGE) {
         const dx = px - this.gx, dz = pz - this.gz, d = Math.hypot(dx, dz) || 1;
         this.gx += dx / d * SPEED * dt; this.gz += dz / d * SPEED * dt;
-        this.walkPhase += dt * 3.0;     // hidas raskas tahti (asymmetrinen gait pose:ssa)
+        this.walkPhase += dt * 1.9;     // erittäin hidas raskas tahti
       } else if (this._atkCd <= 0) {
         this._bitDone = false; this._setState('attack');
       }
@@ -358,11 +361,14 @@ export class SandGolem {
     const lA = liftC(halfA), lB = liftC(halfB);
     const sA = swingC(halfA), sB = swingC(halfB);
 
-    // JALAT: lonkka taipuu eteen swing-vaiheessa, polvi koukistuu lisää (ilmassa)
+    // JALAT: lonkka taipuu eteen swing-vaiheessa, polvi koukistuu lisää (ilmassa),
+    // NILKKA kompensoi → jalkaterä pysyy vaakatasossa eikä lävistä maata
     L.hip.rotation.x = 0.4 + sB * 0.32 * lift;
     R.hip.rotation.x = 0.4 + sA * 0.32 * lift;
     L.kn.rotation.x = -0.7 - lB * 0.5 * lift;
     R.kn.rotation.x = -0.7 - lA * 0.5 * lift;
+    L.ank.rotation.x = -(L.hip.rotation.x + L.kn.rotation.x);
+    R.ank.rotation.x = -(R.hip.rotation.x + R.kn.rotation.x);
 
     if (this.state === 'attack') {
       const u = Math.min(1, this.t / ATTACK_T);
@@ -384,33 +390,26 @@ export class SandGolem {
       A.sh.rotation.set(0.1, 0, A.side * 0.15);
       A.el.rotation.x = -0.05;
     } else {
-      // KÄDET: olka swingaa eteen samalla painokäyrällä kuin jalat, kyynärpää
-      // koukistuu kantamaan painoa stance-vaiheessa (suoristuu hieman swingiin)
-      A.sh.rotation.set(sA * 0.55, 0, A.side * 0.15);
-      A.el.rotation.x = -0.05 - (1 - lA) * 0.22;
-      B.sh.rotation.set(sB * 0.55, 0, B.side * 0.15);
-      B.el.rotation.x = -0.05 - (1 - lB) * 0.22;
+      // KÄDET: vain MINIMAALINEN heilahdus (golem kävelee pääosin jaloillaan)
+      A.sh.rotation.set(sA * 0.1, 0, A.side * 0.15);
+      A.el.rotation.x = -0.18;
+      B.sh.rotation.set(sB * 0.1, 0, B.side * 0.15);
+      B.el.rotation.x = -0.18;
     }
 
-    // ---- VARTALON PAINOMOTIIKKA ----
-    // Forward-back lurch: 2x per cycle, joka askelluksen kohdalla nykäisy eteen
-    const bodyPitch = walking ? Math.sin(cyc * 4 * Math.PI) * 0.07 : 0;
-    // Side roll: paino siirtyy puolelta toiselle 1x per syklillä (sininen aalto)
-    const bodyRoll = walking ? Math.sin(cyc * 2 * Math.PI) * 0.11 : 0;
+    // ---- VARTALON PAINOMOTIIKKA (kasvatettu — kädet eivät heilauksellaan kompensoi) ----
+    // Forward-back lurch: 2x per cycle, joka askel nykäisee runkoa eteen
+    const bodyPitch = walking ? Math.sin(cyc * 4 * Math.PI) * 0.09 : 0;
+    // Side roll: paino siirtyy puolelta toiselle 1x per syklillä
+    const bodyRoll = walking ? Math.sin(cyc * 2 * Math.PI) * 0.16 : 0;
     this.spine.rotation.x = LEAN + bodyPitch - this._recoil * 0.5;
-    this.spine.rotation.y = (walking ? bodyRoll * 0.3 : 0) + B.side * twist;
+    this.spine.rotation.y = (walking ? bodyRoll * 0.35 : 0) + B.side * twist;
     this.spine.rotation.z = walking ? bodyRoll : 0;
-    // PELVIS notkahtaa kun toinen jalka on ilmassa (tukijalka puristuu)
-    const pelvisDip = walking ? Math.max(lA, lB) * 0.14 : 0;
+    // PELVIS notkahtaa syvemmin kun toinen jalka on ilmassa
+    const pelvisDip = walking ? Math.max(lA, lB) * 0.18 : 0;
     this.pelvis.position.y = PELVIS_Y - pelvisDip;
 
-    // ---- FOOTFALL TREMOR: pulssi heti kun diagonaalipari iskee maahan ----
-    if (walking) {
-      // raaja iskee kun halfA tai halfB ylittää SWING_FRACin → lyhyt vaimeneva pulssi
-      const plant = (p) => { const t = (p - SWING_FRAC + 1) % 1; return t < 0.14 ? (1 - t / 0.14) : 0; };
-      const tr = (plant(halfA) + plant(halfB)) * 0.1;
-      if (tr > this._tremor) this._tremor = tr;
-    }
+    // (footfall tremor poistettu — ei jalkaiskupulssia)
 
     // raajojen takaisinkasvu (skaalaus)
     for (const k in this.parts) { const p = this.parts[k]; if (!p.gone) p.grp.scale.setScalar(p.grow); }
