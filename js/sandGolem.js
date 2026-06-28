@@ -26,7 +26,7 @@ const TH = 1.15, SH = 1.05;          // pidemmät jalat (reisi + sääri)
 const UA = 1.05, FA = 0.95;          // lyhyemmät kädet
 const HEADR = 0.52;                  // pää (pieni vartalon suhteen)
 const HIPX = 0.95, SHX = 1.4;        // leveä haara-asento, leveät hartiat
-const FOOT_LIFT = 1.2;               // jalkaterän + lonkkalohkareiden ulottuvuus nilkan alapuolelle
+const FOOT_LIFT = 0.65;              // alustava lantion clearance — IK tarkentaa kummankin jalan maaston mukaan
 const PELVIS_Y = TH + SH + FOOT_LIFT; // lantion vakiokorkeus (suora jalka, koko jalkaterä maassa)
 const SWING_FRAC = 0.32;             // raaja ilmassa tämän osan puolisyklistään
 const SHOULDER_Y = 1.65;             // hartian korkeus lantiosta
@@ -45,6 +45,7 @@ const EMERGE_DEPTH = 5.2;            // syvyys josta nousee
 const _wp = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0), _nrm = new THREE.Vector3();
 const _qTilt = new THREE.Quaternion(), _qYaw = new THREE.Quaternion();
+const _ikL = new THREE.Vector3(), _ikR = new THREE.Vector3();
 
 function jitter(geo, amt){
   const p = geo.attributes.position;
@@ -449,6 +450,24 @@ export class SandGolem {
     // eteen kurottava pää uppoa maahan (kierto jalkatason ympäri muuten upottaisi)
     this.lift.position.y = (this._emergeY || 0) + this._fall * 0.35;
     this.lift.rotation.x = this._fall * 1.05;
+
+    // ---- IK: nosta runko niin että alempi (planted) jalkaterä koskee maata ----
+    // Päästään eroon "ilmassa kävely" -bugista: aiemmin FOOT_LIFT-vakio kalibrointiin
+    // tasaiseen maahan, mutta rinteillä lantio jää korkeammalle koska runko kallistuu
+    // (vertikaalinen pudotus = legH * cos(slope)). Tässä haetaan kummankin nilkan
+    // todellinen maailmapositio ja maaston korkeus sen alla, ja siirretään runko
+    // pystysuunnassa niin että alempi nilkka on ANK_OFFSET maaston päällä.
+    if (h && (this.state === 'walk' || this.state === 'attack' || this.state === 'emerge')) {
+      this.group.updateMatrixWorld(true);
+      this.legL.ank.getWorldPosition(_ikL);
+      this.legR.ank.getWorldPosition(_ikR);
+      const ANK_OFFSET = 0.65;   // nilkkalohkareen/jalkaterän ulottuvuus maan päälle
+      const lTerr = h(_ikL.x, _ikL.z);
+      const rTerr = h(_ikR.x, _ikR.z);
+      // alempi jalka määrää korkeuden: positiivinen adj nostaa runkoa (estää klippauksen)
+      const adj = Math.max((lTerr + ANK_OFFSET) - _ikL.y, (rTerr + ANK_OFFSET) - _ikR.y);
+      this.group.position.y += adj;
+    }
   }
 
   // ---- vahinko ----
