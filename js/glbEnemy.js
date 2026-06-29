@@ -21,12 +21,12 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 const HP_MAX = 22;
 const BITE_DMG = 0.32;
 const ATTACK_RANGE = 3.0;
-const ANIM_TIMESCALE = 0.18;         // hidasta zombi-tahti (klipin luontainen ~8.4 m/s)
+const ANIM_TIMESCALE = 1.2;          // zombi-vauhti (~2 m/s, kohtuullinen brisk walk)
 const EMERGE_T = 2.5;
 const DEAD_T = 1.2;                  // kaatumisen kesto (selälleen)
 const ATTACK_T = 1.4;
 const FOOT_OFFSET = 0.05;            // jalka koskettaa maata kun bone on tämä metri maan päällä
-const BLOOD_POOL = 64;               // aktiivisia veripisaroita kerralla
+const BLOOD_POOL = 120;              // aktiivisia veripisaroita kerralla
 const TARGET_HEIGHT = 2.8;           // skaalataan glb tähän korkeuteen (m)
 
 let _draco = null;
@@ -132,14 +132,17 @@ export class GlbEnemy {
   }
 
   _initBlood(){
-    // verihiukkasten pooli — pienet punaiset pallot, additiivinen alpha tippumiseen ei tarvita
+    // verihiukkasten pooli — KIRKKAAN punaiset pallot, näkyy myös päivänvalossa.
+    // Korkea renderOrder + depthTest off varmistaa että näkyvät vaikka mesh
+    // olisi edessä; pieni intensiteetin korotus (väri > 1) → bloom
     this.bloods = [];
-    const geo = new THREE.SphereGeometry(0.04, 4, 3);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x8a0a0a });
+    const geo = new THREE.SphereGeometry(0.06, 5, 4);
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(1.6, 0.05, 0.05) });
     for (let i = 0; i < BLOOD_POOL; i++) {
       const m = new THREE.Mesh(geo, mat);
       m.visible = false;
       m.castShadow = false;
+      m.renderOrder = 10;
       this.scene.add(m);
       this.bloods.push({ m, vel: new THREE.Vector3(), life: 0, max: 0 });
     }
@@ -150,7 +153,8 @@ export class GlbEnemy {
 
   _spawn(px, pz){
     if (!this.ready) return;
-    this.hp = HP_MAX; this.fallen = false; this._dieAngle = 0;
+    this.hp = HP_MAX; this.fallen = false;
+    this._dieAngle = 0; this._deadT = 0; this._sink = 0;
     const a = Math.random() * Math.PI * 2, r = 22 + Math.random() * 14;
     this.gx = px + Math.cos(a) * r; this.gz = pz + Math.sin(a) * r;
     this.group.visible = true;
@@ -167,23 +171,24 @@ export class GlbEnemy {
     // animaatio — paitsi kuoltuna jossa pose jäätyy
     if (this.mixer && this.state !== 'dead') {
       this.mixer.update(dt);
-      // ---- ROOT MOTION: tämä klippi animoi Hipsin eteenpäin (translaatio
-      // baseline-koordinaatistossa). Otetaan delta talteen, sitten resetoidaan
-      // hipin XZ-positio lepoasentoon → näkyvä hahmo pysyy paikallaan body-framessa
-      // ja delta käytetään liikuttamaan ryhmää maailmassa.
-      if (this.hipsBone && this._restHip) {
+      // ---- ROOT MOTION: klippi animoi Hipsin eteenpäin. Tarkistetaan että
+      // walkAction.time ei loopannut (= time meni taaksepäin) → silloin delta
+      // on klipin alusta-loppuun ero, ei oikea per-ruudun motion. Muulloin
+      // ota delta talteen ja resetoi hip rest-positioon.
+      if (this.hipsBone && this._restHip && this.walkAction) {
         const cur = this.hipsBone.position;
-        if (this._lastHip == null) {
-          this._lastHip = cur.clone();
+        const curT = this.walkAction.time;
+        const looped = (this._lastMixerT != null) && (curT < this._lastMixerT - 0.1);
+        if (this._lastHip == null || looped) {
+          if (this._lastHip == null) this._lastHip = cur.clone();
+          else this._lastHip.set(cur.x, cur.y, cur.z);
           this._animDx = 0; this._animDz = 0;
         } else {
-          const dx = cur.x - this._lastHip.x;
-          const dz = cur.z - this._lastHip.z;
+          this._animDx = cur.x - this._lastHip.x;
+          this._animDz = cur.z - this._lastHip.z;
           this._lastHip.set(cur.x, cur.y, cur.z);
-          // diskontinuiteetin (klipin loopin sauma) kapaus
-          if (Math.abs(dx) > 2 || Math.abs(dz) > 2) { this._animDx = 0; this._animDz = 0; }
-          else { this._animDx = dx; this._animDz = dz; }
         }
+        this._lastMixerT = curT;
         // resetoi hipin XZ lepoasentoon — näkyvä hahmo pysyy body-keskellä
         cur.x = this._restHip.x;
         cur.z = this._restHip.z;
@@ -211,7 +216,12 @@ export class GlbEnemy {
   }
 
   _walk(dt, px, pz, dist){
-    if (this.walkAction && !this.walkAction.isRunning()) this.walkAction.play();
+    if (this.walkAction) {
+      if (!this.walkAction.isRunning()) this.walkAction.play();
+      // varmista että walk-tilassa timeScale on aina vakio (eikä attackin
+      // jälkijäänteenä hidas) → tasainen vauhti riippumatta tilan vaihdoista
+      this.walkAction.timeScale = ANIM_TIMESCALE;
+    }
     this._face(px, pz, dt * 2.2);
     if (this.fallen) return;
     if (dist > ATTACK_RANGE) {
@@ -261,9 +271,35 @@ export class GlbEnemy {
   }
 
   _dead(dt){
-    // KUOLEMA: kaatuu selälleen ja jää ikuisesti maahan
-    if (this._dieAngle < Math.PI / 2 * 0.95) {
-      this._dieAngle = Math.min(Math.PI / 2 * 0.95, this._dieAngle + dt * 2.2);
+    // KUOLEMA: kaatuu selälleen, kolmivaiheinen luonnollinen liike.
+    // 1) BUCKLE (~0.15 s): polvet pettävät, vartalo lasketuu hetkellisesti.
+    // 2) FALL (~0.75 s): rakentuu vauhtia taaksepäin gravitaation tapaan
+    //    (ease-in: hidas alku, kiihtyvä). _dieAngle 0 → π/2.
+    // 3) SETTLE (~0.4 s): pieni "kimpoaminen" ja vajoaa hieman maahan.
+    this._deadT = (this._deadT ?? 0) + dt;
+    const t = this._deadT;
+    const T_BUCKLE = 0.15, T_FALL = 0.75, T_SETTLE = 0.4;
+    if (t < T_BUCKLE) {
+      // alkuun pieni "polvet pettää" -kumarrus (kasvot eteenpäin)
+      this._dieAngle = -0.15 * (t / T_BUCKLE);
+      this._sink = 0;
+    } else if (t < T_BUCKLE + T_FALL) {
+      const u = (t - T_BUCKLE) / T_FALL;
+      // ease-in cubic: hidas alku, kiihtyvä → kaatuu painovoiman tapaan taaksepäin
+      const ang0 = -0.15;
+      const angTarget = Math.PI / 2;
+      this._dieAngle = ang0 + (angTarget - ang0) * (u * u);
+      this._sink = 0;
+    } else if (t < T_BUCKLE + T_FALL + T_SETTLE) {
+      const u = (t - T_BUCKLE - T_FALL) / T_SETTLE;
+      // pieni kimpoaminen + vajoaminen maahan: 1 sek kimpoaa, sitten asettuu
+      const bounce = Math.sin(u * Math.PI) * 0.06;
+      this._dieAngle = Math.PI / 2 - bounce;
+      // vajoa maahan hieman
+      this._sink = -0.05 * u;
+    } else {
+      this._dieAngle = Math.PI / 2;
+      this._sink = -0.05;
     }
     // EI gone-tilaan siirtymistä — ruumis jää näkyviin
   }
@@ -280,7 +316,7 @@ export class GlbEnemy {
     if (!this.ready || !this.group) return;
     const h = this.heightFn;
     const gy = h ? h(this.gx, this.gz) : 0;
-    this.group.position.set(this.gx, gy + (this._emergeY || 0), this.gz);
+    this.group.position.set(this.gx, gy + (this._emergeY || 0) + (this._sink || 0), this.gz);
     const yaw = this.facing;
     // KUOLEMA: kallista selälleen (-X-akselin ympäri taakse). Lisäksi maaston normaalin
     // mukainen kallistus tuntuu epämääräiseltä → ruumis vain selällään yawin suuntaan.
@@ -290,18 +326,23 @@ export class GlbEnemy {
       this.group.rotation.set(0, yaw, 0);
     }
 
-    // ---- MAA-IK: bbox.min.y on mallin todellinen alapinta (jalkojen alapuoli) ----
-    // Ei käytetä foot-bonejen worldposia: tässä riggissä foot-bonen pivot on
-    // lantion korkeudella (kummallinen mixamo-binding), skin-painot tekevät
-    // jalan näkymästä oikean. bbox.min.y on alapisteen tosi paikka maailmassa.
+    // ---- MAA-IK: bbox.min.y on mallin todellinen alapinta. Rinteille
+    // näytteistetään maaston korkeus USEAMMASTA pisteestä bbox:n footprintissa
+    // ja käytetään KORKEINTA (ylämäen puoleinen jalka koskee maata; ala-mäen jalka
+    // jää ilmaan kuten swing-vaiheessa).
     if (h && (this.state === 'walk' || this.state === 'attack' || this.state === 'emerge' || this.state === 'dead')) {
       this.group.updateMatrixWorld(true);
       _bbox.setFromObject(this.model);
       const bottomY = _bbox.min.y;
-      // näytteistä maasto bbox-keskuksen alta (rinteet huomioiden alemman jalan kohdalla)
       _bbox.getCenter(_v3);
-      const terr = h(_v3.x, _v3.z);
-      const adj = (terr + FOOT_OFFSET) - bottomY;
+      const cx = _v3.x, cz = _v3.z;
+      const w = Math.max(0.4, (_bbox.max.x - _bbox.min.x) * 0.35);
+      const d = Math.max(0.4, (_bbox.max.z - _bbox.min.z) * 0.35);
+      const t1 = h(cx - w, cz - d), t2 = h(cx + w, cz - d);
+      const t3 = h(cx - w, cz + d), t4 = h(cx + w, cz + d);
+      const t5 = h(cx, cz);
+      const maxTerr = Math.max(t1, t2, t3, t4, t5);
+      const adj = (maxTerr + FOOT_OFFSET) - bottomY;
       this.group.position.y += adj;
     }
   }
@@ -313,26 +354,43 @@ export class GlbEnemy {
     this._recoil = 1;
     this._tremor = 0.05;
     this.hp -= amount;
-    if (hit && hit.point) this._spawnBlood(hit.point);
+    // veripiste: jos hit.point ei ole annettu (raycast ei läpäissyt skinned-meshia),
+    // käytetään ENEMYN sijaintia varmistuksena → blood spawnaa AINA hitistä
+    let bloodPoint = (hit && hit.point) ? hit.point : null;
+    if (!bloodPoint) {
+      _v1.copy(this.group.position); _v1.y += 1.5;   // vartalon keskellä
+      bloodPoint = _v1;
+    }
+    this._spawnBlood(bloodPoint, hit ? hit.point : null);
     if (this.hp <= 0) { this._die(); return true; }
     return false;
   }
 
-  _spawnBlood(point){
+  _spawnBlood(point, hitPoint){
     if (!this.bloods.length) return;
-    const N = 8 + (Math.random() * 4 | 0);
+    // Suihku poispäin osumakohdan pinnasta — käytä suuntaa enemyn keskeltä → hitiin
+    _v3.set(point.x - this.group.position.x, 0, point.z - this.group.position.z);
+    if (_v3.lengthSq() < 1e-4) _v3.set(0, 0, 1);
+    _v3.normalize();
+    const outX = _v3.x, outZ = _v3.z;
+    const N = 14 + (Math.random() * 6 | 0);    // 14–19 hiukkasta per osuma
     for (let k = 0; k < N; k++) {
       const i = this._bloodHead; this._bloodHead = (this._bloodHead + 1) % this.bloods.length;
       const b = this.bloods[i];
       b.m.position.copy(point);
+      // pieni offset poispäin pinnasta että ei jää meshin sisään
+      b.m.position.x += outX * 0.1;
+      b.m.position.z += outZ * 0.1;
       b.m.visible = true;
+      // suihku ulospäin + ylös, satunnainen leveys
+      const spread = 2.5;
       b.vel.set(
-        (Math.random() - 0.5) * 4,
-        1.5 + Math.random() * 2,
-        (Math.random() - 0.5) * 4
+        outX * (2 + Math.random() * 2.5) + (Math.random() - 0.5) * spread,
+        2 + Math.random() * 2.5,
+        outZ * (2 + Math.random() * 2.5) + (Math.random() - 0.5) * spread
       );
-      b.life = b.max = 0.6 + Math.random() * 0.4;
-      const sc = 0.7 + Math.random() * 0.6;
+      b.life = b.max = 0.7 + Math.random() * 0.5;
+      const sc = 0.8 + Math.random() * 0.7;
       b.m.scale.setScalar(sc);
     }
   }
@@ -351,7 +409,7 @@ export class GlbEnemy {
 
   _die(){
     this.hp = 0;
-    this._dieAngle = 0;
+    this._dieAngle = 0; this._deadT = 0; this._sink = 0;
     this._setState('dead');
     if (this.walkAction) this.walkAction.stop();
   }
