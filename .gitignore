@@ -1,3 +1,6 @@
 .claude/settings.local.json
 .DS_Store
 models/*.glb
+!models/zombie.glb
+!models/zombie_attack_small.glb
+!models/zombie_death_small.glb
