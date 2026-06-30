@@ -3,7 +3,7 @@ import { renderer } from './core.js';
 import { bodies, orbitLines } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent, aimingAtShuttle } from './surface.js';
 import { toggleShipView, nearParkedShuttle } from './cockpit.js';
-import { toggleCraft, craftRecipe, isCraftOpen, setMining, toggleWeapon } from './mining.js';
+import { toggleCraft, craftRecipe, isCraftOpen, setMining, toggleWeapon, toggleSniperMode, lookSensitivityMul } from './mining.js';
 import { useItem } from './resources.js';
 import { S, clampThrottle } from './state.js';
 
@@ -45,8 +45,12 @@ renderer.domElement.addEventListener('mousedown', (e) => {
   if (e.button === 0) {
     dragging = true; lastMX = e.clientX; lastMY = e.clientY;
     if (S.mode === 'surface') setMining(true);   // pinnalla vasen = louhi (tähtää esiintymään)
+  } else if (e.button === 2 && S.mode === 'surface') {
+    toggleSniperMode();
+    e.preventDefault();
   }
 });
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('mouseup', () => { dragging = false; setMining(false); });
 addEventListener('blur', () => { dragging = false; setMining(false); });
 
@@ -54,8 +58,9 @@ addEventListener('blur', () => { dragging = false; setMining(false); });
 // lentosimulaattorin tapaan — liike ylös → nokka alas. Kävelyssä (surface) normaali.
 function applyLook(dx, dy){
   const pitchSign = (S.mode === 'surface') ? -1 : 1;
-  S.yaw   -= dx * 0.0021;
-  S.pitch += pitchSign * dy * 0.0021;
+  const sens = 0.0021 * lookSensitivityMul();
+  S.yaw   -= dx * sens;
+  S.pitch += pitchSign * dy * sens;
   S.pitch = Math.max(-1.553, Math.min(1.553, S.pitch));
 }
 

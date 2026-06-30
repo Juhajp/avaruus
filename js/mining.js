@@ -127,6 +127,7 @@ const STRIKE_BURST = { count: 5,  scaleMin: 0.12, scaleRng: 0.22, speedMin: 1.1,
 
 // ---- ase (semiautomaattinen laser) ----
 let weaponMode = false;             // false = hakku, true = ase (X vaihtaa pinnalla)
+let sniperMode = false;             // oikea hiiren nappi: zoomattu tähtäystila aseelle
 let recoil = 0, _gunT = 0;          // rekyyli (vaikuttaa VAIN aseeseen) + huojunta-aika
 let _fireCd = 0, _prevFire = false; // laukauksen jäähtymisaika + edellinen liipaisin (semi-auto = nouseva reuna)
 const FLASH_LIFE = 0.16;   // suuliekin valon/kipinöiden elinaika
@@ -142,6 +143,12 @@ let _pickHitHandler = null;         // surface.js rekisteröi vihollisen hakkuos
 export function setPickaxeHitHandler(fn){ _pickHitHandler = fn; }
 const GUN_POS = new THREE.Vector3(0.34, -0.40, -0.55);
 const GUN_ROT = new THREE.Vector3(0.03, -0.12, 0.0);
+const GUN_AIM_POS = new THREE.Vector3(0.06, -0.35, -0.72);
+const GUN_AIM_ROT = new THREE.Vector3(0.0, -0.02, 0.0);
+const SURFACE_FOV = 65;
+const SNIPER_FOV = 20;
+const SNIPER_LOOK_MUL = 0.38;
+let sniperAmt = 0, scopeEl = null;
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3();
 const _bm = new THREE.Matrix4(), _muz = new THREE.Vector3();
 
@@ -363,37 +370,133 @@ function buildGun(){
   // CELL SHADING + bittikarttatekstuuri (kuten hakku); otsalamppu → näkyy kaikissa valoissa
   const bodyMat = toonMat({ color: 0x6f7681 }); loadToolTex(bodyMat, 'metal_plate_02', 2, 1);
   const darkMat = toonMat({ color: 0x33373d }); loadToolTex(darkMat, 'metal_plate', 1, 1);
-  addToolHeadlamp(bodyMat); addToolHeadlamp(darkMat);
+  const trimMat = toonMat({ color: 0x9ba4ad }); loadToolTex(trimMat, 'metal_plate', 1, 1);
+  addToolHeadlamp(bodyMat); addToolHeadlamp(darkMat); addToolHeadlamp(trimMat);
   const box = (mat, w, h, d, x, y, z, rx, ry, rz) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); if (rx || ry || rz) m.rotation.set(rx || 0, ry || 0, rz || 0); g.add(m); return m; };
-  box(bodyMat, 0.15, 0.17, 0.5, 0, 0, 0);                       // runko/lukko
-  box(bodyMat, 0.10, 0.10, 0.32, 0, 0.02, -0.34);              // piippusuojus
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.04, 0.5, 10), darkMat);
-  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, -0.5); g.add(barrel);   // piippu
-  box(darkMat, 0.07, 0.21, 0.1, 0, -0.17, 0.08, -0.26);        // kahva
-  box(bodyMat, 0.09, 0.13, 0.22, 0, -0.02, 0.33);             // perä
-  box(darkMat, 0.03, 0.055, 0.2, 0, 0.13, -0.04);            // tähtäin/kisko
+  const cyl = (mat, r1, r2, len, x, y, z, sides = 14) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, len, sides), mat);
+    m.rotation.x = Math.PI / 2; m.position.set(x, y, z); g.add(m); return m;
+  };
+
+  // Päärunko: kahdesta hieman erikokoisesta massasta syntyy koneistettu,
+  // vähemmän laatikkomainen profiili.
+  box(bodyMat, 0.18, 0.16, 0.42, 0, 0.0, 0.02);                 // lukko
+  box(bodyMat, 0.13, 0.12, 0.34, 0, 0.035, -0.28);              // eturunko
+  box(trimMat, 0.15, 0.022, 0.38, 0, 0.105, -0.04);             // yläsauma
+  box(darkMat, 0.19, 0.035, 0.24, 0, -0.095, -0.04);            // alarunko
+
+  // Piippu + lämpösuoja: pyöreät osat ja pienet ventit rikkovat blokkimaisuutta.
+  cyl(darkMat, 0.035, 0.04, 0.74, 0, 0.018, -0.61, 16);         // sisäpiippu
+  cyl(bodyMat, 0.068, 0.075, 0.38, 0, 0.018, -0.48, 14);        // ulompi lämpösuoja
+  cyl(trimMat, 0.05, 0.06, 0.12, 0, 0.018, -0.86, 16);          // suujarru
+  for (let i = 0; i < 5; i++) {
+    const z = -0.36 - i * 0.055;
+    box(darkMat, 0.018, 0.018, 0.035, -0.072, 0.018, z);
+    box(darkMat, 0.018, 0.018, 0.035,  0.072, 0.018, z);
+  }
+
+  // Tähtäinkisko, optiikka ja pienet kiinnikkeet.
+  box(darkMat, 0.045, 0.024, 0.42, 0, 0.145, -0.08);
+  for (let i = 0; i < 6; i++) box(trimMat, 0.058, 0.01, 0.018, 0, 0.163, -0.26 + i * 0.065);
+  cyl(darkMat, 0.036, 0.036, 0.18, 0, 0.205, -0.12, 12);        // pieni punapistetähtäin
+  box(trimMat, 0.055, 0.018, 0.045, 0, 0.168, -0.12);
+
+  // Kahva, liipaisin, kaari ja tukki.
+  box(darkMat, 0.075, 0.25, 0.115, 0, -0.185, 0.08, -0.30);     // vinokahva
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.007, 6, 20, Math.PI * 1.35), darkMat);
+  guard.rotation.set(Math.PI / 2, 0, Math.PI * 0.14); guard.position.set(0, -0.098, -0.035); g.add(guard);
+  box(darkMat, 0.018, 0.055, 0.018, 0, -0.13, -0.015, -0.45);   // liipaisin
+  box(bodyMat, 0.12, 0.095, 0.25, 0, -0.02, 0.34);              // peräadapteri
+  box(darkMat, 0.15, 0.08, 0.20, 0, 0.005, 0.50, 0.10);         // olkatuki
+  box(trimMat, 0.11, 0.018, 0.16, 0, 0.055, 0.44);              // tukin ylälevy
+
+  // Paneelisaumat, ruuvit ja energiakenno.
+  for (const sx of [-1, 1]) {
+    box(darkMat, 0.012, 0.095, 0.25, sx * 0.096, 0.0, -0.02);
+    for (const z of [-0.13, 0.10]) cyl(trimMat, 0.011, 0.011, 0.012, sx * 0.102, 0.055, z, 8);
+  }
   addOutlines(g, 0.01);   // cell shading: musta ääriviiva
   // hehkuvat osat (MeshBasic, kirkkaat → bloom): suuliekkirengas + energiakenno
   const emit = new THREE.MeshBasicMaterial(); emit.color.setRGB(2.6, 0.7, 0.4);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.013, 8, 18), emit); ring.position.set(0, 0.02, -0.77); g.add(ring);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.052, 0.011, 8, 18), emit); ring.position.set(0, 0.018, -0.925); g.add(ring);
   const cell = new THREE.MeshBasicMaterial(); cell.color.setRGB(0.4, 1.6, 2.3);
-  box(cell, 0.02, 0.06, 0.26, 0.082, 0.0, 0.02);             // sininen energiakenno kyljessä
+  box(cell, 0.018, 0.058, 0.24, 0.104, 0.0, 0.02);             // sininen energiakenno kyljessä
+  const cable = new THREE.Mesh(new THREE.TubeGeometry(
+    new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-0.072, 0.042, 0.20),
+      new THREE.Vector3(-0.105, 0.075, 0.05),
+      new THREE.Vector3(-0.088, 0.05, -0.22),
+    ]), 12, 0.006, 6), darkMat);
+  g.add(cable);
   g.traverse(o => { if (o.isMesh) o.userData.viewmodel = true; });   // raycastit ohittavat aseen
   // suuliekki: kirkas kiekko piipun kärjessä, kääntyy katselijaa kohti, syttyy laukauksessa
   const fm = new THREE.MeshBasicMaterial({ map: flashTex(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, opacity: 0 });
   fm.color.setRGB(3.2, 1.3, 0.7);
   _muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.4), fm);
-  _muzzleFlash.position.set(0, 0.02, -0.82); g.add(_muzzleFlash);
+  _muzzleFlash.position.set(0, 0.018, -0.98); g.add(_muzzleFlash);
   g.position.copy(GUN_POS); g.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z);
   g.visible = false; camera.add(g);
   return g;
 }
 gun = buildGun();
+function ensureScope(){
+  if (scopeEl) return scopeEl;
+  scopeEl = document.createElement('div');
+  scopeEl.id = 'sniperScope';
+  scopeEl.style.cssText = 'position:fixed;inset:0;z-index:7;pointer-events:none;display:none;mix-blend-mode:screen;'
+    + 'background:radial-gradient(circle at center, transparent 0 18%, rgba(0,0,0,0.12) 23%, rgba(0,0,0,0.56) 58%, rgba(0,0,0,0.82) 100%);';
+  const ring = document.createElement('div');
+  ring.style.cssText = 'position:absolute;left:50%;top:50%;width:min(54vw,54vh);aspect-ratio:1;transform:translate(-50%,-50%);'
+    + 'border:1px solid rgba(160,245,255,0.62);border-radius:50%;box-shadow:0 0 14px rgba(98,232,255,0.36), inset 0 0 22px rgba(98,232,255,0.12);';
+  const ring2 = document.createElement('div');
+  ring2.style.cssText = 'position:absolute;left:50%;top:50%;width:min(20vw,20vh);aspect-ratio:1;transform:translate(-50%,-50%);'
+    + 'border:1px solid rgba(160,245,255,0.32);border-radius:50%;';
+  const h = document.createElement('div');
+  h.style.cssText = 'position:absolute;left:50%;top:50%;width:min(58vw,58vh);height:1px;transform:translate(-50%,-50%);'
+    + 'background:linear-gradient(90deg, transparent, rgba(180,250,255,0.75) 38%, transparent 38% 44%, rgba(180,250,255,0.95) 44% 56%, transparent 56% 62%, rgba(180,250,255,0.75) 62%, transparent);';
+  const v = document.createElement('div');
+  v.style.cssText = 'position:absolute;left:50%;top:50%;height:min(58vw,58vh);width:1px;transform:translate(-50%,-50%);'
+    + 'background:linear-gradient(0deg, transparent, rgba(180,250,255,0.75) 38%, transparent 38% 44%, rgba(180,250,255,0.95) 44% 56%, transparent 56% 62%, rgba(180,250,255,0.75) 62%, transparent);';
+  scopeEl.append(ring, ring2, h, v);
+  document.body.appendChild(scopeEl);
+  return scopeEl;
+}
+function setScopeVisible(on){
+  ensureScope().style.display = on ? 'block' : 'none';
+}
+export function toggleSniperMode(){
+  if (!active || !weaponMode) return false;
+  sniperMode = !sniperMode;
+  setScopeVisible(sniperMode);
+  return sniperMode;
+}
+export function isSniperMode(){ return active && weaponMode && sniperMode; }
+export function lookSensitivityMul(){ return isSniperMode() ? SNIPER_LOOK_MUL : 1; }
+function updateSniper(dt){
+  const target = isSniperMode() ? 1 : 0;
+  sniperAmt += (target - sniperAmt) * Math.min(1, dt * 12);
+  const fov = SURFACE_FOV + (SNIPER_FOV - SURFACE_FOV) * sniperAmt;
+  if (Math.abs(camera.fov - fov) > 0.02) {
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+  }
+  if (scopeEl) scopeEl.style.opacity = (sniperAmt * 0.96).toFixed(3);
+  if (!target && sniperAmt < 0.01 && scopeEl) scopeEl.style.display = 'none';
+}
 function updateGun(dt){
   _gunT += dt;
   recoil += (0 - recoil) * Math.min(1, dt * 14);   // rekyyli laantuu nopeasti
-  gun.position.set(GUN_POS.x, GUN_POS.y + Math.sin(_gunT * 1.6) * 0.004, GUN_POS.z + recoil * 0.14);
-  gun.rotation.set(GUN_ROT.x - recoil * 0.22, GUN_ROT.y + Math.sin(_gunT * 1.3) * 0.006, GUN_ROT.z);
+  const aim = sniperAmt;
+  gun.position.set(
+    GUN_POS.x + (GUN_AIM_POS.x - GUN_POS.x) * aim,
+    GUN_POS.y + (GUN_AIM_POS.y - GUN_POS.y) * aim + Math.sin(_gunT * 1.6) * 0.004 * (1 - aim * 0.75),
+    GUN_POS.z + (GUN_AIM_POS.z - GUN_POS.z) * aim + recoil * 0.14
+  );
+  gun.rotation.set(
+    GUN_ROT.x + (GUN_AIM_ROT.x - GUN_ROT.x) * aim - recoil * 0.22,
+    GUN_ROT.y + (GUN_AIM_ROT.y - GUN_ROT.y) * aim + Math.sin(_gunT * 1.3) * 0.006 * (1 - aim * 0.75),
+    GUN_ROT.z + (GUN_AIM_ROT.z - GUN_ROT.z) * aim
+  );
   if (_muzzleFlash) {
     // välähtää kirkkaana laukauksessa ja kutistuu nopeasti (rekyylin mukana)
     _muzzleFlash.material.opacity = Math.max(0, recoil * 1.4 - 0.15);
@@ -466,6 +569,10 @@ function updateFlash(dt){
 export function toggleWeapon(){
   if (!active) return;
   weaponMode = !weaponMode;
+  if (!weaponMode) {
+    sniperMode = false;
+    if (scopeEl) scopeEl.style.display = 'none';
+  }
   recoil = 0;
   if (mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
 }
@@ -628,9 +735,10 @@ export function clearMining(){
   _lmb = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
   // ase: nollaa tila ja palaa hakkuun seuraavalle pintakäynnille
-  weaponMode = false; recoil = 0; _prevFire = false; _fireCd = 0;
+  weaponMode = false; sniperMode = false; sniperAmt = 0; recoil = 0; _prevFire = false; _fireCd = 0;
   sparks = null; sparkGeo = null; sparkMat = null; _spkHead = 0;
   flashLight = null; _flLife = 0;
+  if (scopeEl) scopeEl.style.display = 'none';
   if (gun) { gun.visible = false; gun.position.copy(GUN_POS); gun.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z); }
   renderMineBar();
   renderHud();
@@ -671,24 +779,52 @@ export function depositsNear(x, z, r){
 const CRACK_MAX = 30;        // halkeamien enimmäismäärä täydellä edistymällä (enemmän)
 const CRACK_SZ = 256;
 function drawCrack(ctx){
-  let x = Math.random() * CRACK_SZ, y = Math.random() * CRACK_SZ;
+  let x = Math.round(Math.random() * CRACK_SZ), y = Math.round(Math.random() * CRACK_SZ);
   let ang = Math.random() * 6.28;
   const segs = 7 + (Math.random() * 6 | 0);    // 7–12 segmenttiä (pidemmät juovat)
-  ctx.strokeStyle = 'rgba(8,6,5,0.85)'; ctx.lineCap = 'round';
-  ctx.lineWidth = 0.3 + Math.random() * 0.4;   // 0,3–0,7 (ohuet)
-  ctx.beginPath(); ctx.moveTo(x, y);
+  const pts = [[x, y]];
   for (let s = 0; s < segs; s++) {
-    ang += (Math.random() - 0.5) * 0.9;        // loiva mutkittelu
-    const len = 18 + Math.random() * 12;       // 18–30 px segmentit
-    x += Math.cos(ang) * len; y += Math.sin(ang) * len;
-    ctx.lineTo(x, y);
+    ang += (Math.random() - 0.5) * 1.15;       // kulmikkaampi mutkittelu
+    const len = 16 + Math.random() * 16;       // 16–32 px segmentit
+    x = Math.round(x + Math.cos(ang) * len);
+    y = Math.round(y + Math.sin(ang) * len);
+    pts.push([x, y]);
   }
+
+  ctx.save();
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
+  ctx.strokeStyle = 'rgba(0,0,0,0.62)';
+  ctx.lineWidth = 3.0 + Math.random() * 1.2;   // leveä varjo railon ympärillä
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(4,3,2,0.98)';
+  ctx.lineWidth = 1.15 + Math.random() * 0.65; // terävä tumma ydin
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+
+  // Pienet kovat haarat lisäävät "murtunutta" ilmettä ilman pehmeää antialias-sumua.
+  ctx.lineWidth = 1;
+  for (let i = 1; i < pts.length - 1; i += 2) {
+    if (Math.random() > 0.65) continue;
+    const bx = pts[i][0], by = pts[i][1];
+    const ba = ang + (Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 0.7);
+    const bl = 6 + Math.random() * 12;
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(Math.round(bx + Math.cos(ba) * bl), Math.round(by + Math.sin(ba) * bl));
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 function applyCracks(d){
   if (d._crackMats) return;
   const cv = document.createElement('canvas'); cv.width = cv.height = CRACK_SZ;
   const ctx = cv.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
   if (rockMap && rockMap.image) ctx.drawImage(rockMap.image, 0, 0, CRACK_SZ, CRACK_SZ);
   else { ctx.fillStyle = '#8a8a8a'; ctx.fillRect(0, 0, CRACK_SZ, CRACK_SZ); }
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
@@ -734,6 +870,7 @@ export function updateMining(dt, px, pz){
   // työkalu/ase näkyy louhittavalla pinnalla (Mars/Kuu); X vaihtaa niiden välillä
   tool.visible = active && !weaponMode;
   if (gun) gun.visible = active && weaponMode;
+  updateSniper(dt);
   updateFlash(dt);
   updateSparks(dt);
   const fireInput = active && (_lmb || S.keys.Space);

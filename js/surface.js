@@ -25,6 +25,10 @@ let surfX = 0, surfZ = 0;
 let surfaceScene = null;
 let surfHeightFn = null;
 let bobPhase = 0, bobAmp = 0;
+let footprintMesh = null, footprintTex = null;
+let footprintHead = 0, footprintCount = 0;
+let fpPlayerLastX = 0, fpPlayerLastZ = 0, fpPlayerAcc = 0, fpPlayerSide = -1;
+let fpEnemyTracks = new WeakMap();
 
 /* ---- vuorokaudenkierto ----
    Aurinko kulkee kaarirataa, jonka jakso on planeetan todellinen
@@ -173,7 +177,7 @@ function updateDaylight(){
       const P = 2600;
       const px = wx + Math.round((camera.position.x - wx) / P) * P;
       const pz = wz + Math.round((camera.position.z - wz) / P) * P;
-      dv.m.position.set(px, surfHeightFn(px, pz) - 2, pz);
+      dv.m.position.set(px, groundHeightFn(px, pz) - 2, pz);
       dv.m.scale.set(dv.w, dv.h, 1);
       dv.m.material.uniforms.uTint.value.set(0xd2a070).multiplyScalar(0.25 + 0.85 * dayF);
     }
@@ -1252,6 +1256,41 @@ function fillTile(mesh, tx, tz, segs){
   mesh.position.set(ox, 0, oz);
 }
 
+function terrainMeshHeight(x, z){
+  if (!surfHeightFn) return 0;
+  if (!terrain) return surfHeightFn(x, z);
+
+  const tx = Math.round(x / TILE), tz = Math.round(z / TILE);
+  const entry = terrain.tiles && terrain.tiles.get(tx + ',' + tz);
+  const lod = entry ? entry.lod
+    : (typeof terrain.ctx === 'number' && typeof terrain.ctz === 'number')
+      ? lodFor(tx - terrain.ctx, tz - terrain.ctz)
+      : 0;
+  const segs = LOD_SEGS[lod] || LOD_SEGS[0];
+  const step = TILE / segs;
+  const x0 = tx * TILE - TILE / 2;
+  const z0 = tz * TILE - TILE / 2;
+  const u = Math.max(0, Math.min(segs, (x - x0) / step));
+  const v = Math.max(0, Math.min(segs, (z - z0) / step));
+  const i = Math.min(segs - 1, Math.max(0, Math.floor(u)));
+  const j = Math.min(segs - 1, Math.max(0, Math.floor(v)));
+  const fu = u - i, fv = v - j;
+  const vx = x0 + i * step, vz = z0 + j * step;
+  const h00 = surfHeightFn(vx, vz);
+  const h10 = surfHeightFn(vx + step, vz);
+  const h01 = surfHeightFn(vx, vz + step);
+  const h11 = surfHeightFn(vx + step, vz + step);
+
+  // Sama diagonaali kuin makeTileGeo(): (i,j)-(i,j+1)-(i+1,j) ja
+  // (i+1,j)-(i,j+1)-(i+1,j+1). Tämä vastaa näkyvän maastokolmion tasoa.
+  if (fu + fv <= 1) return h00 + fu * (h10 - h00) + fv * (h01 - h00);
+  return h10 * (1 - fv) + h01 * (1 - fu) + h11 * (fu + fv - 1);
+}
+
+function groundHeightFn(x, z){
+  return terrainMeshHeight(x, z);
+}
+
 function buildQueuedTile(){
   const t = terrain;
   const key = t.queue.shift();
@@ -1799,6 +1838,238 @@ export function setPropShadows(obj){
   obj.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
 }
 
+const _groundUp = new THREE.Vector3(0, 1, 0);
+const _groundNormal = new THREE.Vector3();
+const _groundFwd = new THREE.Vector3();
+const _groundRight = new THREE.Vector3();
+const _groundMat = new THREE.Matrix4();
+const _groundQTilt = new THREE.Quaternion();
+const _groundQBase = new THREE.Quaternion();
+const _groundWorld = new THREE.Vector3();
+
+function _terrainNormal(h, x, z, r, out){
+  const d = Math.max(0.05, r || 0.8);
+  const hL = h(x - d, z), hR = h(x + d, z);
+  const hD = h(x, z - d), hU = h(x, z + d);
+  return out.set((hL - hR) / (2 * d), 1, (hD - hU) / (2 * d)).normalize();
+}
+
+function _limitedNormal(n, maxTilt, out){
+  if (!(maxTilt > 0)) return out.copy(n);
+  const y = Math.max(-1, Math.min(1, n.y));
+  const angle = Math.acos(y);
+  if (angle <= maxTilt) return out.copy(n);
+  _groundQTilt.setFromUnitVectors(_groundUp, n);
+  _groundQTilt.slerpQuaternions(_groundQBase.identity(), _groundQTilt, maxTilt / angle);
+  return out.copy(_groundUp).applyQuaternion(_groundQTilt).normalize();
+}
+
+function _maxTerrainAround(h, x, z, r){
+  if (!(r > 0)) return h(x, z);
+  return Math.max(
+    h(x, z),
+    h(x - r, z),
+    h(x + r, z),
+    h(x, z - r),
+    h(x, z + r)
+  );
+}
+
+/* Sijoittaa jäykän pintaobjektin maastoon koko footprintin perusteella.
+   Ensin local-Y kallistetaan maaston normaaliin, sitten objektia nostetaan niin
+   että yksikään annettu local-tukipiste ei jää maaston alle. */
+export function groundObjectToTerrain(obj, heightFn, opts = {}){
+  if (!obj || !heightFn) return null;
+  const x = Number.isFinite(opts.x) ? opts.x : obj.position.x;
+  const z = Number.isFinite(opts.z) ? opts.z : obj.position.z;
+  const yaw = opts.yaw || 0;
+  const clearance = opts.clearance || 0;
+  const sampleRadius = opts.sampleRadius || 0;
+  const normalRadius = opts.normalRadius || 0.8;
+  const points = opts.points && opts.points.length ? opts.points : [new THREE.Vector3(0, 0, 0)];
+
+  _terrainNormal(heightFn, x, z, normalRadius, _groundNormal);
+  _limitedNormal(_groundNormal, opts.maxTilt, _groundNormal);
+  _groundFwd.set(Math.sin(yaw), 0, Math.cos(yaw));
+  _groundFwd.addScaledVector(_groundNormal, -_groundFwd.dot(_groundNormal));
+  if (_groundFwd.lengthSq() < 1e-8) _groundFwd.set(Math.sin(yaw), 0, Math.cos(yaw));
+  _groundFwd.normalize();
+  _groundRight.crossVectors(_groundNormal, _groundFwd).normalize();
+  _groundMat.makeBasis(_groundRight, _groundNormal, _groundFwd);
+
+  obj.quaternion.setFromRotationMatrix(_groundMat);
+  obj.position.set(x, heightFn(x, z), z);
+  obj.updateMatrixWorld(true);
+
+  let lift = -Infinity;
+  for (const p of points) {
+    _groundWorld.copy(p).applyMatrix4(obj.matrixWorld);
+    const terr = _maxTerrainAround(heightFn, _groundWorld.x, _groundWorld.z, sampleRadius);
+    lift = Math.max(lift, terr + clearance - _groundWorld.y);
+  }
+  if (lift !== -Infinity) obj.position.y += lift;
+  obj.updateMatrixWorld(true);
+  return { lift: lift === -Infinity ? 0 : lift, normal: _groundNormal.clone() };
+}
+
+const FOOTPRINT_MAX = 180;
+const FOOTPRINT_Y = 0.026;
+const PLAYER_STEP = 0.72;
+const ENEMY_STEP = 0.95;
+const _fpMat = new THREE.Matrix4();
+const _fpNormal = new THREE.Vector3();
+const _fpFwd = new THREE.Vector3();
+const _fpRight = new THREE.Vector3();
+const _fpHidden = new THREE.Matrix4().makeScale(0, 0, 0);
+
+function makeFootprintTex(){
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const c = cv.getContext('2d');
+  c.translate(64, 64);
+  c.rotate(-0.06);
+  const g = c.createRadialGradient(-4, -8, 4, 0, 0, 54);
+  g.addColorStop(0, 'rgba(18,10,5,0.72)');
+  g.addColorStop(0.55, 'rgba(28,14,6,0.42)');
+  g.addColorStop(1, 'rgba(28,14,6,0)');
+  c.fillStyle = g;
+  c.beginPath();
+  c.ellipse(0, 0, 24, 49, 0, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = 'rgba(255,210,145,0.12)';
+  c.beginPath();
+  c.ellipse(-2, -11, 13, 29, -0.08, 0, Math.PI * 2);
+  c.fill();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 2;
+  return tex;
+}
+
+function initFootprints(sc){
+  disposeFootprints();
+  footprintTex = makeFootprintTex();
+  const geo = new THREE.PlaneGeometry(1, 1);
+  const mat = new THREE.MeshBasicMaterial({
+    map: footprintTex,
+    transparent: true,
+    opacity: 0.46,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  footprintMesh = new THREE.InstancedMesh(geo, mat, FOOTPRINT_MAX);
+  footprintMesh.frustumCulled = false;
+  footprintMesh.renderOrder = 1;
+  footprintMesh.userData.terrain = true;
+  for (let i = 0; i < FOOTPRINT_MAX; i++) footprintMesh.setMatrixAt(i, _fpHidden);
+  footprintMesh.instanceMatrix.needsUpdate = true;
+  footprintHead = 0; footprintCount = 0;
+  fpPlayerLastX = surfX; fpPlayerLastZ = surfZ; fpPlayerAcc = 0; fpPlayerSide = -1;
+  fpEnemyTracks = new WeakMap();
+  sc.add(footprintMesh);
+}
+
+function disposeFootprints(){
+  if (footprintMesh) {
+    if (footprintMesh.parent) footprintMesh.parent.remove(footprintMesh);
+    if (footprintMesh.geometry) footprintMesh.geometry.dispose();
+    if (footprintMesh.material) footprintMesh.material.dispose();
+  }
+  if (footprintTex) footprintTex.dispose();
+  footprintMesh = null; footprintTex = null;
+  footprintHead = 0; footprintCount = 0;
+  fpEnemyTracks = new WeakMap();
+}
+
+function spawnFootprint(x, z, yaw, side, width, length, alphaScale = 1){
+  if (!footprintMesh || !groundHeightFn) return;
+  const h = groundHeightFn(x, z);
+  _terrainNormal(groundHeightFn, x, z, 0.35, _fpNormal);
+  _fpFwd.set(Math.sin(yaw), 0, Math.cos(yaw));
+  _fpFwd.addScaledVector(_fpNormal, -_fpFwd.dot(_fpNormal));
+  if (_fpFwd.lengthSq() < 1e-8) _fpFwd.set(Math.sin(yaw), 0, Math.cos(yaw));
+  _fpFwd.normalize();
+  _fpRight.crossVectors(_fpFwd, _fpNormal).normalize();
+
+  const toe = side * 0.10;
+  const ca = Math.cos(toe), sa = Math.sin(toe);
+  const fx = _fpFwd.x * ca + _fpRight.x * sa;
+  const fy = _fpFwd.y * ca + _fpRight.y * sa;
+  const fz = _fpFwd.z * ca + _fpRight.z * sa;
+  const rx = _fpRight.x * ca - _fpFwd.x * sa;
+  const ry = _fpRight.y * ca - _fpFwd.y * sa;
+  const rz = _fpRight.z * ca - _fpFwd.z * sa;
+
+  _fpMat.makeBasis(
+    _fpRight.set(rx, ry, rz).multiplyScalar(width * alphaScale),
+    _fpFwd.set(fx, fy, fz).multiplyScalar(length),
+    _fpNormal
+  );
+  _fpMat.setPosition(x, h + FOOTPRINT_Y, z);
+  footprintMesh.setMatrixAt(footprintHead, _fpMat);
+  footprintMesh.instanceMatrix.needsUpdate = true;
+  footprintHead = (footprintHead + 1) % FOOTPRINT_MAX;
+  footprintCount = Math.min(FOOTPRINT_MAX, footprintCount + 1);
+}
+
+function updatePlayerFootprints(moving){
+  if (!footprintMesh) return;
+  const dx = surfX - fpPlayerLastX, dz = surfZ - fpPlayerLastZ;
+  const d = Math.hypot(dx, dz);
+  if (moving && d > 0.001) {
+    fpPlayerAcc += d;
+    while (fpPlayerAcc >= PLAYER_STEP) {
+      fpPlayerAcc -= PLAYER_STEP;
+      fpPlayerSide *= -1;
+      const rightX = Math.cos(S.yaw), rightZ = -Math.sin(S.yaw);
+      const fwdX = Math.sin(S.yaw), fwdZ = Math.cos(S.yaw);
+      spawnFootprint(
+        surfX - fwdX * 0.22 + rightX * fpPlayerSide * 0.18,
+        surfZ - fwdZ * 0.22 + rightZ * fpPlayerSide * 0.18,
+        S.yaw,
+        fpPlayerSide,
+        0.28,
+        0.58
+      );
+    }
+  } else if (!moving) {
+    fpPlayerAcc = Math.min(fpPlayerAcc, PLAYER_STEP * 0.45);
+  }
+  fpPlayerLastX = surfX; fpPlayerLastZ = surfZ;
+}
+
+function updateEnemyFootprints(enemy){
+  if (!footprintMesh || !enemy || !enemy.alive || !enemy.group || !enemy.group.visible) return;
+  const x = Number.isFinite(enemy.gx) ? enemy.gx : enemy.group.position.x;
+  const z = Number.isFinite(enemy.gz) ? enemy.gz : enemy.group.position.z;
+  let tr = fpEnemyTracks.get(enemy);
+  if (!tr) {
+    tr = { x, z, acc: 0, side: -1 };
+    fpEnemyTracks.set(enemy, tr);
+    return;
+  }
+  const d = Math.hypot(x - tr.x, z - tr.z);
+  if (d > 0.001 && d < 4.0) {
+    tr.acc += d;
+    while (tr.acc >= ENEMY_STEP) {
+      tr.acc -= ENEMY_STEP;
+      tr.side *= -1;
+      const yaw = Number.isFinite(enemy.facing) ? enemy.facing : Math.atan2(x - tr.x, z - tr.z);
+      const rightX = Math.cos(yaw), rightZ = -Math.sin(yaw);
+      const fwdX = Math.sin(yaw), fwdZ = Math.cos(yaw);
+      spawnFootprint(
+        x - fwdX * 0.30 + rightX * tr.side * 0.22,
+        z - fwdZ * 0.30 + rightZ * tr.side * 0.22,
+        yaw,
+        tr.side,
+        0.34,
+        0.68,
+        1.12
+      );
+    }
+  }
+  tr.x = x; tr.z = z;
+}
+
 function makeLanderModule(){
   const g = new THREE.Group();
   const foil   = new THREE.MeshStandardMaterial({ color: 0xc69a2e, metalness: 0.55, roughness: 0.45, flatShading: true });
@@ -1936,7 +2207,7 @@ function applyLanderTextures(root){
 }
 
 function buildApolloSite(sc){
-  const place = (o, x, z, ry) => { o.position.set(x, surfHeightFn(x, z), z); o.rotation.y = ry; sc.add(o); };
+  const place = (o, x, z, ry) => { o.position.set(x, groundHeightFn(x, z), z); o.rotation.y = ry; sc.add(o); };
   // Laskeutuja: NASAn oikea Apollo Lunar Module (glTF) — varalla proseduraalimalli.
   // Maasto on tasoitettu kaluston ympäriltä (apolloFlat surfHeightFn:ssä) → seisoo suorassa
   const lm = new THREE.Group(); place(lm, -13, -19, 0.6);
@@ -2077,8 +2348,8 @@ function buildSurfaceScene(name){
           rs.set(s, s * (cfg.rockFlat ?? 0.8), s);
           // upota jalanjäljen ALIMPAAN maastopisteeseen → ei kellu rinteessä
           const rr = s * 0.6;
-          const hl = Math.min(surfHeightFn(x, z), surfHeightFn(x - rr, z), surfHeightFn(x + rr, z),
-                              surfHeightFn(x, z - rr), surfHeightFn(x, z + rr));
+          const hl = Math.min(groundHeightFn(x, z), groundHeightFn(x - rr, z), groundHeightFn(x + rr, z),
+                              groundHeightFn(x, z - rr), groundHeightFn(x, z + rr));
           m4.compose(_vp.set(x, hl + s * 0.12, z), rq, rs);
         }, vr * 1000 + 1, { outline: 0.035, collide: 0.62, hp: 3 });   // isot kivet: 3 osumaa
       rocks.castShadow = true;
@@ -2098,9 +2369,9 @@ function buildSurfaceScene(name){
         // ≈ kolmion jänne); ota alempi keskuksesta/keskiarvosta + pieni upotus →
         // kivi ei koskaan kellu, korkeintaan painuu hieman maahan
         const rr = 5;
-        const hAvg = (surfHeightFn(x - rr, z) + surfHeightFn(x + rr, z)
-                    + surfHeightFn(x, z - rr) + surfHeightFn(x, z + rr)) * 0.25;
-        const hg = Math.min(surfHeightFn(x, z), hAvg);
+        const hAvg = (groundHeightFn(x - rr, z) + groundHeightFn(x + rr, z)
+                    + groundHeightFn(x, z - rr) + groundHeightFn(x, z + rr)) * 0.25;
+        const hg = Math.min(groundHeightFn(x, z), hAvg);
         m4.compose(_vp.set(x, hg - s * 0.04, z), rq, rs);
       }, 0, { hp: 1 });   // pikkukivet: 1 osuma
     pebbles.userData.scatter._pebble = true;   // pikkukiven sirut pienemmät
@@ -2128,7 +2399,7 @@ function buildSurfaceScene(name){
           re.set(0, hash2(i + ty.seedOff, 26) * 6.28, 0);
           rq.setFromEuler(re);
           rs.set(s, s, s);
-          m4.compose(_vp.set(x, surfHeightFn(x, z) - 0.15, z), rq, rs);
+          m4.compose(_vp.set(x, groundHeightFn(x, z) - 0.15, z), rq, rs);
         }, ty.seedOff);
       trees.castShadow = true;
       trees.receiveShadow = true;
@@ -2150,9 +2421,9 @@ function buildSurfaceScene(name){
           hideInstance(m4, rq, rs);
           return;
         }
-        const h0 = surfHeightFn(x, z);
-        const gx = surfHeightFn(x + 1.5, z) - h0;
-        const gz = surfHeightFn(x, z + 1.5) - h0;
+        const h0 = groundHeightFn(x, z);
+        const gx = groundHeightFn(x + 1.5, z) - h0;
+        const gz = groundHeightFn(x, z + 1.5) - h0;
         if (gx * gx + gz * gz > 0.55) { hideInstance(m4, rq, rs); return; }
         const s = 0.5 + hash2(i, 71) * 0.4;
         re.set(0, hash2(i, 72) * 6.28, 0);
@@ -2252,7 +2523,7 @@ function buildSurfaceScene(name){
         const bh = 6 + Math.pow(hash2(i * 7.7, ix * 2 + iz), 2) * 42;
         rq.identity();
         rs.set(bw, bh, bd);
-        m4.compose(_vp.set(wx, surfHeightFn(wx, wz) + bh / 2 - 0.6, wz), rq, rs);
+        m4.compose(_vp.set(wx, groundHeightFn(wx, wz) + bh / 2 - 0.6, wz), rq, rs);
       });
     buildings.castShadow = true;
     buildings.receiveShadow = true;
@@ -2412,7 +2683,7 @@ function buildSurfaceScene(name){
     twilight: cfg.twilight ? new THREE.Color(cfg.twilight) : null,
     discDay: disc ? disc.material.color.clone() : null,
   };
-  initMining(sc, name, surfHeightFn);   // mineraaliesiintymät (vain Mars)
+  initMining(sc, name, groundHeightFn);   // mineraaliesiintymät (vain Mars)
   return sc;
 }
 
@@ -2452,6 +2723,7 @@ function enterSurfaceScene(b, mode){
 // yhteinen purku: takaisin avaruusscenen renderöintiin ja resurssit vapaiksi
 function leaveSurfaceScene(){
   clearMining();
+  disposeFootprints();
   worm = null; golem = null;   // entiteetit ovat surfaceScenen lapsia → vapautuvat scenen dispose-traversessa
   _surfaceDead = false;
   S.wreckPos = null;   // hylyn törmäyseste pois scenen mukana
@@ -2486,22 +2758,23 @@ function leaveSurfaceScene(){
 function enterSurface(b){
   enterSurfaceScene(b, 'surface');
   surfX = 0; surfZ = 0;
+  initFootprints(surfaceScene);
   S.health = 1; _surfaceDead = false;
   const enemyBurst = (x, y, z, big, mat) => { for (let k = 0; k < (big ? 8 : 4); k++) spawnHitDebris(x, y + 0.3, z, mat, big && k < 2); };
   // Regolith-mato: vain Marsin pinnalla (kävelymoodi) — toistaiseksi pois käytöstä
   if (WORM_ENABLED && b.def.name === 'Mars') {
-    worm = new RegolithWorm(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
+    worm = new RegolithWorm(surfaceScene, groundHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
   }
   // Hiekkagolem (toistaiseksi pois käytöstä, korvattu glb-vihollisella)
   if (GOLEM_ENABLED && b.def.name === 'Mars') {
-    golem = new SandGolem(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
+    golem = new SandGolem(surfaceScene, groundHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
     golem._spawn(0, 0);
   }
   // glb-vihollinen (Mixamo-rigattu hahmo: walk-animaatio + procedural arm-swing isku,
   // raajat irtoavat bone.scale → 0, kasvavat takaisin). Lataa async, _spawn tapahtuu
   // ensimmäisessä update()-kutsussa lataus valmiina.
   if (GLB_ENEMY_ENABLED && b.def.name === 'Mars') {
-    golem = new GlbEnemy(surfaceScene, surfHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
+    golem = new GlbEnemy(surfaceScene, groundHeightFn, { bite: (dmg) => hurtPlayer(dmg), burst: enemyBurst });
   }
   // vuorokausi alkaa aamupäivästä; aurinko selän taakse laskeutuessa,
   // jotta maisema näkyy valaistuna
@@ -2533,11 +2806,15 @@ const _hFwd = new THREE.Vector3();
 const HUD_MONO = 'ui-monospace, "SF Mono", Menlo, monospace';
 const RADAR_RANGE = 180;   // tutkan kantama (m)
 const NAME_RANGE = 12;     // kohde nimetään kun näin lähellä
-// kypärävisiiri: KOLME erillistä SUORAA, SAMANKOKOISTA näyttöä rivissä
-// (vasen = kerätyt mineraalit, keski = tutka/kohde, oikea = happi + runko)
+// kypärävisiiri: kolme samankokoista, hieman kaarevan visiirilasin mukaan
+// aseteltua näyttöä (vasen = mineraalit, keski = tutka/kohde, oikea = terveys + happi)
 let visorEl = null, hudReturnEl = null;
 let hudL = null, hudC = null, hudR = null, ctxL = null, ctxC = null, ctxR = null;
 const HUD_W = 270, HUD_H = 150;   // kaikki näytöt samankokoisia
+const HUD_DISPLAY_H = 139;         // 20% suurempi kuin aiempi 116 px
+const HUD_PAD_X = 36;              // kaareva kehys tarvitsee tavallista reilummat sisämarginaalit
+const HUD_PAD_R = 32;
+const HUD_TITLE_Y = 34;
 
 /* tutkan pulssiääni: hiljainen "bleep" joka pyyhkäisyllä (WebAudio, ei
    tiedostoa). Soi vasta pelaajan eleen jälkeen — autoplay-rajoitus. */
@@ -2585,19 +2862,23 @@ function detectContacts(){
   return list;
 }
 function buildHud(){
-  // kolme SUORAA, SAMANKOKOISTA näyttöä rivissä (sama kevyt rotateX-kallistus → visiirin tuntu)
+  // Kolme näyttöä kaartuvat samaan suuntaan kuin kypärälasin alareuna.
   visorEl = document.createElement('div'); visorEl.id = 'visorHud';
   visorEl.style.cssText = 'position:fixed;left:50%;bottom:5%;transform:translateX(-50%);'
-    + 'display:none;align-items:flex-end;gap:12px;z-index:6;pointer-events:none;';
-  const TF = 'perspective(1300px) rotateX(10deg)';
-  const DH = 116;
-  const mk = () => {
+    + 'display:none;align-items:flex-end;gap:15px;z-index:6;pointer-events:none;perspective:1400px;';
+  const mk = (side = 0) => {
     const cv = document.createElement('canvas'); cv.width = HUD_W; cv.height = HUD_H;
+    const yaw = side * -9;
+    const lift = Math.abs(side) * 3;
+    const DH = HUD_DISPLAY_H;
     cv.style.cssText = `height:${DH}px;width:${(DH * HUD_W / HUD_H).toFixed(0)}px;`
-      + `mix-blend-mode:screen;opacity:0.92;transform:${TF};transform-origin:center bottom;`;
+      + 'mix-blend-mode:screen;opacity:0.94;'
+      + `transform:rotateX(10deg) rotateY(${yaw}deg) translateY(${lift}px);`
+      + `transform-origin:${side < 0 ? 'right' : side > 0 ? 'left' : 'center'} bottom;`
+      + 'filter:drop-shadow(0 0 10px rgba(98,232,255,0.24));';
     visorEl.appendChild(cv); return cv;
   };
-  hudL = mk(); hudC = mk(); hudR = mk();   // vasen: mineraalit · keski: tutka · oikea: happi+runko
+  hudL = mk(-1); hudC = mk(0); hudR = mk(1);   // vasen: mineraalit · keski: tutka · oikea: terveys+happi
   ctxL = hudL.getContext('2d'); ctxC = hudC.getContext('2d'); ctxR = hudR.getContext('2d');
   document.body.appendChild(visorEl);
   hudReturnEl = document.createElement('div'); hudReturnEl.id = 'hudReturn';
@@ -2608,35 +2889,75 @@ function buildHud(){
 }
 // yhteinen näytön kehys + lasikiilto
 const _CYAN = '#62e8ff', _DIM = 'rgba(108,228,255,0.5)';
+function hudFitText(c, text, x, y, maxW, weight = 700, size = 12, minSize = 8){
+  let s = size;
+  do {
+    c.font = `${weight} ${s}px ${HUD_MONO}`;
+    if (c.measureText(text).width <= maxW || s <= minSize) break;
+    s -= 1;
+  } while (s >= minSize);
+  c.fillText(text, x, y);
+}
+function visorPath(c, W, H, inset = 5){
+  const x0 = inset, x1 = W - inset, y0 = inset, y1 = H - inset;
+  const bow = H * 0.075, side = W * 0.025;
+  c.beginPath();
+  c.moveTo(x0 + 24, y0 + bow);
+  c.quadraticCurveTo(W / 2, y0 - bow * 0.72, x1 - 24, y0 + bow);
+  c.quadraticCurveTo(x1 + side, H / 2, x1 - 14, y1 - bow * 0.25);
+  c.quadraticCurveTo(W / 2, y1 + bow * 0.86, x0 + 14, y1 - bow * 0.25);
+  c.quadraticCurveTo(x0 - side, H / 2, x0 + 24, y0 + bow);
+  c.closePath();
+}
 function screenFrame(c, W, H, title){
   c.clearRect(0, 0, W, H);
-  c.strokeStyle = 'rgba(108,228,255,0.28)'; c.lineWidth = 1.5; c.shadowColor = _CYAN; c.shadowBlur = 7;
-  c.beginPath(); c.roundRect(4, 4, W - 8, H - 8, 14); c.stroke(); c.shadowBlur = 0;
+  c.save();
+  visorPath(c, W, H, 5);
+  const bg = c.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, 'rgba(10,32,50,0.20)');
+  bg.addColorStop(0.55, 'rgba(6,20,36,0.06)');
+  bg.addColorStop(1, 'rgba(34,96,120,0.10)');
+  c.fillStyle = bg; c.fill();
+  c.strokeStyle = 'rgba(108,228,255,0.30)'; c.lineWidth = 1.6; c.shadowColor = _CYAN; c.shadowBlur = 8;
+  visorPath(c, W, H, 5); c.stroke(); c.shadowBlur = 0;
+  c.strokeStyle = 'rgba(220,250,255,0.14)'; c.lineWidth = 1;
+  visorPath(c, W, H, 12); c.stroke();
+  c.restore();
   if (title) {
     c.textAlign = 'left'; c.textBaseline = 'alphabetic';
     c.fillStyle = _DIM; c.font = '700 10px ' + HUD_MONO; c.shadowColor = _CYAN; c.shadowBlur = 3;
-    c.fillText(title, 14, 22); c.shadowBlur = 0;
+    c.fillText(title, HUD_PAD_X, HUD_TITLE_Y); c.shadowBlur = 0;
   }
 }
 function screenSheen(c, W, H){
   const g = c.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, 'rgba(180,240,255,0.10)'); g.addColorStop(0.5, 'rgba(180,240,255,0)');
-  c.fillStyle = g; c.beginPath(); c.roundRect(5, 5, W - 10, H - 10, 12); c.fill();
+  c.save();
+  visorPath(c, W, H, 8);
+  c.clip();
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  const arc = c.createRadialGradient(W / 2, H + 80, 20, W / 2, H + 80, W * 0.72);
+  arc.addColorStop(0.58, 'rgba(98,232,255,0)');
+  arc.addColorStop(0.80, 'rgba(98,232,255,0.10)');
+  arc.addColorStop(1, 'rgba(98,232,255,0)');
+  c.fillStyle = arc; c.fillRect(0, 0, W, H);
+  c.restore();
 }
 // VASEN näyttö: kerätyt mineraalit
 function drawMinerals(c, W, H){
   screenFrame(c, W, H, 'MINERAALIT');
   const inv = inventory();
+  const contentW = W - HUD_PAD_X - HUD_PAD_R;
   c.textAlign = 'left'; c.textBaseline = 'alphabetic';
   if (!inv.length) {
-    c.fillStyle = _DIM; c.font = '700 12px ' + HUD_MONO; c.fillText('— ei vielä —', 16, 80);
+    c.fillStyle = _DIM; c.font = '700 12px ' + HUD_MONO; c.fillText('— ei vielä —', HUD_PAD_X, 90);
   } else {
-    let y = 46;
+    let y = 62;
     for (const it of inv.slice(0, 8)) {
       c.fillStyle = it.made ? '#9fd0ff' : '#cfe6d6';
       c.shadowColor = it.made ? 'rgba(120,180,255,0.5)' : 'rgba(120,220,160,0.4)'; c.shadowBlur = 4;
-      c.font = '700 12px ' + HUD_MONO; c.fillText(it.name, 16, y);
-      c.fillStyle = '#fff'; c.textAlign = 'right'; c.fillText(String(it.count), W - 16, y);
+      hudFitText(c, it.name, HUD_PAD_X, y, contentW - 36, 700, 12, 8);
+      c.fillStyle = '#fff'; c.textAlign = 'right'; c.fillText(String(it.count), W - HUD_PAD_R, y);
       c.textAlign = 'left'; c.shadowBlur = 0;
       y += 18;
     }
@@ -2644,11 +2965,11 @@ function drawMinerals(c, W, H){
   screenSheen(c, W, H);
 }
 // KESKI näyttö: tutka + kohde (entinen layout)
-function drawRadar(contacts, nearest, fwdAng){
+function drawRadar(contacts, nearest, fwdAng, shuttleDist = null){
   const c = ctxC, W = HUD_W, H = HUD_H;
   screenFrame(c, W, H, null);
   const cyan = _CYAN, dim = _DIM;
-  const cx = 56, cy = H / 2 + 2, R = 42;
+  const cx = 68, cy = H / 2 + 4, R = 31;
   c.strokeStyle = 'rgba(108,228,255,0.5)'; c.lineWidth = 1.4; c.shadowColor = cyan; c.shadowBlur = 5;
   c.beginPath(); c.arc(cx, cy, R, 0, 6.2832); c.stroke(); c.shadowBlur = 0;
   c.strokeStyle = 'rgba(108,228,255,0.20)'; c.lineWidth = 1;
@@ -2679,40 +3000,42 @@ function drawRadar(contacts, nearest, fwdAng){
     c.strokeStyle = '#eaffff'; c.lineWidth = 1.2;
     c.beginPath(); c.arc(cx - Math.sin(rel) * rr, cy - Math.cos(rel) * rr, 7, 0, 6.2832); c.stroke();
   }
-  const tx = 110; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+  const tx = 124, maxTextW = W - tx - HUD_PAD_R; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
   c.shadowColor = cyan; c.shadowBlur = 4;
-  c.fillStyle = dim; c.font = '700 9px ' + HUD_MONO; c.fillText('TUTKA · ' + contacts.length + ' KOHDETTA', tx, 32);
+  c.fillStyle = dim; hudFitText(c, 'TUTKA · ' + contacts.length + ' KOHDETTA', tx, 44, maxTextW, 700, 9, 7);
   if (nearest) {
     const named = nearest.d <= NAME_RANGE;
-    c.fillStyle = '#e2f7ff'; c.font = '700 16px ' + HUD_MONO; c.fillText(named ? nearest.name : 'KOHDE', tx, 60);
-    c.fillStyle = dim; c.font = '700 10px ' + HUD_MONO; c.fillText('KOKO ≈ ' + nearest.sizeWord, tx, 80);
-    c.fillStyle = cyan; c.font = '700 24px ' + HUD_MONO; c.fillText('≈ ' + nearest.d.toFixed(0) + ' M', tx, 112);
+    c.fillStyle = '#e2f7ff'; hudFitText(c, named ? nearest.name : 'KOHDE', tx, 66, maxTextW, 700, 13, 9);
+    c.fillStyle = dim; hudFitText(c, 'KOKO ≈ ' + nearest.sizeWord, tx, 84, maxTextW, 700, 8, 7);
+    c.fillStyle = cyan; hudFitText(c, '≈ ' + nearest.d.toFixed(0) + ' M', tx, 110, maxTextW, 700, 18, 12);
   } else {
-    c.fillStyle = dim; c.font = '700 13px ' + HUD_MONO; c.fillText('EI KONTAKTEJA', tx, 70);
+    c.fillStyle = dim; hudFitText(c, 'EI KONTAKTEJA', tx, 78, maxTextW, 700, 12, 8);
+  }
+  if (shuttleDist != null) {
+    c.fillStyle = '#bdf8ff';
+    hudFitText(c, 'SUKKULA ' + shuttleDist.toFixed(0) + ' M', tx, 134, maxTextW, 700, 9, 7);
   }
   c.shadowBlur = 0;
   screenSheen(c, W, H);
 }
-// OIKEA näyttö: happi + runko (HP) (piirretään tasaiselle offscreenille)
+// OIKEA näyttö: pinnalla vain pelaajan terveys + happi.
 function drawVitals(c, W, H){
-  screenFrame(c, W, H, 'JÄRJESTELMÄ');
+  screenFrame(c, W, H, 'ELINTOIMINNOT');
   const bar = (label, v, y, hue) => {
     v = Math.max(0, Math.min(1, v));
     // väri: matala = punainen, korkea = vihreä/syaani
     const col = v > 0.5 ? hue : (v > 0.25 ? '#ffd24a' : '#ff5a48');
     c.textAlign = 'left'; c.textBaseline = 'alphabetic';
-    c.fillStyle = _DIM; c.font = '700 11px ' + HUD_MONO; c.shadowBlur = 0; c.fillText(label, 16, y - 6);
-    c.fillStyle = '#fff'; c.textAlign = 'right'; c.fillText(Math.round(v * 100) + '%', W - 16, y - 6);
+    c.fillStyle = _DIM; c.font = '700 11px ' + HUD_MONO; c.shadowBlur = 0; c.fillText(label, HUD_PAD_X, y - 6);
+    c.fillStyle = '#fff'; c.textAlign = 'right'; c.fillText(Math.round(v * 100) + '%', W - HUD_PAD_R, y - 6);
     c.textAlign = 'left';
-    const bx = 16, bw = W - 32, bh = 10;
+    const bx = HUD_PAD_X, bw = W - HUD_PAD_X - HUD_PAD_R, bh = 12;
     c.strokeStyle = 'rgba(108,228,255,0.35)'; c.lineWidth = 1; c.strokeRect(bx, y, bw, bh);
     c.fillStyle = col; c.shadowColor = col; c.shadowBlur = 6;
     c.fillRect(bx + 1, y + 1, (bw - 2) * v, bh - 2); c.shadowBlur = 0;
   };
-  // pinnalla pelaajan TERVEYS on olennaisin (viholliset) → kolme mittaria
-  bar('TERVEYS', S.health != null ? S.health : 1, 46, '#ff8a6a');
-  bar('HAPPI', S.oxygen != null ? S.oxygen : 1, 84, '#5fe0a0');
-  bar('RUNKO', S.hull != null ? S.hull : 1, 122, '#62e8ff');
+  bar('TERVEYS', S.health != null ? S.health : 1, 68, '#ff8a6a');
+  bar('HAPPI', S.oxygen != null ? S.oxygen : 1, 114, '#5fe0a0');
   screenSheen(c, W, H);
 }
 function updateHelmetHud(){
@@ -2723,15 +3046,17 @@ function updateHelmetHud(){
   const fwdAng = Math.atan2(_hFwd.x, _hFwd.z);
   const contacts = detectContacts();
   let nearest = null; for (const ct of contacts) if (!nearest || ct.d < nearest.d) nearest = ct;
+  const shuttleDist = S.shuttlePos ? Math.hypot(S.shuttlePos.x - surfX, S.shuttlePos.z - surfZ) : null;
   drawMinerals(ctxL, HUD_W, HUD_H);            // vasen: mineraalit
-  drawRadar(contacts, nearest, fwdAng);        // keski: tutka
-  drawVitals(ctxR, HUD_W, HUD_H);              // oikea: happi + runko
+  drawRadar(contacts, nearest, fwdAng, shuttleDist);        // keski: tutka
+  drawVitals(ctxR, HUD_W, HUD_H);              // oikea: terveys + happi
   visorEl.style.display = 'flex';
   const nearSh = S.shuttlePos && Math.hypot(S.shuttlePos.x - surfX, S.shuttlePos.z - surfZ) < 10;
   hudReturnEl.style.display = (S.mode === 'surface' && (aimingAtShuttle() || nearSh)) ? 'block' : 'none';
 }
 
 export function updateSurface(dt){
+  if (!footprintMesh && surfaceScene) initFootprints(surfaceScene);
   updateDaylight();
   const running = S.keys.ShiftLeft || S.keys.ShiftRight;
   const sp = running ? 26 : 9;
@@ -2759,6 +3084,7 @@ export function updateSurface(dt){
   updateTerrain(surfX, surfZ);
   updateScatter(surfX, surfZ);
   updateMining(dt, surfX, surfZ);
+  updatePlayerFootprints(moving);
 
   // kävelyheilunta: askelpomppu, sivuttaishuojunta ja kevyt kallistus
   bobAmp += ((moving ? (running ? 1.4 : 1.0) : 0) - bobAmp) * (1 - Math.exp(-dt * 8));
@@ -2771,13 +3097,13 @@ export function updateSurface(dt){
   camera.rotation.set(S.pitch, S.yaw, tilt, 'YXZ');
   camera.position.set(
     surfX + rX * sway,
-    surfHeightFn(surfX, surfZ) + 2.4 + bobY,
+    groundHeightFn(surfX, surfZ) + 2.4 + bobY,
     surfZ + rZ * sway
   );
   // viholliset: päivitä + maan tärinä (kameran ravistus) niiden mukaan
   let tr = 0;
   if (worm) { worm.update(dt, surfX, surfZ, camera); tr = Math.max(tr, worm.tremor); }
-  if (golem) { golem.update(dt, surfX, surfZ, camera); tr = Math.max(tr, golem.tremor); }
+  if (golem) { golem.update(dt, surfX, surfZ, camera); updateEnemyFootprints(golem); tr = Math.max(tr, golem.tremor); }
   if (tr > 0.001) {
     camera.position.x += (Math.random() - 0.5) * tr;
     camera.position.y += (Math.random() - 0.5) * tr;
@@ -2899,7 +3225,7 @@ export function updateDescent(dt){
   updateTerrain(descentPos.x, descentPos.z);
   updateScatter(descentPos.x, descentPos.z);
 
-  const ground = surfHeightFn(descentPos.x, descentPos.z);
+  const ground = groundHeightFn(descentPos.x, descentPos.z);
   const alt = descentPos.y - ground;
   const rollDeg = descRoll * 180 / Math.PI;
 
@@ -2942,6 +3268,7 @@ export function updateDescent(dt){
       document.body.classList.add('surface');
       surfX = descentPos.x; surfZ = descentPos.z;
       bobPhase = 0; bobAmp = 0;
+      initFootprints(surfaceScene);
       const cfg = SURFACE_CONFIGS[surfaceBody.def.name];
       document.getElementById('surfTitle').textContent = cfg.title;
       document.getElementById('surfInfo').textContent = cfg.info;
@@ -2985,7 +3312,7 @@ export function updateDescent(dt){
 // π/2 = keskipäivä, π = auringonlasku, 3π/2 = keskiyö
 export function surfDebug(){
   return {
-    scene: surfaceScene, h: surfHeightFn, x: surfX, z: surfZ,
+    scene: surfaceScene, h: groundHeightFn, rawH: surfHeightFn, x: surfX, z: surfZ,
     setPos(x, z){ surfX = x; surfZ = z; },
     body: surfaceBody ? surfaceBody.def.name : null,
     dayPhase: daylight ? sunPhase() % (Math.PI * 2) : null,

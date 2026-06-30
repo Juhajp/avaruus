@@ -27,16 +27,23 @@ const EMERGE_T = 2.5;
 const DEAD_T = 1.2;                  // kaatumisen kesto (selälleen)
 const ATTACK_T = 1.4;
 const FOOT_OFFSET = 0.05;            // jalka koskettaa maata kun bone on tämä metri maan päällä
+const FOOT_SOLE_CLEARANCE = 0.008;   // millimetriluokan turvaväli; senttiluokka näkyy leijumisena
+const FOOT_DEFAULT_SOLE_OFFSET = -0.14;
+const FOOT_SAMPLE_R = 0.04;          // vain pieni antialias-näyte, ei rinteellä nostavaa "max around" -footprintiä
+const FOOT_IK_UP = 0.7;
+const FOOT_IK_DOWN = 0.55;
+const LIVE_MAX_TILT = 0.42;          // runko kallistuu rinteeseen, mutta ei kaadu visuaalisesti yli
 const BLOOD_POOL = 200;              // aktiivisia veripisaroita kerralla (tiheämpi sumu)
 const TARGET_HEIGHT = 2.8;           // skaalataan glb tähän korkeuteen (m)
 const HP_BAR_W = 1.0;                // HP-palkin leveys (m, world-koordinaateissa)
 const HP_BAR_H = 0.10;
 const HP_BAR_OFFSET = 0.35;          // bbox.max.y:stä ylöspäin
-const RECOIL_KICK = 0.65;            // takanyykähdyksen amplitudi (m) täydellä _recoililla
-const RECOIL_LIFT = 0.18;            // pieni ylösnyykähdys (m) täydellä _recoililla
-const RECOIL_DECAY_RATE = 1.8;       // _recoil → 0 ~0.55 s (näkyvämpi)
-const RECOIL_WALK_SLOW = 0.85;       // walkAction.timeScale *= (1 - _recoil*tämä) → täydellä recoililla 15% nopeudesta
-const TWITCH_DECAY = 0.55;           // luu-nykäyksen kesto (s) ennen lerppausta nollaan
+const RECOIL_KICK = 0.34;            // koko vartalon kevyt takanykäys (m)
+const RECOIL_LIFT = 0.04;            // hyvin pieni ylösnyykähdys, ettei osuma näytä liu'ulta
+const RECOIL_DECAY_RATE = 0.75;      // hitaampi palautuminen: _recoil → 0 ~1.3 s
+const RECOIL_WALK_SLOW = 0.95;       // walkAction.timeScale *= (1 - _recoil*tämä)
+const RECOIL_MOVE_SLOW = 0.97;       // varsinainen gx/gz eteneminen hidastuu myös suoraan
+const TWITCH_DECAY = 0.82;           // osumakohdan luu palautuu vielä selvästi, mutta napakammin
 const HEAD_DMG_MULT = 2.2;           // pääosumalle ylimääräinen vahinkokerroin
 const OUTLINE_THICKNESS = 0.024;     // ääriviivan paksuus maailmametreinä (cell-shade)
 
@@ -47,12 +54,12 @@ const OUTLINE_THICKNESS = 0.024;     // ääriviivan paksuus maailmametreinä (c
 // dynaamisesti luodin suunnasta (takeDamage). Bone-tipin Y-akseli kääntyy kohti
 // luodin world-suuntaa → osuma-alue nykäisee aina luodin liikesuuntaan.
 const PART_TWITCH = {
-  head:  { boneKey: 'head',  mag: 1.35 },
-  torso: { boneKey: 'spine', mag: 0.80 },
-  larm:  { boneKey: 'larmU', mag: 1.50 },
-  rarm:  { boneKey: 'rarmU', mag: 1.50 },
-  lleg:  { boneKey: 'luplg', mag: 1.25 },
-  rleg:  { boneKey: 'ruplg', mag: 1.25 },
+  head:  { boneKey: 'head',  mag: 1.25, push: 0.14, bodyKey: 'spine2', bodyMag: 0.20, bodyDynamicSign: true },
+  torso: { boneKey: 'spine', mag: 1.25, push: 0.16 },
+  larm:  { boneKey: 'larmU', mag: 0.85, push: 0.045, bodyKey: 'spine2', bodyMag: 0.24, bodySign:  1 },
+  rarm:  { boneKey: 'rarmU', mag: 0.85, push: 0.045, bodyKey: 'spine2', bodyMag: 0.24, bodySign: -1 },
+  lleg:  { boneKey: 'luplg', mag: 0.62, push: 0.040, bodyKey: 'spine2', bodyMag: 0.16, bodySign:  1 },
+  rleg:  { boneKey: 'ruplg', mag: 0.62, push: 0.040, bodyKey: 'spine2', bodyMag: 0.16, bodySign: -1 },
 };
 
 // Osuma-alueen luut: kun osuma kirjautuu, etsitään lähin näistä luista
@@ -101,6 +108,7 @@ export class GlbEnemy {
     this.walkAction = null;
     this.lFootBone = null;
     this.rFootBone = null;
+    this._footInfos = [];
     this.hipsBone = null;
     this._restHip = null;
     this._lastHip = null;                            // root motion -tracker (edell. ruudun hipin lokaali XYZ)
@@ -231,6 +239,7 @@ export class GlbEnemy {
     }
     if (this.lFootBone) this._groundBonesDead.push(this.lFootBone);
     if (this.rFootBone) this._groundBonesDead.push(this.rFootBone);
+    this._calibrateFootGrounding(model);
 
     // veriroiskeen partikkelipooli (THREE.Points olisi GPU-tehokkaampi, mutta tämä riittää)
     this._initBlood();
@@ -368,7 +377,7 @@ export class GlbEnemy {
       }
     }
 
-    // Osumakohtaiset luu-nykäykset: laantuvat ~0,28 s aikana animaation päälle
+    // Osumakohtaiset luu-nykäykset: voimakas isku, hidas palautuminen animaation päälle
     this._applyTwitches(dt);
 
     const dist = Math.hypot(this.gx - px, this.gz - pz);
@@ -394,11 +403,9 @@ export class GlbEnemy {
   _walk(dt, px, pz, dist){
     if (this.walkAction) {
       if (!this.walkAction.isRunning()) this.walkAction.play();
-      // Recoil hidastaa kävelyä: täydellä _recoililla (1.0) timeScale tipahtaa
-      // ~15 %:iin (tönäisee vihollisen pysähdykseen) ja palautuu ~0,55 s aikana
-      // normaaliksi. Koska locomotion johdetaan walkAction.timesta, hidastunut
-      // klippi → pienempi gx/gz-edistys → vihollinen pysähtyy näkyvästi.
-      const slow = Math.max(0.15, 1 - this._recoil * RECOIL_WALK_SLOW);
+      // Recoil hidastaa sekä animaatiota että varsinaista gx/gz-etenemistä.
+      // Täydellä osumalla vihollinen lähes pysähtyy ja palautuu yli sekunnissa.
+      const slow = Math.max(0.05, 1 - this._recoil * RECOIL_WALK_SLOW);
       this.walkAction.timeScale = ANIM_TIMESCALE * slow;
     }
     this._face(px, pz, dt * 2.2);
@@ -412,8 +419,9 @@ export class GlbEnemy {
       const ms = this.model.scale.x;
       const bx = this._animDx * ms, bz = this._animDz * ms;
       const cosF = Math.cos(this.facing), sinF = Math.sin(this.facing);
-      this.gx += bx * cosF + bz * sinF;
-      this.gz += -bx * sinF + bz * cosF;
+      const moveSlow = Math.max(0.03, 1 - this._recoil * RECOIL_MOVE_SLOW);
+      this.gx += (bx * cosF + bz * sinF) * moveSlow;
+      this.gz += (-bx * sinF + bz * cosF) * moveSlow;
     } else if (this._atkCd <= 0) {
       this._bitDone = false; this._attackStarted = false; this._setState('attack');
     }
@@ -509,38 +517,34 @@ export class GlbEnemy {
     }
 
     const yaw = this.facing;
-    // KUOLEMA rinteellä: kallista ryhmä siten että local Y = maaston normaali,
-    // jolloin selälleen kaatunut ruumis makaa yhdensuuntaisesti maaston kanssa
-    // (ei jää vaakaan leijumaan). Muulloin pelkkä yaw — pinta-IK hoitaa
-    // jalkapohjien kallistuksen erikseen.
-    if (this.state === 'dead' && h) {
-      const dd = 0.6;
-      const hL = h(this.gx - dd, this.gz), hR = h(this.gx + dd, this.gz);
-      const hD = h(this.gx, this.gz - dd), hU = h(this.gx, this.gz + dd);
-      _vNormal.set((hL - hR) / (2 * dd), 1, (hD - hU) / (2 * dd)).normalize();
-      // Halutaan: local-Y = normaali, local-Z (facing) = vaakaa facing projisoituna
-      // kohtisuoraan normaalia vastaan. Sitten local-X = Y × Z.
-      _v3.set(Math.sin(yaw), 0, Math.cos(yaw));
-      _v3.addScaledVector(_vNormal, -_v3.dot(_vNormal)).normalize();
-      _v2.crossVectors(_vNormal, _v3).normalize();
-      _tiltMat.makeBasis(_v2, _vNormal, _v3);
-      this.group.quaternion.setFromRotationMatrix(_tiltMat);
+    const liveState = (this.state === 'walk' || this.state === 'attack');
+    if (h && this.state === 'dead') {
+      this._setGroundRotation(yaw, null);
     } else {
+      // Elävä vihollinen pysyy pystysuorassa; vain jalkaterät mukautuvat rinteen
+      // normaaliin. Koko rigging-ryhmän kallistus tekee hahmosta luonnottoman.
       this.group.rotation.set(0, yaw, 0);
     }
 
-    const liveState = (this.state === 'walk' || this.state === 'attack');
-    // ---- MAX-CLEARANCE GROUND-LIFT ----
-    // Robusti per-bone-sample: jokaiselle relevantille luulle lasketaan paljonko
-    // runkoa pitää nostaa että luu olisi FOOT_OFFSET m maan päällä. Sitten otetaan
-    // SUURIN positiivinen tarvittava nosto → mikään luu ei jää maan alle.
-    // Walk: jalat + polvet (jyrkillä ylämäillä polvi voi clipata ennen jalkaa).
+    // ---- FOOTPRINT GROUND-LIFT + FOOT IK ----
+    // Runko nostetaan ensin jalkapohjien footprintin mukaan, ei yksittäisen
+    // keskipisteen. Sen jälkeen kumpikin nilkka saa oman world-Y-korjauksen, jotta
+    // rinteellä toinen jalka ei jää ilmaan eikä toinen uppoa maahan.
     // Dead: koko vartalo (kuoleman pose levittää bonet → kysytään monelta luulta).
     if (h && liveState && this._groundBonesWalk && this._groundBonesWalk.length) {
+      this._resetFootHeight();
       this.model.updateMatrixWorld(true);
-      const adj = this._maxGroundClearance(this._groundBonesWalk, FOOT_OFFSET);
+      const adj = this._liveFootprintLift();
       this.group.position.y += adj;
       this.model.updateMatrixWorld(true);
+      this._applyFootHeight(this._footInfos[0]);
+      this._applyFootHeight(this._footInfos[1]);
+      this.model.updateMatrixWorld(true);
+      const safety = Math.max(0, this._maxGroundClearance(this._groundBonesWalk, FOOT_SOLE_CLEARANCE));
+      if (safety > 0) {
+        this.group.position.y += safety;
+        this.model.updateMatrixWorld(true);
+      }
       // Slope-IK: kierrä nilkat maaston normaaliin yhdensuuntaiseksi
       this._tiltFoot(this.lFootBone);
       this._tiltFoot(this.rFootBone);
@@ -607,6 +611,106 @@ export class GlbEnemy {
     }
   }
 
+  _calibrateFootGrounding(model){
+    this._footInfos = [];
+    if (!model) return;
+    model.updateMatrixWorld(true);
+    _bbox.setFromObject(model);
+    const bottomY = _bbox.min.y;
+    const add = (bone) => {
+      if (!bone) return;
+      bone.getWorldPosition(_vPos);
+      let soleOffset = bottomY - _vPos.y;
+      if (!Number.isFinite(soleOffset) || soleOffset > 0.08 || soleOffset < -0.6) {
+        soleOffset = FOOT_DEFAULT_SOLE_OFFSET;
+      }
+      this._footInfos.push({ bone, soleOffset, restPos: bone.position.clone() });
+    };
+    add(this.lFootBone);
+    add(this.rFootBone);
+  }
+
+  _resetFootHeight(){
+    if (!this._footInfos) return;
+    for (const info of this._footInfos) {
+      if (info && info.bone && info.restPos) info.bone.position.copy(info.restPos);
+    }
+  }
+
+  _terrainHeightMax(x, z, r){
+    const h = this.heightFn;
+    if (!h) return 0;
+    if (!(r > 0)) return h(x, z);
+    return Math.max(
+      h(x, z),
+      h(x - r, z),
+      h(x + r, z),
+      h(x, z - r),
+      h(x, z + r)
+    );
+  }
+
+  _terrainNormalAt(x, z, r, out){
+    const h = this.heightFn;
+    if (!h) return out.copy(_worldUp);
+    const d = Math.max(0.05, r || 0.6);
+    const hL = h(x - d, z), hR = h(x + d, z);
+    const hD = h(x, z - d), hU = h(x, z + d);
+    return out.set((hL - hR) / (2 * d), 1, (hD - hU) / (2 * d)).normalize();
+  }
+
+  _setGroundRotation(yaw, maxTilt){
+    if (!this.heightFn) { this.group.rotation.set(0, yaw, 0); return; }
+    this._terrainNormalAt(this.group.position.x, this.group.position.z, 0.75, _vNormal);
+    if (maxTilt != null) {
+      const angle = Math.acos(Math.max(-1, Math.min(1, _vNormal.y)));
+      if (angle > maxTilt) {
+        _qTilt.setFromUnitVectors(_worldUp, _vNormal);
+        _qTarget.copy(_qIdentity).slerp(_qTilt, maxTilt / angle);
+        _vNormal.copy(_worldUp).applyQuaternion(_qTarget).normalize();
+      }
+    }
+    _v3.set(Math.sin(yaw), 0, Math.cos(yaw));
+    _v3.addScaledVector(_vNormal, -_v3.dot(_vNormal));
+    if (_v3.lengthSq() < 1e-8) _v3.set(Math.sin(yaw), 0, Math.cos(yaw));
+    _v3.normalize();
+    _v2.crossVectors(_vNormal, _v3).normalize();
+    _tiltMat.makeBasis(_v2, _vNormal, _v3);
+    this.group.quaternion.setFromRotationMatrix(_tiltMat);
+  }
+
+  _liveFootprintLift(){
+    if (!this._footInfos || this._footInfos.length === 0) {
+      return this._maxGroundClearance(this._groundBonesWalk, FOOT_SOLE_CLEARANCE);
+    }
+    let maxDelta = -Infinity;
+    for (const info of this._footInfos) {
+      if (!info || !info.bone) continue;
+      info.bone.getWorldPosition(_vPos);
+      const terr = this._terrainHeightMax(_vPos.x, _vPos.z, FOOT_SAMPLE_R);
+      const soleY = _vPos.y + info.soleOffset;
+      maxDelta = Math.max(maxDelta, terr + FOOT_SOLE_CLEARANCE - soleY);
+    }
+    return maxDelta === -Infinity ? 0 : maxDelta;
+  }
+
+  _applyFootHeight(info){
+    if (!info || !info.bone || !this.heightFn) return;
+    const bone = info.bone;
+    bone.getWorldPosition(_vPos);
+    const terr = this._terrainHeightMax(_vPos.x, _vPos.z, FOOT_SAMPLE_R);
+    let delta = terr + FOOT_SOLE_CLEARANCE - (_vPos.y + info.soleOffset);
+    delta = Math.max(-FOOT_IK_DOWN, Math.min(FOOT_IK_UP, delta));
+    if (Math.abs(delta) < 0.004) return;
+    const parent = bone.parent;
+    if (!parent) { bone.position.y += delta; return; }
+    _v1.copy(_vPos);
+    _v2.copy(_vPos); _v2.y += delta;
+    parent.worldToLocal(_v1);
+    parent.worldToLocal(_v2);
+    bone.position.add(_v2.sub(_v1));
+  }
+
   // Suurin tarvittava ylösnosto että MIKÄÄN annettu luu ei jää maan alle.
   // Lasketaan jokaiselle luulle delta = (terrain + offset) − bone.y. Palautetaan
   // max(deltas) — voi olla myös negatiivinen (kaikki luut maan päällä → vartalo
@@ -654,8 +758,8 @@ export class GlbEnemy {
   takeDamage(amount, hit){
     if (!this.ready || !this.group.visible) return false;
     if (this.state === 'dead' || this.state === 'gone' || this.state === 'loading') return false;
-    this._recoil = 1;
-    this._tremor = 0.05;
+    this._recoil = Math.min(1.2, this._recoil + 0.95);
+    this._tremor = 0.08;
     // Tunnista osuma-alue ennen vahinkoa → pääosuma kerryttää HEAD_DMG_MULT-kertaa.
     const region = (hit && hit.point) ? this._detectRegion(hit.point) : null;
     const dmg = (region === 'head') ? amount * HEAD_DMG_MULT : amount;
@@ -709,6 +813,8 @@ export class GlbEnemy {
     if (!def || !this._deathBones) return;
     const bone = this._deathBones[def.boneKey];
     if (!bone) return;
+    const old = this._twitches.get(bone);
+    if (old && old.basePos) bone.position.copy(old.basePos);
     this.model.updateMatrixWorld(true);
     // bone world-Y-akseli = luulta tip-päähän osoittava suunta
     bone.matrixWorld.decompose(_v1, _qParent, _v2);
@@ -728,7 +834,34 @@ export class GlbEnemy {
     }
     // qWorld = rotaatio akselin ympäri kulmalla def.mag — talletetaan twitchiin
     _qTarget.setFromAxisAngle(_vNormal, def.mag);
-    this._twitches.set(bone, { qWorld: _qTarget.clone(), age: 0 });
+    const pushWorld = (bulletDir || _worldUp).clone().multiplyScalar(def.push || 0.14);
+    this._twitches.set(bone, {
+      qWorld: _qTarget.clone(),
+      pushWorld,
+      basePos: bone.position.clone(),
+      age: 0,
+    });
+    if (def.bodyKey && def.bodyMag) {
+      const body = this._deathBones[def.bodyKey] || this._deathBones.spine;
+      if (body && body !== bone) {
+        const oldBody = this._twitches.get(body);
+        if (oldBody && oldBody.basePos) body.position.copy(oldBody.basePos);
+        body.matrixWorld.decompose(_v1, _qParent, _v2);
+        _v3.set(0, 1, 0).applyQuaternion(_qParent).normalize();
+        let bodySign = def.bodySign || 1;
+        if (def.bodyDynamicSign && bulletDir) {
+          _v2.set(1, 0, 0).applyQuaternion(_qParent).normalize();
+          bodySign = bulletDir.dot(_v2) >= 0 ? 1 : -1;
+        }
+        _qTarget.setFromAxisAngle(_v3, def.bodyMag * bodySign);
+        this._twitches.set(body, {
+          qWorld: _qTarget.clone(),
+          pushWorld: null,
+          basePos: body.position.clone(),
+          age: 0,
+        });
+      }
+    }
   }
 
   // Skaalattu (slerp identityyn) world-twitch konvertoidaan parent-localiin ja
@@ -736,10 +869,16 @@ export class GlbEnemy {
   // aikana nollaan, jolloin twitch poistetaan setistä.
   _applyTwitches(dt){
     if (!this._twitches || this._twitches.size === 0) return;
-    if (this.state === 'dead') { this._twitches.clear(); return; }
+    if (this.state === 'dead') {
+      for (const [bone, t] of this._twitches) if (t.basePos) bone.position.copy(t.basePos);
+      this._twitches.clear();
+      return;
+    }
     for (const [bone, t] of this._twitches) {
       t.age += dt;
-      const k = Math.max(0, 1 - t.age / TWITCH_DECAY);
+      const u = Math.min(1, t.age / TWITCH_DECAY);
+      const k = Math.max(0, 1 - u * u);   // nopea isku, hidas selkeä palautuminen
+      if (t.basePos) bone.position.copy(t.basePos);
       if (k <= 0) { this._twitches.delete(bone); continue; }
       // Skaalattu rotaatio: slerp identityista qWorldiin osuudella k
       _qTarget.copy(_qIdentity).slerp(t.qWorld, k);
@@ -751,6 +890,18 @@ export class GlbEnemy {
         bone.quaternion.premultiply(_qLocal);
       } else {
         bone.quaternion.premultiply(_qTarget);
+      }
+      if (t.pushWorld) {
+        const parent = bone.parent;
+        if (parent) {
+          bone.getWorldPosition(_v1);
+          _v2.copy(_v1).addScaledVector(t.pushWorld, k);
+          parent.worldToLocal(_v1);
+          parent.worldToLocal(_v2);
+          bone.position.add(_v2.sub(_v1));
+        } else {
+          bone.position.addScaledVector(t.pushWorld, k);
+        }
       }
     }
   }
@@ -812,7 +963,10 @@ export class GlbEnemy {
     if (this.group) { this.group.visible = false; this.group.scale.setScalar(1); this.group.rotation.set(0, 0, 0); }
     if (this.hitVol) this.hitVol.visible = false;
     if (this.hpBar) this.hpBar.visible = false;
-    if (this._twitches) this._twitches.clear();
+    if (this._twitches) {
+      for (const [bone, t] of this._twitches) if (t.basePos) bone.position.copy(t.basePos);
+      this._twitches.clear();
+    }
     if (this.deathAction)  { this.deathAction.stop(); this.deathAction.reset(); }
     if (this.attackAction) { this.attackAction.stop(); this.attackAction.reset(); }
     this._attackStarted = false;

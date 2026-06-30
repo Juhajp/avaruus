@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { scene, camera, renderer, AU, C_KMS } from './core.js';
-import { loadPH, surfDebug, setShuttleDestroyer } from './surface.js';
+import { loadPH, surfDebug, setShuttleDestroyer, groundObjectToTerrain } from './surface.js';
 import { bodies } from './bodies.js';
 import { S } from './state.js';
 import { toonMat, addOutlines } from './toon.js';
@@ -1639,6 +1639,14 @@ export function toggleShipView(){
    tuoreena joka laskulle — leaveSurfaceScenen dispose saa tuhota sen. */
 let shuttleSurf = null;
 let _prevMode = S.mode;
+const SHUTTLE_GROUND_POINTS = [
+  new THREE.Vector3(-1.28, -1.12, -1.15),
+  new THREE.Vector3( 1.28, -1.12, -1.15),
+  new THREE.Vector3(-1.52, -1.05,  0.35),
+  new THREE.Vector3( 1.52, -1.05,  0.35),
+  new THREE.Vector3(-1.18, -1.08,  1.35),
+  new THREE.Vector3( 1.18, -1.08,  1.35),
+];
 export function nearParkedShuttle(){
   return !!(shuttleSurf && camera.position.distanceTo(shuttleSurf.position) < 10);
 }
@@ -1653,17 +1661,16 @@ function parkShuttle(){
   const rx = Math.cos(S.yaw), rz = -Math.sin(S.yaw);
   const px = sd.x + fx * 7.5 - rx * 4.5;
   const pz = sd.z + fz * 7.5 - rz * 4.5;
-  // pinnan normaali korkeusfunktiosta (keskidifferenssi footprintin yli) →
-  // sukkula kallistuu rinteen suuntaan eikä jää vaakatasoon
-  const e = 3;
-  const dhx = (sd.h(px + e, pz) - sd.h(px - e, pz)) / (2 * e);
-  const dhz = (sd.h(px, pz + e) - sd.h(px, pz - e)) / (2 * e);
-  const up = new THREE.Vector3(0, 1, 0);
-  const N = new THREE.Vector3(-dhx, 1, -dhz).normalize();
-  const qTilt = new THREE.Quaternion().setFromUnitVectors(up, N);
-  const qYaw = new THREE.Quaternion().setFromAxisAngle(up, S.yaw + 0.45);
-  m.quaternion.multiplyQuaternions(qTilt, qYaw);   // suuntaus ensin, sitten kallistus rinteeseen
-  m.position.set(px, sd.h(px, pz) + 1.43, pz);     // jalakset maahan
+  groundObjectToTerrain(m, sd.h, {
+    x: px,
+    z: pz,
+    yaw: S.yaw + 0.45,
+    points: SHUTTLE_GROUND_POINTS,
+    clearance: 0.008,
+    sampleRadius: 0,
+    normalRadius: 3.0,
+    maxTilt: 0.75,
+  });
   // Sukkula HEITTÄÄ varjon maahan mutta EI VASTAANOTA varjoa: sileä runko
   // varjostaisi itseään (itsevarjostusakne) matalalla auringolla, koska varjon
   // bias skaalautuu auringon korkeudella → ~0 horisontilla → loiva paneeli
