@@ -1688,6 +1688,112 @@ function parkShuttle(){
 /* ---- sukkulan tuhoutuminen: räjähdys (välähdys + sirpaleet + savu) → hylky ----
    _sfx = aktiiviset kertaefektit, joilla update(dt)->elossa? -metodi. */
 let _sfx = [], _wreck = null;
+const SHUTTLE_BLAST_AREA = {
+  radius: 18,
+  impulse: 18,
+  playerDamage: 0.62,
+  enemyDamage: 12,
+};
+let _shuttleSmokeTex = null;
+function shuttleSmokeTex(){
+  if (_shuttleSmokeTex) return _shuttleSmokeTex;
+  const s = 384, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const c = cv.getContext('2d'), cx = s / 2, cy = s / 2;
+  for (let i = 0; i < 24; i++) {
+    const ox = (Math.random() - 0.5) * s * 0.44, oy = (Math.random() - 0.5) * s * 0.36;
+    const r = s * (0.11 + Math.random() * 0.18);
+    const g = c.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, r);
+    g.addColorStop(0, 'rgba(220,214,200,0.34)');
+    g.addColorStop(0.36, 'rgba(88,84,78,0.27)');
+    g.addColorStop(0.78, 'rgba(24,22,20,0.13)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g;
+    c.beginPath(); c.arc(cx + ox, cy + oy, r, 0, Math.PI * 2); c.fill();
+  }
+  c.globalCompositeOperation = 'multiply';
+  const soot = c.createRadialGradient(cx, cy, 0, cx, cy, s * 0.50);
+  soot.addColorStop(0, 'rgba(32,29,25,0.65)');
+  soot.addColorStop(0.58, 'rgba(58,52,45,0.36)');
+  soot.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = soot; c.fillRect(0, 0, s, s);
+  _shuttleSmokeTex = new THREE.CanvasTexture(cv);
+  _shuttleSmokeTex.colorSpace = THREE.SRGBColorSpace;
+  _shuttleSmokeTex.minFilter = THREE.LinearMipmapLinearFilter;
+  _shuttleSmokeTex.magFilter = THREE.LinearFilter;
+  _shuttleSmokeTex.generateMipmaps = true;
+  return _shuttleSmokeTex;
+}
+function shuttleSmokeMaterial(seed){
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uMap: { value: shuttleSmokeTex() },
+      uTime: { value: 0 },
+      uSeed: { value: seed },
+      uAlpha: { value: 0 },
+      uTint: { value: new THREE.Color(0x34302a) },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main(){
+        vUv = uv;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `
+      uniform sampler2D uMap;
+      uniform float uTime;
+      uniform float uSeed;
+      uniform float uAlpha;
+      uniform vec3 uTint;
+      varying vec2 vUv;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      float hash(vec2 p){
+        return fract(sin(dot(p, vec2(127.1, 311.7)) + uSeed * 0.137) * 43758.5453);
+      }
+      float noise(vec2 p){
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      }
+      float fbm(vec2 p){
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += noise(p) * a;
+          p = p * 2.03 + vec2(13.1, 7.7);
+          a *= 0.5;
+        }
+        return v;
+      }
+      void main(){
+        vec2 uv = vUv - 0.5;
+        float flow = fbm(uv * 3.2 + vec2(uSeed * 0.017, uTime * 0.18));
+        float curl = fbm(uv.yx * 4.1 + vec2(uTime * 0.10, uSeed * 0.023));
+        vec2 drift = vec2(flow - 0.5, curl - 0.5) * 0.055;
+        float swirl = sin((uv.x * 3.4 + uv.y * 4.7) + uTime * 0.85 + uSeed) * 0.012;
+        vec2 suv = vUv + drift + vec2(swirl, -swirl * 0.45 + uTime * 0.012);
+        vec4 tex = texture2D(uMap, suv);
+        float edge = smoothstep(0.58, 0.12, length(uv));
+        float soft = mix(0.82, 1.08, fbm(suv * 5.5 + uTime * 0.08));
+        float a = smoothstep(0.04, 0.72, tex.a * edge * soft) * uAlpha;
+        vec3 col = mix(uTint * 0.62, vec3(0.55, 0.52, 0.46), tex.r * 0.24);
+        gl_FragColor = vec4(col, a);
+        #include <logdepthbuf_fragment>
+      }`,
+  });
+}
 function _clearShuttleFx(){
   for (const fx of _sfx) if (fx.mesh && fx.mesh.parent) fx.mesh.parent.remove(fx.mesh);
   _sfx = []; _wreck = null;
@@ -1732,24 +1838,29 @@ function spawnShuttleExplosion(sc, center, scl, hfn){
       return this.t < this.max;
     } });
   }
-  // 3) savu: tummat laajenevat puffit; osa heti, osa viiveellä → hylky savuaa sekunteja
+  // 3) savu: shader-billboardit; osa heti, osa viiveellä → hylky savuaa sekunteja
   const puff = (delay) => _sfx.push({ t: -delay, max: 2.6 + Math.random() * 1.6, mesh: null, _m: null, _vy: 0, _made: false, update(dt){
     this.t += dt; if (this.t < 0) return true;
     if (!this._made) {
       this._made = true;
-      this._m = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(0.12, 0.11, 0.1), transparent: true, depthWrite: false, opacity: 0 });
-      const s = new THREE.Mesh(new THREE.IcosahedronGeometry((0.5 + Math.random() * 0.6) * scl, 1), this._m);
-      s.position.copy(center).add(new THREE.Vector3((Math.random() - 0.5) * scl, Math.random() * 0.5 * scl, (Math.random() - 0.5) * scl));
+      this._m = shuttleSmokeMaterial(Math.random() * 1000);
+      const s = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 2, 2), this._m);
+      s.position.copy(center).add(new THREE.Vector3((Math.random() - 0.5) * 1.15 * scl, Math.random() * 0.65 * scl, (Math.random() - 0.5) * 1.15 * scl));
       this.mesh = s; this._vy = 0.8 + Math.random() * 1.1; sc.add(s);
     }
     const p = this.t / this.max;
     this.mesh.position.y += this._vy * dt;
-    this.mesh.scale.setScalar(1 + p * 2.0);
-    this._m.opacity = Math.sin(Math.min(1, p) * Math.PI) * 0.55;
+    this.mesh.position.x += Math.sin(this.t * 1.6 + this._m.uniforms.uSeed.value) * 0.025 * scl;
+    this.mesh.position.z += Math.cos(this.t * 1.3 + this._m.uniforms.uSeed.value) * 0.025 * scl;
+    this.mesh.quaternion.copy(camera.quaternion);
+    const s = (0.9 + p * 2.9) * scl;
+    this.mesh.scale.set(s * (1.15 + p * 0.35), s * (0.84 + p * 0.24), 1);
+    this._m.uniforms.uTime.value += dt;
+    this._m.uniforms.uAlpha.value = Math.sin(Math.min(1, p) * Math.PI) * 0.68 * (1 - p * 0.20);
     return this.t < this.max;
   } });
-  for (let i = 0; i < 8; i++) puff(Math.random() * 0.15);
-  for (let i = 0; i < 10; i++) puff(0.5 + Math.random() * 5.0);   // savuava hylky muutaman sekunnin ajan
+  for (let i = 0; i < 10; i++) puff(Math.random() * 0.20);
+  for (let i = 0; i < 16; i++) puff(0.5 + Math.random() * 6.5);   // savuava hylky muutaman sekunnin ajan
 }
 /* laserin tuhoama sukkula: räjähdys + jäljelle jäävä hylky (iso reikä, hehkuvat
    reunat). Paluuta (B) ei enää ole — S.shuttlePos nollataan. surface.js kutsuu. */
@@ -1764,6 +1875,13 @@ function destroyParkedShuttle(){
   if (!sc) return;
   const center = pos.clone().add(new THREE.Vector3(0, 0.2 * scl, 0));
   spawnShuttleExplosion(sc, center, scl, hfn);
+  const sd = surfDebug();
+  if (sd.applyBlast) sd.applyBlast(center, {
+    radius: SHUTTLE_BLAST_AREA.radius * Math.max(0.9, scl),
+    impulse: SHUTTLE_BLAST_AREA.impulse * Math.max(0.85, scl),
+    playerDamage: SHUTTLE_BLAST_AREA.playerDamage,
+    enemyDamage: SHUTTLE_BLAST_AREA.enemyDamage,
+  });
   // jäljelle jäävä hylky samaan asentoon — EI userData.shuttle (inertti, ei voi tuhota uudelleen)
   const w = makeShuttleModel(false, true);
   w.scale.setScalar(scl); w.position.copy(pos); w.quaternion.copy(quat);

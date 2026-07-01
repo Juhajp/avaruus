@@ -25,6 +25,7 @@ let surfX = 0, surfZ = 0;
 let surfaceScene = null;
 let surfHeightFn = null;
 let bobPhase = 0, bobAmp = 0;
+let playerBlastVX = 0, playerBlastVZ = 0, playerBlastT = 0, playerBlastDur = 0, playerBlastK = 0, playerBlastYaw = 0;
 let footprintMesh = null, footprintTex = null;
 let footprintHead = 0, footprintCount = 0;
 let fpPlayerLastX = 0, fpPlayerLastZ = 0, fpPlayerAcc = 0, fpPlayerSide = -1;
@@ -1517,8 +1518,14 @@ function addScorch(h){
 }
 let _shuttleDestroyer = null;   // cockpit.js rekisteröi (omistaa sukkulamallin)
 export function setShuttleDestroyer(fn){ _shuttleDestroyer = fn; }
-function damageShuttle(h){
+function damageShuttle(h, opts = {}){
   addScorch(h);   // tummentava palojälki osumaan
+  if (opts.plasma) {
+    for (let k = 0; k < 5; k++) spawnHitDebris(h.point.x, h.point.y, h.point.z, h.object.material, true);
+    if (_shuttleDestroyer) _shuttleDestroyer();
+    S.shuttleHp = null;
+    return;
+  }
   if (S.shuttleHp == null) S.shuttleHp = SHUTTLE_HP;
   S.shuttleHp -= 1;
   if (S.shuttleHp <= 0) {
@@ -1538,9 +1545,13 @@ const GUN_ENEMY_DMG = 1, PICK_ENEMY_DMG = 1;
 const hurtFlashEl = document.getElementById('hurtFlash');
 // etsi vihollisentiteetti osuman meshin vanhemmista
 function enemyOf(o){ while (o && !(o.userData && o.userData.enemy)) o = o.parent; return o ? o.userData.enemy : null; }
-function damageEnemy(enemy, h, amount){
+function damageEnemy(enemy, h, amount, opts = {}){
   if (!enemy || !enemy.takeDamage) return;
-  spawnHitDebris(h.point.x, h.point.y, h.point.z, enemy.bodyMat || enemy.sandMat || h.object.material, false);   // sirupurske osumaan
+  spawnHitDebris(h.point.x, h.point.y, h.point.z, enemy.bodyMat || enemy.sandMat || h.object.material, !!opts.big);   // sirupurske osumaan
+  if (opts.plasma && enemy.explode) {
+    enemy.explode(h);
+    return;
+  }
   enemy.takeDamage(amount, h);   // koko osuma (sis. h.object) → entiteetti voi tunnistaa osuma-alueen
 }
 // pelaajan terveys + kuolema pinnalla
@@ -1560,23 +1571,77 @@ function surfaceDeath(reason){
   document.getElementById('deathReason').textContent = reason;
   document.getElementById('deathOverlay').style.display = 'flex';
 }
+function smoothBlastFalloff(d, radius){
+  const x = Math.max(0, Math.min(1, 1 - d / Math.max(0.001, radius)));
+  return x * x * (3 - 2 * x);
+}
+function applyBlastArea(center, opts = {}){
+  if (!center || S.mode !== 'surface' || _surfaceDead) return;
+  const radius = opts.radius || 16;
+  const impulse = opts.impulse || 16;
+  const maxDamage = opts.playerDamage || 0.52;
+  const dx = surfX - center.x, dz = surfZ - center.z;
+  const d = Math.hypot(dx, dz);
+  const k = smoothBlastFalloff(d, radius);
+  if (k > 0.001) {
+    const inv = 1 / Math.max(0.001, d);
+    const dirX = dx * inv, dirZ = dz * inv;
+    const verticalBias = Math.max(0.15, Math.min(1, (center.y - groundHeightFn(surfX, surfZ) + 1.8) / 5));
+    playerBlastVX += dirX * impulse * k;
+    playerBlastVZ += dirZ * impulse * k;
+    playerBlastYaw = Math.atan2(dirX, dirZ);
+    playerBlastK = Math.max(playerBlastK, k * verticalBias);
+    playerBlastT = 0;
+    playerBlastDur = 1.65 + k * 1.05;
+    hurtPlayer(maxDamage * k);
+    if (hurtFlashEl) {
+      hurtFlashEl.style.transition = 'none';
+      hurtFlashEl.style.opacity = String(Math.min(0.95, 0.35 + k * 0.55));
+      hurtFlashEl.getBoundingClientRect();
+      hurtFlashEl.style.transition = 'opacity 0.9s ease';
+      hurtFlashEl.style.opacity = '0';
+    }
+  }
+  for (const enemy of [worm, golem]) {
+    if (!enemy || !enemy.alive) continue;
+    const ex = Number.isFinite(enemy.gx) ? enemy.gx : (enemy.group ? enemy.group.position.x : 0);
+    const ez = Number.isFinite(enemy.gz) ? enemy.gz : (enemy.group ? enemy.group.position.z : 0);
+    const ed = Math.hypot(ex - center.x, ez - center.z);
+    const ek = smoothBlastFalloff(ed, radius);
+    if (ek <= 0.001) continue;
+    if (enemy.applyBlast) {
+      enemy.applyBlast(center, {
+        strength: ek,
+        impulse: impulse * 0.78,
+        damage: (opts.enemyDamage || 9) * ek,
+      });
+    } else if (enemy.takeDamage) {
+      enemy.takeDamage((opts.enemyDamage || 9) * ek, { point: new THREE.Vector3(ex, groundHeightFn(ex, ez) + 1.2, ez) });
+    }
+  }
+}
+function resetPlayerBlast(){
+  playerBlastVX = 0; playerBlastVZ = 0;
+  playerBlastT = 0; playerBlastDur = 0; playerBlastK = 0; playerBlastYaw = 0;
+}
 // kuolemaruudun klikkaus pinnalla: herää uudelleen aloituspisteeseen (ei avaruuteen)
 document.getElementById('deathOverlay').addEventListener('click', () => {
   if (!_surfaceDead) return;
   _surfaceDead = false;
   S.health = 1; surfX = 0; surfZ = 0;
+  resetPlayerBlast();
   if (worm) worm.reset();
   if (golem) golem.reset();
   document.getElementById('deathOverlay').style.display = 'none';
 });
 
 // rekisteröi laserin osumakäsittely (kivet + sukkula + viholliset); mineraalit hoituu mining.js:ssä
-setGunHitHandler((h) => {
+setGunHitHandler((h, opts = {}) => {
   const enemy = enemyOf(h.object);
-  if (enemy) { damageEnemy(enemy, h, GUN_ENEMY_DMG); return; }
+  if (enemy) { damageEnemy(enemy, h, opts.amount || GUN_ENEMY_DMG, opts); return; }
   const o = h.object;
   if (o.userData && o.userData.scatter && h.instanceId != null) { damageScatter(o.userData.scatter, h.instanceId, h.point, o.material); return; }
-  if (o.userData && o.userData.shuttle) damageShuttle(h);
+  if (o.userData && o.userData.shuttle) damageShuttle(h, opts);
 });
 // hakun melee-osuma vihollisiin (mining.js kutsuu kun isku osuu vihollismeshiin)
 setPickaxeHitHandler((h) => {
@@ -1926,18 +1991,40 @@ function makeFootprintTex(){
   const cv = document.createElement('canvas'); cv.width = cv.height = 128;
   const c = cv.getContext('2d');
   c.translate(64, 64);
-  c.rotate(-0.06);
-  const g = c.createRadialGradient(-4, -8, 4, 0, 0, 54);
-  g.addColorStop(0, 'rgba(18,10,5,0.72)');
-  g.addColorStop(0.55, 'rgba(28,14,6,0.42)');
-  g.addColorStop(1, 'rgba(28,14,6,0)');
-  c.fillStyle = g;
+  c.rotate(-0.04);
+
+  const softEllipse = (x, y, rx, ry, rot, a) => {
+    const g = c.createRadialGradient(x, y, 1, x, y, Math.max(rx, ry));
+    g.addColorStop(0, `rgba(16,9,5,${a})`);
+    g.addColorStop(0.58, `rgba(27,14,6,${a * 0.62})`);
+    g.addColorStop(1, 'rgba(27,14,6,0)');
+    c.fillStyle = g;
+    c.beginPath();
+    c.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2);
+    c.fill();
+  };
+
+  // Kantapää, holvikaari ja päkiä erillisinä muotoina: jälki näyttää kengän/jalan
+  // painaumalta eikä yhdeltä ovaalilta.
+  softEllipse(-1, 28, 16, 20, 0.04, 0.64);
+  softEllipse(-4, 6, 14, 24, -0.10, 0.45);
+  softEllipse(2, -20, 22, 24, 0.10, 0.76);
+  c.globalCompositeOperation = 'destination-out';
+  c.fillStyle = 'rgba(0,0,0,0.32)';
   c.beginPath();
-  c.ellipse(0, 0, 24, 49, 0, 0, Math.PI * 2);
+  c.ellipse(10, 5, 9, 24, -0.18, 0, Math.PI * 2);
   c.fill();
-  c.fillStyle = 'rgba(255,210,145,0.12)';
+  c.globalCompositeOperation = 'source-over';
+
+  const toes = [
+    [-15, -47, 5.3, 7.2], [-7, -51, 5.8, 8.2], [2, -53, 6.2, 8.8],
+    [11, -50, 5.3, 7.5], [18, -44, 4.5, 6.3],
+  ];
+  for (const [x, y, rx, ry] of toes) softEllipse(x, y, rx, ry, 0.12, 0.54);
+
+  c.fillStyle = 'rgba(255,215,150,0.10)';
   c.beginPath();
-  c.ellipse(-2, -11, 13, 29, -0.08, 0, Math.PI * 2);
+  c.ellipse(-2, -18, 12, 21, -0.05, 0, Math.PI * 2);
   c.fill();
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -2027,8 +2114,8 @@ function updatePlayerFootprints(moving){
         surfZ - fwdZ * 0.22 + rightZ * fpPlayerSide * 0.18,
         S.yaw,
         fpPlayerSide,
-        0.28,
-        0.58
+        0.36,
+        0.78
       );
     }
   } else if (!moving) {
@@ -2061,8 +2148,8 @@ function updateEnemyFootprints(enemy){
         z - fwdZ * 0.30 + rightZ * tr.side * 0.22,
         yaw,
         tr.side,
-        0.34,
-        0.68,
+        0.44,
+        0.88,
         1.12
       );
     }
@@ -2724,6 +2811,7 @@ function enterSurfaceScene(b, mode){
 function leaveSurfaceScene(){
   clearMining();
   disposeFootprints();
+  resetPlayerBlast();
   worm = null; golem = null;   // entiteetit ovat surfaceScenen lapsia → vapautuvat scenen dispose-traversessa
   _surfaceDead = false;
   S.wreckPos = null;   // hylyn törmäyseste pois scenen mukana
@@ -2759,7 +2847,7 @@ function enterSurface(b){
   enterSurfaceScene(b, 'surface');
   surfX = 0; surfZ = 0;
   initFootprints(surfaceScene);
-  S.health = 1; _surfaceDead = false;
+  S.health = 1; _surfaceDead = false; resetPlayerBlast();
   const enemyBurst = (x, y, z, big, mat) => { for (let k = 0; k < (big ? 8 : 4); k++) spawnHitDebris(x, y + 0.3, z, mat, big && k < 2); };
   // Regolith-mato: vain Marsin pinnalla (kävelymoodi) — toistaiseksi pois käytöstä
   if (WORM_ENABLED && b.def.name === 'Mars') {
@@ -3058,13 +3146,28 @@ function updateHelmetHud(){
 export function updateSurface(dt){
   if (!footprintMesh && surfaceScene) initFootprints(surfaceScene);
   updateDaylight();
+  if (playerBlastT < playerBlastDur) {
+    playerBlastT += dt;
+    surfX += playerBlastVX * dt;
+    surfZ += playerBlastVZ * dt;
+    const drag = Math.exp(-dt * 3.4);
+    playerBlastVX *= drag;
+    playerBlastVZ *= drag;
+  } else {
+    playerBlastK = 0;
+    playerBlastVX *= Math.exp(-dt * 8);
+    playerBlastVZ *= Math.exp(-dt * 8);
+  }
+  const knockActive = playerBlastT < playerBlastDur;
   const running = S.keys.ShiftLeft || S.keys.ShiftRight;
   const sp = running ? 26 : 9;
   let mx = 0, mz = 0;
-  if (S.keys.KeyW || S.keys.ArrowUp) mz -= 1;
-  if (S.keys.KeyS || S.keys.ArrowDown) mz += 1;
-  if (S.keys.KeyA || S.keys.ArrowLeft) mx -= 1;
-  if (S.keys.KeyD || S.keys.ArrowRight) mx += 1;
+  if (!knockActive || playerBlastT > playerBlastDur * 0.72) {
+    if (S.keys.KeyW || S.keys.ArrowUp) mz -= 1;
+    if (S.keys.KeyS || S.keys.ArrowDown) mz += 1;
+    if (S.keys.KeyA || S.keys.ArrowLeft) mx -= 1;
+    if (S.keys.KeyD || S.keys.ArrowRight) mx += 1;
+  }
   const moving = (mx || mz) ? 1 : 0;
   if (moving) {
     const inv = 1 / Math.hypot(mx, mz);
@@ -3091,13 +3194,25 @@ export function updateSurface(dt){
   if (bobAmp > 0.03) bobPhase += dt * (running ? 11.5 : 8.0);
   const bobY  = Math.abs(Math.sin(bobPhase)) * 0.20 * bobAmp;   // askel joka puolijaksolla
   const sway  = Math.sin(bobPhase) * 0.09 * bobAmp;             // vasen-oikea joka toinen askel
-  const tilt  = Math.sin(bobPhase) * 0.016 * bobAmp;
+  let tilt  = Math.sin(bobPhase) * 0.016 * bobAmp;
+  let knockDrop = 0, knockPitch = 0, knockRoll = 0;
+  if (knockActive && playerBlastDur > 0) {
+    const u = Math.min(1, playerBlastT / playerBlastDur);
+    const fall = u < 0.30 ? u / 0.30 : (u < 0.72 ? 1 : 1 - (u - 0.72) / 0.28);
+    const fallEase = Math.max(0, Math.min(1, fall));
+    const side = Math.sin(playerBlastYaw - S.yaw);
+    const front = Math.cos(playerBlastYaw - S.yaw);
+    knockDrop = 1.45 * playerBlastK * fallEase;
+    knockPitch = (0.55 + Math.max(0, front) * 0.45) * playerBlastK * fallEase;
+    knockRoll = side * 0.82 * playerBlastK * fallEase;
+  }
   const rX = Math.cos(S.yaw), rZ = -Math.sin(S.yaw);            // kameran oikea-suunta
 
-  camera.rotation.set(S.pitch, S.yaw, tilt, 'YXZ');
+  tilt += knockRoll;
+  camera.rotation.set(S.pitch + knockPitch, S.yaw, tilt, 'YXZ');
   camera.position.set(
     surfX + rX * sway,
-    groundHeightFn(surfX, surfZ) + 2.4 + bobY,
+    groundHeightFn(surfX, surfZ) + 2.4 + bobY - knockDrop,
     surfZ + rZ * sway
   );
   // viholliset: päivitä + maan tärinä (kameran ravistus) niiden mukaan
@@ -3331,6 +3446,7 @@ export function surfDebug(){
     golemSpawn: (near) => { if (golem) golem._spawn(near ? surfX : golem.gx, near ? surfZ : golem.gz); },
     health: () => S.health,
     setHealth(v){ S.health = Math.max(0, Math.min(1, v)); },
+    applyBlast: (center, opts) => applyBlastArea(center, opts),
     destroyShuttle(){ if (_shuttleDestroyer) _shuttleDestroyer(); },   // testaus: tuhoa pysäköity sukkula heti
   };
 }

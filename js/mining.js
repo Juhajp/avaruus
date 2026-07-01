@@ -125,15 +125,23 @@ const FINAL_BURST  = { count: 24, scaleMin: 0.9, scaleRng: 1.6, speedMin: 2.4, s
 // pienet sirut joka hakuniskulla (kivi/mineraali/objekti) — PIENET sirpaleet
 const STRIKE_BURST = { count: 5,  scaleMin: 0.12, scaleRng: 0.22, speedMin: 1.1, speedRng: 1.9, lifeMin: 0.3, lifeRng: 0.3, spread: 0.16 };
 
-// ---- ase (semiautomaattinen laser) ----
-let weaponMode = false;             // false = hakku, true = ase (X vaihtaa pinnalla)
+// ---- aseet: hakku → laser → plasma-tykki ----
+const TOOL_PICK = 0, TOOL_LASER = 1, TOOL_PLASMA = 2;
+let toolMode = TOOL_PICK;
+let weaponMode = false;             // yhteensopivuus vanhaan isWeapon()-kyselyyn
 let sniperMode = false;             // oikea hiiren nappi: zoomattu tähtäystila aseelle
 let recoil = 0, _gunT = 0;          // rekyyli (vaikuttaa VAIN aseeseen) + huojunta-aika
-let _fireCd = 0, _prevFire = false; // laukauksen jäähtymisaika + edellinen liipaisin (semi-auto = nouseva reuna)
+let _fireCd = 0, _prevLaserFire = false; // laserin jäähtymisaika + edellinen liipaisin (semi-auto = nouseva reuna)
 const FLASH_LIFE = 0.16;   // suuliekin valon/kipinöiden elinaika
 const SPARK_POOL = 64;             // hehkuvat pistehiukkaset (suuliekin kipinäpuska)
 const GUN_DMG = 1, DEP_HP = 3;     // laserin vahinko per laukaus + mineraalin piilo-osumapisteet
-let flashLight = null, _flLife = 0, _flMax = 0;        // suuliekin hetkellinen valo (valaisee lähiympäristön pimeässä)
+const PLASMA_DMG = 40;
+const PLASMA_CHARGE_T = 1.15;
+const PLASMA_MIN_CHARGE = 0.34;
+const PLASMA_SPEED = 58;
+const PLASMA_POOL = 6;
+const PLASMA_SMOKE_POOL = 12;
+let flashLight = null, _flLife = 0, _flMax = 0, _flPeak = 5;        // suuliekin hetkellinen valo (valaisee lähiympäristön pimeässä)
 const FLASH_LIGHT_INT = 5;                              // valon huippukirkkaus (candela, decay 2)
 let sparks = null, sparkGeo = null, sparkMat = null;   // suuliekin kipinät (THREE.Points)
 let _spkPos = null, _spkVel = null, _spkLife = null, _spkMax = null, _spkSize = null, _spkHead = 0;
@@ -145,12 +153,20 @@ const GUN_POS = new THREE.Vector3(0.34, -0.40, -0.55);
 const GUN_ROT = new THREE.Vector3(0.03, -0.12, 0.0);
 const GUN_AIM_POS = new THREE.Vector3(0.06, -0.35, -0.72);
 const GUN_AIM_ROT = new THREE.Vector3(0.0, -0.02, 0.0);
+const PLASMA_POS = new THREE.Vector3(0.38, -0.38, -0.58);
+const PLASMA_ROT = new THREE.Vector3(0.02, -0.20, 0.02);
 const SURFACE_FOV = 65;
 const SNIPER_FOV = 20;
 const SNIPER_LOOK_MUL = 0.38;
 let sniperAmt = 0, scopeEl = null;
+let plasmaGun = null, plasmaMeter = null, plasmaCore = null;
+let plasmaCharge = 0, plasmaCharging = false, plasmaCd = 0;
+let plasmaShots = [];
+let plasmaTex = null;
+let plasmaSmokeTex = null, plasmaPuffs = [];
+let plasmaTargets = [], plasmaTargetRefresh = 0;
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3();
-const _bm = new THREE.Matrix4(), _muz = new THREE.Vector3();
+const _bm = new THREE.Matrix4(), _muz = new THREE.Vector3(), _segDir = new THREE.Vector3(), _plNext = new THREE.Vector3(), _plHit = new THREE.Vector3();
 
 /* ---- ensimmäisen persoonan louhintatyökalu (kameran lapsi) ----
    Octagonaalinen metallihakku oikeassa alakulmassa; heiluu kaarella kun
@@ -276,6 +292,56 @@ function flashTex(){
   }
   _flashTex = new THREE.CanvasTexture(cv);
   return _flashTex;
+}
+function plasmaSpriteTexture(){
+  if (plasmaTex) return plasmaTex;
+  const s = 192, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const c = cv.getContext('2d'), cx = s / 2, cy = s / 2;
+  const g = c.createRadialGradient(cx, cy, 0, cx, cy, s * 0.48);
+  g.addColorStop(0.00, 'rgba(255,255,255,1)');
+  g.addColorStop(0.10, 'rgba(120,255,255,0.95)');
+  g.addColorStop(0.28, 'rgba(78,102,255,0.68)');
+  g.addColorStop(0.52, 'rgba(255,58,230,0.42)');
+  g.addColorStop(0.78, 'rgba(255,205,65,0.18)');
+  g.addColorStop(1.00, 'rgba(0,0,0,0)');
+  c.fillStyle = g; c.fillRect(0, 0, s, s);
+  c.globalCompositeOperation = 'screen';
+  for (let i = 0; i < 18; i++) {
+    const a = i * Math.PI * 2 / 18;
+    const r = 18 + (i % 5) * 6;
+    c.strokeStyle = i % 3 === 0 ? 'rgba(255,240,90,0.13)' : 'rgba(85,245,255,0.14)';
+    c.lineWidth = 1.0 + (i % 3) * 0.45;
+    c.beginPath();
+    c.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+    c.quadraticCurveTo(cx + Math.cos(a + 0.55) * 36, cy + Math.sin(a + 0.55) * 36,
+      cx + Math.cos(a + 0.18) * 82, cy + Math.sin(a + 0.18) * 82);
+    c.stroke();
+  }
+  plasmaTex = new THREE.CanvasTexture(cv);
+  plasmaTex.colorSpace = THREE.SRGBColorSpace;
+  return plasmaTex;
+}
+function plasmaSmokeTexture(){
+  if (plasmaSmokeTex) return plasmaSmokeTex;
+  const s = 160, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const c = cv.getContext('2d'), cx = s / 2, cy = s / 2;
+  for (let i = 0; i < 8; i++) {
+    const ox = (Math.random() - 0.5) * s * 0.20, oy = (Math.random() - 0.5) * s * 0.16;
+    const r = s * (0.18 + Math.random() * 0.18);
+    const g = c.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, r);
+    g.addColorStop(0.00, 'rgba(12,11,10,0.58)');
+    g.addColorStop(0.45, 'rgba(18,16,14,0.30)');
+    g.addColorStop(1.00, 'rgba(0,0,0,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(cx + ox, cy + oy, r, 0, Math.PI * 2); c.fill();
+  }
+  const core = c.createRadialGradient(cx, cy, 0, cx, cy, s * 0.46);
+  core.addColorStop(0, 'rgba(0,0,0,0.55)');
+  core.addColorStop(0.55, 'rgba(25,21,18,0.26)');
+  core.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = core; c.fillRect(0, 0, s, s);
+  plasmaSmokeTex = new THREE.CanvasTexture(cv);
+  plasmaSmokeTex.colorSpace = THREE.SRGBColorSpace;
+  return plasmaSmokeTex;
 }
 // kipinäpooli: stateless-näköiset hehkupisteet (per-piste alfa+koko) jotka
 // sinkoavat säteestä kohtisuoraan ulos ja häipyvät. Pehmeä pyöreä piste.
@@ -439,6 +505,100 @@ function buildGun(){
   return g;
 }
 gun = buildGun();
+function buildPlasmaGun(){
+  const g = new THREE.Group();
+  const hullMat = toonMat({ color: 0x596f7e }); loadToolTex(hullMat, 'metal_plate_02', 1.6, 1);
+  const darkMat = toonMat({ color: 0x252d36 }); loadToolTex(darkMat, 'metal_plate', 1, 1);
+  const coilMat = toonMat({ color: 0x91a1ad }); loadToolTex(coilMat, 'metal_plate', 1, 1);
+  const trimMat = toonMat({ color: 0xd0d7df }); loadToolTex(trimMat, 'metal_plate_02', 1, 1);
+  const warmTrimMat = toonMat({ color: 0xd6a94f }); loadToolTex(warmTrimMat, 'metal_plate_02', 1, 1);
+  addToolHeadlamp(hullMat); addToolHeadlamp(darkMat); addToolHeadlamp(coilMat); addToolHeadlamp(trimMat);
+  addToolHeadlamp(warmTrimMat);
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0x49e8ff });
+  const hotMat = new THREE.MeshBasicMaterial({ color: 0xff4df0 });
+  const meterMat = new THREE.MeshBasicMaterial({ color: 0x66fff0 });
+  const box = (mat, w, h, d, x, y, z, rx, ry, rz) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); if (rx || ry || rz) m.rotation.set(rx || 0, ry || 0, rz || 0);
+    g.add(m); return m;
+  };
+  const cyl = (mat, r1, r2, len, x, y, z, sides = 16, rx = Math.PI / 2) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, len, sides), mat);
+    m.rotation.x = rx; m.position.set(x, y, z); g.add(m); return m;
+  };
+
+  box(hullMat, 0.24, 0.18, 0.38, 0, -0.01, 0.04);
+  box(hullMat, 0.20, 0.13, 0.38, 0, 0.015, -0.27);
+  box(darkMat, 0.26, 0.045, 0.36, 0, -0.12, -0.06);
+  box(darkMat, 0.095, 0.28, 0.12, 0, -0.22, 0.11, -0.24);
+  box(hullMat, 0.18, 0.08, 0.22, 0, -0.035, 0.36);
+  box(trimMat, 0.21, 0.018, 0.30, 0, 0.092, 0.04);
+  box(warmTrimMat, 0.035, 0.016, 0.22, -0.128, 0.018, 0.04, 0, 0, 0.12);
+  box(warmTrimMat, 0.035, 0.016, 0.22,  0.128, 0.018, 0.04, 0, 0, -0.12);
+
+  // Avoin plasma-kammio ja kolme magneettikelaa: selvästi eri siluetti kuin laserilla.
+  cyl(darkMat, 0.050, 0.056, 0.74, 0, 0.02, -0.55, 18);
+  cyl(glowMat, 0.030, 0.034, 0.52, 0, 0.02, -0.52, 16);
+  for (let i = 0; i < 5; i++) {
+    cyl(coilMat, 0.082, 0.082, 0.035, 0, 0.02, -0.30 - i * 0.10, 18);
+    cyl(warmTrimMat, 0.087, 0.087, 0.010, 0, 0.02, -0.30 - i * 0.10 + 0.024, 18);
+  }
+  for (const sx of [-1, 1]) {
+    cyl(trimMat, 0.022, 0.022, 0.62, sx * 0.105, 0.02, -0.53, 10);
+    for (let i = 0; i < 4; i++) box(darkMat, 0.025, 0.025, 0.04, sx * 0.105, 0.02, -0.35 - i * 0.13);
+    box(hullMat, 0.034, 0.105, 0.25, sx * 0.132, -0.035, -0.26, 0, 0, sx * 0.22);
+    box(trimMat, 0.012, 0.022, 0.32, sx * 0.134, 0.092, -0.32, 0, sx * 0.18, 0);
+  }
+  cyl(trimMat, 0.075, 0.10, 0.13, 0, 0.02, -0.91, 18);
+  cyl(hotMat, 0.052, 0.065, 0.03, 0, 0.02, -0.995, 18);
+  for (let i = 0; i < 6; i++) {
+    const a = i * Math.PI * 2 / 6;
+    const fin = box(trimMat, 0.018, 0.044, 0.13, Math.cos(a) * 0.088, 0.02 + Math.sin(a) * 0.088, -0.91, 0, 0, a);
+    fin.lookAt(0, 0.02, -1.08);
+  }
+
+  // Kyljen kondensaattorit, paineletku ja latausmittari.
+  for (const sx of [-1, 1]) {
+    cyl(darkMat, 0.026, 0.026, 0.22, sx * 0.145, -0.005, -0.02, 12);
+    box(trimMat, 0.025, 0.06, 0.05, sx * 0.145, 0.065, -0.18);
+    for (let i = 0; i < 4; i++) box(darkMat, 0.018, 0.012, 0.09, sx * 0.074, -0.222 + i * 0.035, 0.11, -0.24);
+    for (const z of [-0.08, 0.18]) cyl(warmTrimMat, 0.010, 0.010, 0.010, sx * 0.126, 0.074, z, 8);
+  }
+  box(darkMat, 0.055, 0.030, 0.32, 0, 0.152, -0.10);
+  for (let i = 0; i < 6; i++) box(trimMat, 0.070, 0.010, 0.016, 0, 0.173, -0.24 + i * 0.058);
+  cyl(darkMat, 0.030, 0.030, 0.15, 0, 0.214, -0.12, 12);
+  cyl(glowMat, 0.017, 0.017, 0.155, 0, 0.214, -0.12, 12);
+  const cable = new THREE.Mesh(new THREE.TubeGeometry(
+    new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-0.11, 0.085, 0.23),
+      new THREE.Vector3(-0.16, 0.105, 0.00),
+      new THREE.Vector3(-0.12, 0.075, -0.32),
+      new THREE.Vector3(-0.04, 0.055, -0.48),
+    ]), 16, 0.008, 6), darkMat);
+  g.add(cable);
+  box(darkMat, 0.17, 0.022, 0.13, 0, 0.132, 0.02);
+  plasmaMeter = box(meterMat, 0.142, 0.018, 0.01, -0.071, 0.148, 0.02);
+  plasmaMeter.userData.baseW = 0.142;
+  plasmaMeter.scale.x = 0.05;
+  plasmaCore = cyl(glowMat, 0.038, 0.038, 0.11, 0, 0.02, -0.18, 14);
+  for (const sx of [-1, 1]) {
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3([
+        new THREE.Vector3(sx * 0.062, 0.048, 0.18),
+        new THREE.Vector3(sx * 0.088, 0.074, -0.04),
+        new THREE.Vector3(sx * 0.068, 0.050, -0.30),
+      ]), 12, 0.004, 5), glowMat);
+    g.add(tube);
+  }
+
+  addOutlines(g, 0.012);
+  g.traverse(o => { if (o.isMesh) o.userData.viewmodel = true; });
+  g.position.copy(PLASMA_POS); g.rotation.set(PLASMA_ROT.x, PLASMA_ROT.y, PLASMA_ROT.z);
+  g.visible = false; camera.add(g);
+  return g;
+}
+plasmaGun = buildPlasmaGun();
+
 function ensureScope(){
   if (scopeEl) return scopeEl;
   scopeEl = document.createElement('div');
@@ -465,7 +625,7 @@ function setScopeVisible(on){
   ensureScope().style.display = on ? 'block' : 'none';
 }
 export function toggleSniperMode(){
-  if (!active || !weaponMode) return false;
+  if (!active || toolMode !== TOOL_LASER) return false;
   sniperMode = !sniperMode;
   setScopeVisible(sniperMode);
   return sniperMode;
@@ -473,7 +633,7 @@ export function toggleSniperMode(){
 export function isSniperMode(){ return active && weaponMode && sniperMode; }
 export function lookSensitivityMul(){ return isSniperMode() ? SNIPER_LOOK_MUL : 1; }
 function updateSniper(dt){
-  const target = isSniperMode() ? 1 : 0;
+  const target = isSniperMode() && toolMode === TOOL_LASER ? 1 : 0;
   sniperAmt += (target - sniperAmt) * Math.min(1, dt * 12);
   const fov = SURFACE_FOV + (SNIPER_FOV - SURFACE_FOV) * sniperAmt;
   if (Math.abs(camera.fov - fov) > 0.02) {
@@ -482,6 +642,38 @@ function updateSniper(dt){
   }
   if (scopeEl) scopeEl.style.opacity = (sniperAmt * 0.96).toFixed(3);
   if (!target && sniperAmt < 0.01 && scopeEl) scopeEl.style.display = 'none';
+}
+function updatePlasmaGun(dt, fireInput){
+  _gunT += dt;
+  plasmaCd = Math.max(0, plasmaCd - dt);
+  if (fireInput && plasmaCd <= 0) {
+    plasmaCharging = true;
+    plasmaCharge = Math.min(PLASMA_CHARGE_T, plasmaCharge + dt);
+  } else if (plasmaCharging) {
+    const p = plasmaCharge / PLASMA_CHARGE_T;
+    if (p >= PLASMA_MIN_CHARGE && plasmaCd <= 0) firePlasma(Math.min(1, p));
+    plasmaCharging = false;
+    plasmaCharge = 0;
+  }
+  const c = Math.min(1, plasmaCharge / PLASMA_CHARGE_T);
+  const pulse = 0.75 + 0.25 * Math.sin(S.simTime * 18);
+  plasmaGun.position.set(
+    PLASMA_POS.x,
+    PLASMA_POS.y + Math.sin(_gunT * 1.3) * 0.003,
+    PLASMA_POS.z + c * 0.05
+  );
+  plasmaGun.rotation.set(PLASMA_ROT.x - c * 0.04, PLASMA_ROT.y, PLASMA_ROT.z);
+  if (plasmaMeter) {
+    const w = plasmaMeter.userData.baseW || 0.142;
+    plasmaMeter.scale.x = Math.max(0.05, c);
+    plasmaMeter.position.x = -0.070 + w * 0.5 * c;
+    plasmaMeter.material.color.setHSL(0.50 + 0.34 * c, 1, 0.42 + 0.18 * pulse);
+  }
+  if (plasmaCore) {
+    const sc = 0.65 + c * 0.75 + pulse * c * 0.18;
+    plasmaCore.scale.setScalar(sc);
+    plasmaCore.material.color.setHSL(0.56 + 0.22 * c, 1, 0.45 + 0.20 * c);
+  }
 }
 function updateGun(dt){
   _gunT += dt;
@@ -502,6 +694,256 @@ function updateGun(dt){
     _muzzleFlash.material.opacity = Math.max(0, recoil * 1.4 - 0.15);
     const sc = 0.5 + recoil * 0.65;
     _muzzleFlash.scale.set(sc, sc, sc);
+  }
+}
+function makePlasmaShot(){
+  const g = new THREE.Group();
+  g.userData.debris = true;
+  const tex = plasmaSpriteTexture();
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.18, 18, 10),
+    new THREE.MeshBasicMaterial({ color: 0x5fffff })
+  );
+  const outer = new THREE.Mesh(
+    new THREE.SphereGeometry(0.34, 18, 10),
+    new THREE.MeshBasicMaterial({ color: 0xff4df2, transparent: true, opacity: 0.50, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.34, 0.035, 8, 28),
+    new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  const ring2 = new THREE.Mesh(
+    new THREE.TorusGeometry(0.24, 0.018, 8, 28),
+    new THREE.MeshBasicMaterial({ color: 0x72f7ff, transparent: true, opacity: 0.70, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  halo.rotation.x = Math.PI / 2;
+  ring2.rotation.set(0.7, 0.2, 0.4);
+  const spriteMat = new THREE.SpriteMaterial({
+    map: tex, transparent: true, opacity: 0.92,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true
+  });
+  const aura = new THREE.Sprite(spriteMat);
+  aura.scale.set(1.05, 1.05, 1);
+  const trailMat = spriteMat.clone();
+  trailMat.opacity = 0.48;
+  trailMat.color.set(0xff6af7);
+  const trail = new THREE.Sprite(trailMat);
+  trail.position.z = 0.18;
+  trail.scale.set(0.95, 0.55, 1);
+  const light = new THREE.PointLight(0x66eaff, 0, 9, 2);
+  g.add(trail, aura, outer, core, halo, ring2, light);
+  g.visible = false;
+  return { group: g, core, outer, halo, ring2, aura, trail, light, vel: new THREE.Vector3(), life: 0, maxLife: 0, power: 0 };
+}
+function initPlasmaShots(sc){
+  plasmaShots = [];
+  for (let i = 0; i < PLASMA_POOL; i++) {
+    const s = makePlasmaShot();
+    sc.add(s.group);
+    plasmaShots.push(s);
+  }
+}
+function initPlasmaPuffs(sc){
+  plasmaPuffs = [];
+  const tex = plasmaSmokeTexture();
+  for (let i = 0; i < PLASMA_SMOKE_POOL; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: tex, color: 0x161311, transparent: true, opacity: 0,
+      depthWrite: false, depthTest: true
+    });
+    const m = new THREE.Sprite(mat);
+    m.visible = false;
+    m.userData.debris = true;
+    sc.add(m);
+    plasmaPuffs.push({ m, vel: new THREE.Vector3(), life: 0, max: 0, base: 1, spin: 0 });
+  }
+}
+function spawnPlasmaGroundPuff(point, power = 1){
+  if (!plasmaPuffs.length) return;
+  let p = plasmaPuffs.find(x => x.life <= 0) || plasmaPuffs[0];
+  p.m.position.copy(point);
+  p.m.position.y += 0.06;
+  p.m.visible = true;
+  p.max = p.life = 1.6 + power * 0.55;
+  p.base = 0.85 + power * 0.75;
+  p.spin = (Math.random() - 0.5) * 1.6;
+  p.vel.set((Math.random() - 0.5) * 0.22, 0.28 + power * 0.18, (Math.random() - 0.5) * 0.22);
+  p.m.scale.setScalar(p.base * 0.35);
+  p.m.material.opacity = 0.62;
+  p.m.material.rotation = Math.random() * Math.PI * 2;
+}
+function updatePlasmaPuffs(dt){
+  for (const p of plasmaPuffs) {
+    if (p.life <= 0) { if (p.m.visible) p.m.visible = false; continue; }
+    p.life -= dt;
+    if (p.life <= 0) { p.m.visible = false; p.m.material.opacity = 0; continue; }
+    const k = 1 - p.life / p.max;
+    p.vel.y += 0.06 * dt;
+    p.m.position.addScaledVector(p.vel, dt);
+    const sc = p.base * (0.35 + k * 1.55);
+    p.m.scale.set(sc, sc * (0.72 + k * 0.25), 1);
+    p.m.material.opacity = 0.62 * (1 - k) * (1 - k * 0.35);
+    p.m.material.rotation += p.spin * dt;
+  }
+}
+function hasBlockedRayFlag(o){
+  let p = o;
+  while (p) {
+    const u = p.userData;
+    if (u && (u.debris || u.terrain || u.viewmodel)) return true;
+    p = p.parent;
+  }
+  return false;
+}
+function refreshPlasmaTargets(dt = 0, force = false){
+  if (!scene) return;
+  plasmaTargetRefresh -= dt;
+  if (!force && plasmaTargetRefresh > 0) return;
+  plasmaTargetRefresh = 0.35;
+  const list = [];
+  const seen = new Set();
+  const add = (o) => {
+    if (!o || seen.has(o) || hasBlockedRayFlag(o)) return;
+    seen.add(o);
+    list.push(o);
+  };
+  for (const d of deposits) if (d.mesh && d.mesh.visible && d.pop >= 0.5) add(d.mesh);
+  scene.traverse(o => {
+    if (!(o.isMesh || o.isInstancedMesh || o.isSkinnedMesh)) return;
+    if (!o.visible || !o.material || hasBlockedRayFlag(o)) return;
+    const u = o.userData || {};
+    if (u.enemy || u.scatter || u.shuttle) add(o);
+  });
+  plasmaTargets = list;
+}
+function depositForObject(o){
+  for (const d of deposits) {
+    let p = o;
+    while (p) {
+      if (p === d.mesh) return d;
+      p = p.parent;
+    }
+  }
+  return null;
+}
+function applyPlasmaDamage(h, power){
+  const dep = depositForObject(h.object);
+  if (dep) {
+    spawnBurst(dep.x, dep.y + 0.5, dep.z, dep.type);
+    S.inv[dep.type] = (S.inv[dep.type] || 0) + 1;
+    if (dep === mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
+    relocate(dep, camera.position.x, camera.position.z);
+    renderHud(); pulse();
+    return;
+  }
+  if (_gunHitHandler) _gunHitHandler(h, { plasma: true, amount: PLASMA_DMG * power, big: true });
+}
+function plasmaImpact(point, power){
+  spawnSparksAt(point.x, point.y, point.z, -_fwd.x, -_fwd.y, -_fwd.z);
+  for (let i = 0; i < 3; i++) emitBurst(point.x, point.y + 0.15, point.z, oreMats[ORE[0].type], FINAL_BURST);
+  if (flashLight) {
+    flashLight.color.setHSL(0.55 + Math.random() * 0.18, 1, 0.62);
+    flashLight.position.copy(point);
+    _flLife = _flMax = 0.26 + power * 0.12;
+    _flPeak = 14 + power * 14;
+    flashLight.intensity = _flPeak;
+  }
+}
+function firePlasma(power){
+  if (!scene) return;
+  if (!plasmaTargets.length) refreshPlasmaTargets(0, true);
+  camera.getWorldDirection(_fwd); camera.updateMatrixWorld();
+  _muz.set(0.05, -0.10, -1.28).applyMatrix4(camera.matrixWorld);
+  let s = plasmaShots.find(p => p.life <= 0);
+  if (!s) s = plasmaShots[0];
+  s.group.position.copy(_muz);
+  s.group.scale.setScalar(0.85 + power * 0.8);
+  s.group.visible = true;
+  s.vel.copy(_fwd).multiplyScalar(PLASMA_SPEED * (0.78 + power * 0.38));
+  s.life = s.maxLife = 1.8 + power * 0.8;
+  s.power = power;
+  s.light.intensity = 6 + power * 12;
+  recoil = Math.max(recoil, 0.75 + power * 0.35);
+  plasmaCd = 0.35;
+}
+function updatePlasmaShots(dt){
+  if (!scene || !plasmaShots.length) return;
+  let anyActive = false;
+  for (const s of plasmaShots) {
+    if (s.life > 0) { anyActive = true; break; }
+    if (s.group.visible) s.group.visible = false;
+  }
+  if (!anyActive) return;
+  refreshPlasmaTargets(dt);
+  for (const s of plasmaShots) {
+    if (s.life <= 0) { if (s.group.visible) s.group.visible = false; continue; }
+    s.life -= dt;
+    if (s.life <= 0) { s.group.visible = false; s.light.intensity = 0; continue; }
+    const step = Math.max(0.01, s.vel.length() * dt);
+    _segDir.copy(s.vel).normalize();
+    _ray.set(s.group.position, _segDir);
+    _ray.near = 0;
+    _ray.far = step + 0.45 * s.group.scale.x;
+    const hits = plasmaTargets.length ? _ray.intersectObjects(plasmaTargets, true) : [];
+    let hit = null;
+    for (const h of hits) {
+      const o = h.object;
+      if (!o.visible || !o.material) continue;
+      let skip = false, p = o;
+      while (p) {
+        if (p.userData && (p.userData.debris || p.userData.terrain)) { skip = true; break; }
+        p = p.parent;
+      }
+      if (skip) continue;
+      if (o.material.isMeshBasicMaterial && !(o.userData && o.userData.enemy)) continue;
+      hit = h; break;
+    }
+    if (hit) {
+      plasmaImpact(hit.point, s.power);
+      applyPlasmaDamage(hit, s.power);
+      s.life = 0; s.group.visible = false; s.light.intensity = 0;
+      continue;
+    }
+    _plNext.copy(s.group.position).addScaledVector(s.vel, dt);
+    if (heightFn) {
+      const gyNext = heightFn(_plNext.x, _plNext.z);
+      if (_plNext.y <= gyNext + 0.12) {
+        _plHit.copy(s.group.position);
+        for (let i = 0; i < 5; i++) {
+          _plHit.lerp(_plNext, 0.5);
+          const gy = heightFn(_plHit.x, _plHit.z);
+          if (_plHit.y > gy + 0.10) s.group.position.copy(_plHit);
+          else _plNext.copy(_plHit);
+        }
+        _plHit.y = heightFn(_plHit.x, _plHit.z) + 0.08;
+        plasmaImpact(_plHit, s.power);
+        spawnPlasmaGroundPuff(_plHit, s.power);
+        s.life = 0; s.group.visible = false; s.light.intensity = 0;
+        continue;
+      }
+    }
+    s.group.position.copy(_plNext);
+    s.halo.rotation.z += dt * 12;
+    s.halo.rotation.y += dt * 4;
+    s.ring2.rotation.x += dt * 7;
+    s.ring2.rotation.z -= dt * 9;
+    const hue = (S.simTime * 0.7 + s.power * 0.3) % 1;
+    const age = 1 - Math.max(0, s.life / (s.maxLife || 1));
+    const pulse = 0.78 + 0.22 * Math.sin(S.simTime * 34 + s.power * 5);
+    s.core.material.color.setHSL(hue, 1, 0.62);
+    s.outer.material.color.setHSL((hue + 0.28) % 1, 1, 0.55);
+    s.outer.material.opacity = 0.38 + pulse * 0.22;
+    s.halo.material.color.setHSL((hue + 0.12) % 1, 1, 0.58);
+    s.halo.material.opacity = 0.58 + pulse * 0.24;
+    s.ring2.material.color.setHSL((hue + 0.48) % 1, 1, 0.62);
+    s.ring2.material.opacity = 0.48 + pulse * 0.22;
+    s.aura.material.rotation += dt * (1.3 + s.power);
+    s.trail.material.rotation -= dt * 1.7;
+    s.aura.material.opacity = (0.72 + pulse * 0.25) * (1 - age * 0.2);
+    s.trail.material.opacity = 0.30 + pulse * 0.20;
+    s.trail.position.copy(_segDir).multiplyScalar(-0.28 - s.power * 0.16);
+    s.light.color.setHSL(hue, 1, 0.62);
+    s.light.intensity = (5 + s.power * 12) * (0.75 + pulse * 0.25);
   }
 }
 // ensimmäinen kiinteä osuma edessä (maasto/kivi/mineraali/objekti); palauttaa intersectionin
@@ -525,8 +967,7 @@ export function spawnHitDebris(x, y, z, material, big){
 // laserin osuma: mineraalit hoidetaan tässä (HP + tuhoutuminen + malmi), muut (kivet/sukkula)
 // rekisteröidyssä käsittelijässä (surface.js)
 function applyGunDamage(h){
-  const o = h.object;
-  const dep = deposits.find(d => o.parent === d.mesh);
+  const dep = depositForObject(h.object);
   if (dep) { damageDeposit(dep, h.point); return; }
   if (_gunHitHandler) _gunHitHandler(h);
 }
@@ -547,33 +988,39 @@ function fireGun(){
   _muz.set(0.22, -0.14, -1.4).applyMatrix4(camera.matrixWorld);   // suupiipun pää maailmassa
   const hit = gunRaycast();                                       // näkymätön hitscan → vahinko
   recoil = 1;   // rekyyli + suuliekki (vain aseeseen)
+  if (flashLight) flashLight.color.set(0xff8a44);
   if (_muzzleFlash) _muzzleFlash.rotation.z = Math.random() * Math.PI * 2;   // satunnainen piikkikierto
   if (hit) {
     // kipinät lentävät OSUMAKOHDASTA ulospäin (takaisin ampujaa kohti = kimmonta)
     spawnSparksAt(hit.point.x, hit.point.y, hit.point.z, -_fwd.x, -_fwd.y, -_fwd.z);
-    if (flashLight) { flashLight.position.copy(hit.point).addScaledVector(_fwd, -0.3); _flLife = _flMax = FLASH_LIFE; }
+    if (flashLight) { flashLight.position.copy(hit.point).addScaledVector(_fwd, -0.3); _flLife = _flMax = FLASH_LIFE; _flPeak = FLASH_LIGHT_INT; }
     applyGunDamage(hit);          // vahinko osumakohteeseen
   } else if (flashLight) {
     // ei osumaa: pelkkä suuliekin valo nokassa
     flashLight.position.copy(_muz).addScaledVector(_fwd, 0.3);
     _flLife = _flMax = FLASH_LIFE;
+    _flPeak = FLASH_LIGHT_INT;
   }
 }
 function updateFlash(dt){
   if (flashLight && _flLife > 0) {
     _flLife -= dt;
-    flashLight.intensity = _flLife > 0 ? FLASH_LIGHT_INT * (_flLife / _flMax) : 0;
+    flashLight.intensity = _flLife > 0 ? _flPeak * (_flLife / _flMax) : 0;
   }
 }
 // X (pinnalla) vaihtaa aseen ja hakun välillä
 export function toggleWeapon(){
   if (!active) return;
-  weaponMode = !weaponMode;
-  if (!weaponMode) {
+  toolMode = (toolMode + 1) % 3;
+  weaponMode = toolMode !== TOOL_PICK;
+  if (toolMode !== TOOL_LASER) {
     sniperMode = false;
     if (scopeEl) scopeEl.style.display = 'none';
   }
+  if (toolMode !== TOOL_PLASMA) { plasmaCharging = false; plasmaCharge = 0; }
   recoil = 0;
+  _prevLaserFire = false;
+  _fireCd = Math.min(_fireCd, 0.04);
   if (mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
 }
 export function isWeapon(){ return weaponMode; }
@@ -656,6 +1103,8 @@ export function initMining(sc, name, hFn){
     bursts.push({ mesh: m, vel: new THREE.Vector3(), spin: new THREE.Vector3(), life: 0, max: 0, base: 1 });
   }
   sc.add(makeSparks());   // suuliekin kipinähiukkaset (Points)
+  initPlasmaShots(sc);
+  initPlasmaPuffs(sc);
   // suuliekin valo: yksi pysyvä PointLight (intensiteetti 0 lepotilassa → ei
   // shader-uudelleenkäännöstä per laukaus); valaisee lähiympäristön pimeässä
   flashLight = new THREE.PointLight(0xff8a44, 0, 20, 2);
@@ -735,11 +1184,15 @@ export function clearMining(){
   _lmb = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
   // ase: nollaa tila ja palaa hakkuun seuraavalle pintakäynnille
-  weaponMode = false; sniperMode = false; sniperAmt = 0; recoil = 0; _prevFire = false; _fireCd = 0;
+  toolMode = TOOL_PICK; weaponMode = false; sniperMode = false; sniperAmt = 0; plasmaCharge = 0; plasmaCharging = false; recoil = 0; _prevLaserFire = false; _fireCd = 0;
   sparks = null; sparkGeo = null; sparkMat = null; _spkHead = 0;
+  plasmaShots = [];
+  plasmaPuffs = [];
+  plasmaTargets = []; plasmaTargetRefresh = 0;
   flashLight = null; _flLife = 0;
   if (scopeEl) scopeEl.style.display = 'none';
   if (gun) { gun.visible = false; gun.position.copy(GUN_POS); gun.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z); }
+  if (plasmaGun) { plasmaGun.visible = false; plasmaGun.position.copy(PLASMA_POS); plasmaGun.rotation.set(PLASMA_ROT.x, PLASMA_ROT.y, PLASMA_ROT.z); }
   renderMineBar();
   renderHud();
 }
@@ -868,19 +1321,22 @@ function aimedDeposit(){
 }
 export function updateMining(dt, px, pz){
   // työkalu/ase näkyy louhittavalla pinnalla (Mars/Kuu); X vaihtaa niiden välillä
-  tool.visible = active && !weaponMode;
-  if (gun) gun.visible = active && weaponMode;
+  tool.visible = active && toolMode === TOOL_PICK;
+  if (gun) gun.visible = active && toolMode === TOOL_LASER;
+  if (plasmaGun) plasmaGun.visible = active && toolMode === TOOL_PLASMA;
   updateSniper(dt);
   updateFlash(dt);
   updateSparks(dt);
+  updatePlasmaPuffs(dt);
+  updatePlasmaShots(dt);
   const fireInput = active && (_lmb || S.keys.Space);
 
-  if (weaponMode) {
-    // ---- ASE ----
+  if (toolMode === TOOL_LASER) {
+    // ---- LASER ----
     updateGun(dt);
     _fireCd -= dt;
-    if (fireInput && !_prevFire && _fireCd <= 0) { fireGun(); _fireCd = 0.16; }   // semi-auto: laukaus per painallus
-    _prevFire = fireInput;
+    if (fireInput && !_prevLaserFire && _fireCd <= 0) { fireGun(); _fireCd = 0.16; }   // semi-auto: laukaus per painallus
+    _prevLaserFire = fireInput;
     if (!active) return;
     updateBursts(dt);
     if (mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
@@ -892,10 +1348,25 @@ export function updateMining(dt, px, pz){
     return;
   }
 
+  if (toolMode === TOOL_PLASMA) {
+    // ---- PLASMA-TYKKI: pidä pohjassa ladataksesi, vapauta ampuaksesi ----
+    refreshPlasmaTargets(dt);
+    updatePlasmaGun(dt, fireInput);
+    if (!active) return;
+    updateBursts(dt);
+    if (mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
+    for (const d of deposits) {
+      if (Math.hypot(d.x - px, d.z - pz) > FAR + 40) relocate(d, px, pz);
+      if (d.pop < 1) { d.pop = Math.min(1, d.pop + dt * 3.5); d.mesh.scale.setScalar(d.pop); }
+    }
+    renderMineBar();
+    return;
+  }
+
   // ---- HAKKU ----
   const swinging = fireInput;
   updateTool(dt, swinging);
-  _prevFire = fireInput;
+  _prevLaserFire = false;
   if (!active) return;
   updateBursts(dt);
   // ISKUSIRUT: joka hakuniskun impaktilla (iskuvaihe ylittää 0,5) sinkoa pieniä
