@@ -249,7 +249,6 @@ export class GlbEnemy {
     // proseduraalista olkapään heilautusta varalla.
     this._loadDeath();
     this._loadAttack();
-    this._loadFall();
 
     // nivelten haku — pieni säilytetään raycast-osumakuvauksia varten
     const findBone = (re) => { for (const n in this.bones) if (re.test(n)) return this.bones[n]; return null; };
@@ -635,27 +634,30 @@ export class GlbEnemy {
   applyBlast(center, opts = {}){
     if (!this.ready || !this.group || !this.group.visible) return false;
     if (this.state === 'dead' || this.state === 'gone' || this.state === 'loading') return false;
-    this.hp -= opts.damage || 0;
+    this.hp = 0;
     this._blastVX = 0;
     this._blastVZ = 0;
     this._blastVY = 0;
     this._blastY = 0;
     this._blastT = 0;
-    this._blastDur = Math.max(0.35, this.fallDur || 1.2);
+    this._blastDur = 0;
     this._blastK = 0;
-    this._blastDead = this.hp <= 0;
+    this._blastDead = true;
     this.fallen = true;
     this._tremor = Math.max(this._tremor, 0.12);
     this._atkCd = 1.5;
     if (this.attackAction) this.attackAction.stop();
     if (this.fallAction) this.fallAction.stop();
-    if (this.walkAction) this.walkAction.fadeOut(0.08);
-    if (this.fallAction) {
-      this.fallAction.reset();
-      this.fallAction.timeScale = 1.0;
-      this.fallAction.fadeIn(0.04).play();
+    if (this.walkAction) this.walkAction.stop();
+    if (this.deathAction) {
+      this.deathAction.stop();
+      this.deathAction.reset();
+      this.deathAction.timeScale = 1.0;
+      this.deathAction.fadeIn(0.04).play();
     }
-    this._setState('blast');
+    if (this.hpBar) this.hpBar.visible = false;
+    this._deadT = 0;
+    this._setState('dead');
     return true;
   }
 

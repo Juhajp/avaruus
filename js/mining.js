@@ -142,6 +142,7 @@ const PLASMA_MIN_CHARGE = 0.34;
 const PLASMA_SPEED = 58;
 const PLASMA_POOL = 6;
 const PLASMA_SMOKE_POOL = 12;
+const PLASMA_GROUND_MARK_POOL = 16;
 let flashLight = null, _flLife = 0, _flMax = 0, _flPeak = 5;        // suuliekin hetkellinen valo (valaisee lähiympäristön pimeässä)
 const FLASH_LIGHT_INT = 5;                              // valon huippukirkkaus (candela, decay 2)
 let sparks = null, sparkGeo = null, sparkMat = null;   // suuliekin kipinät (THREE.Points)
@@ -165,9 +166,11 @@ let plasmaCharge = 0, plasmaCharging = false, plasmaCd = 0;
 let plasmaShots = [];
 let plasmaTex = null;
 let plasmaSmokeTex = null, plasmaPuffs = [];
+let plasmaGroundTex = null, plasmaGroundMarks = [], plasmaGroundMarkHead = 0;
 let plasmaTargets = [], plasmaTargetRefresh = 0;
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3();
 const _bm = new THREE.Matrix4(), _muz = new THREE.Vector3(), _segDir = new THREE.Vector3(), _plNext = new THREE.Vector3(), _plHit = new THREE.Vector3();
+const _plGroundN = new THREE.Vector3(), _plGroundPlaneN = new THREE.Vector3(0, 0, 1);
 
 /* ---- ensimmäisen persoonan louhintatyökalu (kameran lapsi) ----
    Octagonaalinen metallihakku oikeassa alakulmassa; heiluu kaarella kun
@@ -418,6 +421,49 @@ function plasmaSmokeTexture(){
   plasmaSmokeTex = new THREE.CanvasTexture(cv);
   plasmaSmokeTex.colorSpace = THREE.SRGBColorSpace;
   return plasmaSmokeTex;
+}
+function plasmaGroundTexture(){
+  if (plasmaGroundTex) return plasmaGroundTex;
+  const s = 192, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const c = cv.getContext('2d'), cx = s / 2, cy = s / 2;
+  c.globalCompositeOperation = 'source-over';
+  for (let i = 0; i < 9; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const rr = s * (0.04 + Math.random() * 0.18);
+    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+    const r = s * (0.16 + Math.random() * 0.20);
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0.00, 'rgba(3,2,2,0.86)');
+    g.addColorStop(0.48, 'rgba(7,5,4,0.55)');
+    g.addColorStop(0.78, 'rgba(21,15,12,0.20)');
+    g.addColorStop(1.00, 'rgba(0,0,0,0)');
+    c.fillStyle = g;
+    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+  }
+  c.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 14; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r0 = s * (0.25 + Math.random() * 0.18);
+    const x = cx + Math.cos(a) * r0, y = cy + Math.sin(a) * r0;
+    c.fillStyle = `rgba(78,61,48,${0.08 + Math.random() * 0.08})`;
+    c.beginPath();
+    c.ellipse(x, y, s * (0.018 + Math.random() * 0.035), s * (0.010 + Math.random() * 0.025), a, 0, Math.PI * 2);
+    c.fill();
+  }
+  c.globalCompositeOperation = 'source-over';
+  c.strokeStyle = 'rgba(0,0,0,0.30)';
+  c.lineWidth = 2;
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2, r0 = s * (0.16 + Math.random() * 0.22);
+    c.beginPath();
+    c.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+    c.lineTo(cx + Math.cos(a + (Math.random() - 0.5) * 0.45) * (r0 + s * (0.08 + Math.random() * 0.14)),
+      cy + Math.sin(a + (Math.random() - 0.5) * 0.45) * (r0 + s * (0.08 + Math.random() * 0.14)));
+    c.stroke();
+  }
+  plasmaGroundTex = new THREE.CanvasTexture(cv);
+  plasmaGroundTex.colorSpace = THREE.SRGBColorSpace;
+  return plasmaGroundTex;
 }
 // kipinäpooli: stateless-näköiset hehkupisteet (per-piste alfa+koko) jotka
 // sinkoavat säteestä kohtisuoraan ulos ja häipyvät. Pehmeä pyöreä piste.
@@ -794,7 +840,7 @@ function initPlasmaPuffs(sc){
   const tex = plasmaSmokeTexture();
   for (let i = 0; i < PLASMA_SMOKE_POOL; i++) {
     const mat = new THREE.SpriteMaterial({
-      map: tex, color: 0x161311, transparent: true, opacity: 0,
+      map: tex, color: 0x5f5042, transparent: true, opacity: 0,
       depthWrite: false, depthTest: true
     });
     const m = new THREE.Sprite(mat);
@@ -804,19 +850,74 @@ function initPlasmaPuffs(sc){
     plasmaPuffs.push({ m, vel: new THREE.Vector3(), life: 0, max: 0, base: 1, spin: 0 });
   }
 }
+function initPlasmaGroundMarks(sc){
+  plasmaGroundMarks = [];
+  plasmaGroundMarkHead = 0;
+  const tex = plasmaGroundTexture();
+  const geo = new THREE.PlaneGeometry(1, 1, 20, 16);
+  for (let i = 0; i < PLASMA_GROUND_MARK_POOL; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    const m = new THREE.Mesh(geo, mat);
+    m.visible = false;
+    m.renderOrder = 2;
+    m.userData.debris = true;
+    sc.add(m);
+    plasmaGroundMarks.push(m);
+  }
+}
+function plasmaGroundNormal(x, z){
+  if (!heightFn) return _plGroundN.set(0, 1, 0);
+  const e = 0.55;
+  const hl = heightFn(x - e, z), hr = heightFn(x + e, z);
+  const hd = heightFn(x, z - e), hu = heightFn(x, z + e);
+  return _plGroundN.set(-(hr - hl) / (2 * e), 1, -(hu - hd) / (2 * e)).normalize();
+}
+function spawnPlasmaGroundMark(point, power = 1){
+  if (!plasmaGroundMarks.length) return;
+  const m = plasmaGroundMarks[plasmaGroundMarkHead];
+  plasmaGroundMarkHead = (plasmaGroundMarkHead + 1) % plasmaGroundMarks.length;
+  const n = plasmaGroundNormal(point.x, point.z);
+  m.position.copy(point).addScaledVector(n, 0.024);
+  m.quaternion.setFromUnitVectors(_plGroundPlaneN, n);
+  m.rotateZ(Math.random() * Math.PI * 2);
+  const s = 2.1 + power * 1.45;
+  m.scale.set(s * (1.0 + Math.random() * 0.25), s * (0.72 + Math.random() * 0.20), 1);
+  m.material.opacity = 0.78;
+  m.visible = true;
+}
 function spawnPlasmaGroundPuff(point, power = 1){
   if (!plasmaPuffs.length) return;
   let p = plasmaPuffs.find(x => x.life <= 0) || plasmaPuffs[0];
   p.m.position.copy(point);
   p.m.position.y += 0.06;
   p.m.visible = true;
-  p.max = p.life = 1.6 + power * 0.55;
-  p.base = 0.85 + power * 0.75;
-  p.spin = (Math.random() - 0.5) * 1.6;
-  p.vel.set((Math.random() - 0.5) * 0.22, 0.28 + power * 0.18, (Math.random() - 0.5) * 0.22);
-  p.m.scale.setScalar(p.base * 0.35);
-  p.m.material.opacity = 0.62;
+  p.max = p.life = 1.15 + power * 0.32;
+  p.base = 1.1 + power * 0.55;
+  p.spin = (Math.random() - 0.5) * 0.9;
+  p.vel.set((Math.random() - 0.5) * 0.12, 0.16 + power * 0.10, (Math.random() - 0.5) * 0.12);
+  p.m.scale.setScalar(p.base * 0.28);
+  p.m.material.opacity = 0.34;
   p.m.material.rotation = Math.random() * Math.PI * 2;
+}
+function spawnPlasmaGroundImpact(point, power = 1){
+  spawnPlasmaGroundMark(point, power);
+  spawnPlasmaGroundPuff(point, power);
+  if (flashLight) {
+    flashLight.color.setHSL(0.07, 0.65, 0.42);
+    flashLight.position.copy(point);
+    flashLight.position.y += 0.08;
+    _flLife = _flMax = 0.18 + power * 0.08;
+    _flPeak = 8 + power * 8;
+    flashLight.intensity = _flPeak;
+  }
 }
 function updatePlasmaPuffs(dt){
   for (const p of plasmaPuffs) {
@@ -828,7 +929,7 @@ function updatePlasmaPuffs(dt){
     p.m.position.addScaledVector(p.vel, dt);
     const sc = p.base * (0.35 + k * 1.55);
     p.m.scale.set(sc, sc * (0.72 + k * 0.25), 1);
-    p.m.material.opacity = 0.62 * (1 - k) * (1 - k * 0.35);
+    p.m.material.opacity = 0.34 * (1 - k) * (1 - k * 0.35);
     p.m.material.rotation += p.spin * dt;
   }
 }
@@ -963,8 +1064,7 @@ function updatePlasmaShots(dt){
           else _plNext.copy(_plHit);
         }
         _plHit.y = heightFn(_plHit.x, _plHit.z) + 0.08;
-        plasmaImpact(_plHit, s.power);
-        spawnPlasmaGroundPuff(_plHit, s.power);
+        spawnPlasmaGroundImpact(_plHit, s.power);
         s.life = 0; s.group.visible = false; s.light.intensity = 0;
         continue;
       }
@@ -1153,6 +1253,7 @@ export function initMining(sc, name, hFn){
   sc.add(makeSparks());   // suuliekin kipinähiukkaset (Points)
   initPlasmaShots(sc);
   initPlasmaPuffs(sc);
+  initPlasmaGroundMarks(sc);
   // suuliekin valo: yksi pysyvä PointLight (intensiteetti 0 lepotilassa → ei
   // shader-uudelleenkäännöstä per laukaus); valaisee lähiympäristön pimeässä
   flashLight = new THREE.PointLight(0xff8a44, 0, 20, 2);
@@ -1237,6 +1338,7 @@ export function clearMining(){
   sparks = null; sparkGeo = null; sparkMat = null; _spkHead = 0;
   plasmaShots = [];
   plasmaPuffs = [];
+  plasmaGroundMarks = []; plasmaGroundMarkHead = 0;
   plasmaTargets = []; plasmaTargetRefresh = 0;
   flashLight = null; _flLife = 0;
   if (scopeEl) scopeEl.style.display = 'none';
