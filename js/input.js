@@ -40,8 +40,17 @@ renderer.domElement.addEventListener('click', () => {
 const helpOverlay = document.getElementById('helpOverlay');
 helpOverlay.addEventListener('click', () => { helpOverlay.style.display = 'none'; });
 
-// varajärjestelmä: katselu hiirellä vetämällä, jos hiirilukkoa ei saada
-renderer.domElement.addEventListener('mousedown', (e) => {
+function isUiPointerTarget(e){
+  const el = e.target;
+  return !!(el && el !== renderer.domElement && el.closest
+    && el.closest('button,input,select,textarea,#startOverlay,#helpOverlay,#deathOverlay,#craftPanel'));
+}
+
+// varajärjestelmä: katselu hiirellä vetämällä, jos hiirilukkoa ei saada.
+// Kuunnellaan ikkunatasolla, koska pointer lockin aikana hiiritapahtuman target
+// ei ole kaikissa selaimissa enää itse canvas.
+addEventListener('mousedown', (e) => {
+  if (isUiPointerTarget(e)) return;
   if (e.button === 0) {
     dragging = true; lastMX = e.clientX; lastMY = e.clientY;
     if (S.mode === 'surface') setMining(true);   // pinnalla vasen = louhi (tähtää esiintymään)
@@ -164,13 +173,18 @@ canvas.addEventListener('touchcancel', endTouch);
 
 addEventListener('keydown', (e) => {
   S.keys[e.code] = true;
+  if (S.mode === 'surface' && e.code === 'Space') e.preventDefault();
   // jalostus: C avaa/sulkee paneelin, numerot jalostavat kun paneeli auki
   if (e.code === 'KeyC') { toggleCraft(); return; }
   if (isCraftOpen() && /^Digit[1-9]$/.test(e.code)) { craftRecipe(parseInt(e.code.slice(5), 10) - 1); return; }
   // käytä jalostustuote: J = happisäiliö → happi, K = runkopaneeli → runko (toimii kaikissa tiloissa)
   if (e.code === 'KeyJ') { useItem('happi'); return; }
   if (e.code === 'KeyK') { useItem('paneeli'); return; }
-  if (e.code === 'KeyX') { if (S.mode === 'surface') { toggleWeapon(); return; } S.targetFrac = 0; }
+  if (e.code === 'KeyX') {
+    if (e.repeat) return;
+    if (S.mode === 'surface') { toggleWeapon(); return; }
+    S.targetFrac = 0;
+  }
   if (e.code === 'KeyM') S.targetFrac = 1.0;   // täysi työntö
   if (e.code === 'KeyO') orbitLines.visible = !orbitLines.visible;
   if (e.code === 'KeyV') toggleShipView();

@@ -635,37 +635,24 @@ export class GlbEnemy {
   applyBlast(center, opts = {}){
     if (!this.ready || !this.group || !this.group.visible) return false;
     if (this.state === 'dead' || this.state === 'gone' || this.state === 'loading') return false;
-    const dx = this.gx - center.x, dz = this.gz - center.z;
-    let len = Math.hypot(dx, dz);
-    let dirX = dx, dirZ = dz;
-    if (len < 0.001) {
-      const a = Math.random() * Math.PI * 2;
-      dirX = Math.sin(a); dirZ = Math.cos(a); len = 1;
-    } else {
-      dirX /= len; dirZ /= len;
-    }
-    const k = Math.max(0, Math.min(1.35, opts.strength || 1));
-    const impulse = opts.impulse || 12;
     this.hp -= opts.damage || 0;
-    this._blastVX = dirX * impulse * k * 0.22;
-    this._blastVZ = dirZ * impulse * k * 0.22;
+    this._blastVX = 0;
+    this._blastVZ = 0;
     this._blastVY = 0;
     this._blastY = 0;
     this._blastT = 0;
-    this._blastDur = Math.max(1.1 + k * 0.95, (this.fallDur || 0) + 0.25);
-    this._blastK = k;
-    this._blastYaw = Math.atan2(dirX, dirZ);
-    this.facing = this._blastYaw;
+    this._blastDur = Math.max(0.35, this.fallDur || 1.2);
+    this._blastK = 0;
     this._blastDead = this.hp <= 0;
     this.fallen = true;
-    this._tremor = Math.max(this._tremor, 0.18 * k);
-    this._atkCd = 1.5 + k;
+    this._tremor = Math.max(this._tremor, 0.12);
+    this._atkCd = 1.5;
     if (this.attackAction) this.attackAction.stop();
     if (this.fallAction) this.fallAction.stop();
     if (this.walkAction) this.walkAction.fadeOut(0.08);
     if (this.fallAction) {
       this.fallAction.reset();
-      this.fallAction.timeScale = Math.max(0.75, Math.min(1.15, (this.fallDur || 1) / Math.max(0.55, this._blastDur - 0.25)));
+      this.fallAction.timeScale = 1.0;
       this.fallAction.fadeIn(0.04).play();
     }
     this._setState('blast');
@@ -674,13 +661,8 @@ export class GlbEnemy {
 
   _blast(dt){
     this._blastT += dt;
-    this.gx += this._blastVX * dt;
-    this.gz += this._blastVZ * dt;
     this._blastY = 0;
     this._blastVY = 0;
-    const drag = Math.exp(-dt * 4.8);
-    this._blastVX *= drag;
-    this._blastVZ *= drag;
     if (this._blastT >= this._blastDur) {
       if (this._blastDead || this.hp <= 0) {
         this.hp = 0;
@@ -741,17 +723,7 @@ export class GlbEnemy {
     if (h && this.state === 'dead') {
       this._setGroundRotation(yaw, null);
     } else if (this.state === 'blast') {
-      if (this.fallAction) {
-        this.group.rotation.set(0, yaw, 0);
-      } else {
-        const rel = this._blastYaw - yaw;
-        const u = this._blastDur > 0 ? Math.min(1, this._blastT / this._blastDur) : 1;
-        const fall = u < 0.22 ? u / 0.22 : (u < 0.76 ? 1 : 1 - (u - 0.76) / 0.24);
-        const k = this._blastK * Math.max(0, Math.min(1, fall));
-        const side = Math.sin(rel);
-        const front = Math.cos(rel);
-        this.group.rotation.set(-front * 1.05 * k, yaw, -side * 1.45 * k, 'YXZ');
-      }
+      this.group.rotation.set(0, yaw, 0);
     } else {
       // Elävä vihollinen pysyy pystysuorassa; vain jalkaterät mukautuvat rinteen
       // normaaliin. Koko rigging-ryhmän kallistus tekee hahmosta luonnottoman.

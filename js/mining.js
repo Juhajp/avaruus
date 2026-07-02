@@ -115,6 +115,7 @@ const BURST_POOL = 44, BURST_G = 8;
 let bursts = [], burstGeo = null;
 const _bd = new THREE.Vector3();
 let _lmb = false;                    // hiiren vasen pohjassa (= louhi)
+let _triggerPressed = false, _triggerReleased = false, _prevSpace = false;
 let mineTarget = null, mineProg = 0; // nykyinen louhintakohde ja edistymä
 const _fwd = new THREE.Vector3(), _to = new THREE.Vector3();
 const _ray = new THREE.Raycaster();  // hakun isku → mitä edessä (kivi/mineraali/objekti)
@@ -274,24 +275,99 @@ function flashTex(){
   if (_flashTex) return _flashTex;
   const s = 128, cv = document.createElement('canvas'); cv.width = cv.height = s;
   const c = cv.getContext('2d'), cx = s / 2, cy = s / 2;
-  const g = c.createRadialGradient(cx, cy, 0, cx, cy, s * 0.42);
-  g.addColorStop(0.0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.30, 'rgba(255,235,190,0.7)');
-  g.addColorStop(1.0, 'rgba(255,150,70,0)');
-  c.fillStyle = g; c.fillRect(0, 0, s, s);
   c.globalCompositeOperation = 'lighter';
+  c.filter = 'blur(1.1px)';
+  const core = c.createRadialGradient(cx, cy, 0, cx, cy, s * 0.16);
+  core.addColorStop(0.00, 'rgba(255,255,255,0.82)');
+  core.addColorStop(0.45, 'rgba(255,205,130,0.30)');
+  core.addColorStop(1.00, 'rgba(255,150,70,0)');
+  c.fillStyle = core; c.fillRect(0, 0, s, s);
   c.translate(cx, cy);
-  const spikes = 6;
+  const spikes = 9;
   for (let i = 0; i < spikes; i++) {
-    c.rotate(Math.PI * 2 / spikes + Math.random() * 0.3);
-    const len = s * (0.30 + Math.random() * 0.16), w = s * 0.028;
+    c.rotate(Math.PI * 2 / spikes + Math.random() * 0.2);
+    const len = s * (0.18 + Math.random() * 0.18), w = s * (0.010 + Math.random() * 0.012);
     const lg = c.createLinearGradient(0, 0, 0, -len);
-    lg.addColorStop(0, 'rgba(255,240,205,0.9)'); lg.addColorStop(1, 'rgba(255,170,80,0)');
+    lg.addColorStop(0, 'rgba(255,235,180,0.52)'); lg.addColorStop(0.55, 'rgba(255,170,80,0.20)'); lg.addColorStop(1, 'rgba(255,170,80,0)');
     c.fillStyle = lg;
     c.beginPath(); c.moveTo(-w, 0); c.lineTo(0, -len); c.lineTo(w, 0); c.closePath(); c.fill();
   }
   _flashTex = new THREE.CanvasTexture(cv);
+  _flashTex.colorSpace = THREE.SRGBColorSpace;
+  _flashTex.minFilter = THREE.LinearFilter;
+  _flashTex.magFilter = THREE.LinearFilter;
   return _flashTex;
+}
+function muzzleDepthMat(){
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uAlpha: { value: 0 },
+      uTime: { value: 0 },
+    },
+    vertexShader: `
+      varying vec3 vP;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main(){
+        vP = position;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `
+      varying vec3 vP;
+      uniform float uAlpha;
+      uniform float uTime;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      float hash(vec3 p){
+        p = fract(p * vec3(17.13, 31.71, 47.57));
+        p += dot(p, p.yzx + 19.19);
+        return fract((p.x + p.y) * p.z);
+      }
+      float noise(vec3 p){
+        vec3 i = floor(p), f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float n000 = hash(i + vec3(0.0, 0.0, 0.0));
+        float n100 = hash(i + vec3(1.0, 0.0, 0.0));
+        float n010 = hash(i + vec3(0.0, 1.0, 0.0));
+        float n110 = hash(i + vec3(1.0, 1.0, 0.0));
+        float n001 = hash(i + vec3(0.0, 0.0, 1.0));
+        float n101 = hash(i + vec3(1.0, 0.0, 1.0));
+        float n011 = hash(i + vec3(0.0, 1.0, 1.0));
+        float n111 = hash(i + vec3(1.0, 1.0, 1.0));
+        float nx00 = mix(n000, n100, f.x);
+        float nx10 = mix(n010, n110, f.x);
+        float nx01 = mix(n001, n101, f.x);
+        float nx11 = mix(n011, n111, f.x);
+        return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
+      }
+      void main(){
+        #include <logdepthbuf_fragment>
+        vec3 p = vP / 0.075;
+        float r = length(p.xy);
+        float shell = smoothstep(1.05, 0.18, r) * smoothstep(1.0, 0.05, abs(p.z));
+        float wisps = noise(p * vec3(4.0, 4.0, 8.5) + vec3(0.0, 0.0, uTime * 16.0));
+        float streak = smoothstep(0.43, 0.92, wisps + sin(p.z * 7.5 + atan(p.y, p.x) * 4.0 + uTime * 23.0) * 0.18);
+        float edgeBreak = smoothstep(1.1, 0.25, r + noise(p * 6.0 + uTime) * 0.25);
+        float a = (shell * 0.16 + streak * edgeBreak * 0.20) * uAlpha;
+        vec3 col = mix(vec3(1.0, 0.40, 0.12), vec3(1.0, 0.86, 0.45), streak);
+        gl_FragColor = vec4(col, a);
+      }`,
+  });
+}
+let _rifleTex = null;
+function rifleTex(){
+  if (_rifleTex) return _rifleTex;
+  _rifleTex = new THREE.TextureLoader().load('assets/rifle.webp', t => {
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 8;
+  });
+  return _rifleTex;
 }
 function plasmaSpriteTexture(){
   if (plasmaTex) return plasmaTex;
@@ -430,76 +506,35 @@ function updateSparks(dt){
   }
   if (any) { sparkGeo.attributes.position.needsUpdate = true; sparkGeo.attributes.aA.needsUpdate = true; }
 }
-let gun = null, _muzzleFlash = null;
+let gun = null, _rifleView = null, _muzzleFlash = null, _muzzleDepthFlash = null;
 function buildGun(){
   const g = new THREE.Group();
-  // CELL SHADING + bittikarttatekstuuri (kuten hakku); otsalamppu → näkyy kaikissa valoissa
-  const bodyMat = toonMat({ color: 0x6f7681 }); loadToolTex(bodyMat, 'metal_plate_02', 2, 1);
-  const darkMat = toonMat({ color: 0x33373d }); loadToolTex(darkMat, 'metal_plate', 1, 1);
-  const trimMat = toonMat({ color: 0x9ba4ad }); loadToolTex(trimMat, 'metal_plate', 1, 1);
-  addToolHeadlamp(bodyMat); addToolHeadlamp(darkMat); addToolHeadlamp(trimMat);
-  const box = (mat, w, h, d, x, y, z, rx, ry, rz) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); if (rx || ry || rz) m.rotation.set(rx || 0, ry || 0, rz || 0); g.add(m); return m; };
-  const cyl = (mat, r1, r2, len, x, y, z, sides = 14) => {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, len, sides), mat);
-    m.rotation.x = Math.PI / 2; m.position.set(x, y, z); g.add(m); return m;
-  };
-
-  // Päärunko: kahdesta hieman erikokoisesta massasta syntyy koneistettu,
-  // vähemmän laatikkomainen profiili.
-  box(bodyMat, 0.18, 0.16, 0.42, 0, 0.0, 0.02);                 // lukko
-  box(bodyMat, 0.13, 0.12, 0.34, 0, 0.035, -0.28);              // eturunko
-  box(trimMat, 0.15, 0.022, 0.38, 0, 0.105, -0.04);             // yläsauma
-  box(darkMat, 0.19, 0.035, 0.24, 0, -0.095, -0.04);            // alarunko
-
-  // Piippu + lämpösuoja: pyöreät osat ja pienet ventit rikkovat blokkimaisuutta.
-  cyl(darkMat, 0.035, 0.04, 0.74, 0, 0.018, -0.61, 16);         // sisäpiippu
-  cyl(bodyMat, 0.068, 0.075, 0.38, 0, 0.018, -0.48, 14);        // ulompi lämpösuoja
-  cyl(trimMat, 0.05, 0.06, 0.12, 0, 0.018, -0.86, 16);          // suujarru
-  for (let i = 0; i < 5; i++) {
-    const z = -0.36 - i * 0.055;
-    box(darkMat, 0.018, 0.018, 0.035, -0.072, 0.018, z);
-    box(darkMat, 0.018, 0.018, 0.035,  0.072, 0.018, z);
-  }
-
-  // Tähtäinkisko, optiikka ja pienet kiinnikkeet.
-  box(darkMat, 0.045, 0.024, 0.42, 0, 0.145, -0.08);
-  for (let i = 0; i < 6; i++) box(trimMat, 0.058, 0.01, 0.018, 0, 0.163, -0.26 + i * 0.065);
-  cyl(darkMat, 0.036, 0.036, 0.18, 0, 0.205, -0.12, 12);        // pieni punapistetähtäin
-  box(trimMat, 0.055, 0.018, 0.045, 0, 0.168, -0.12);
-
-  // Kahva, liipaisin, kaari ja tukki.
-  box(darkMat, 0.075, 0.25, 0.115, 0, -0.185, 0.08, -0.30);     // vinokahva
-  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.007, 6, 20, Math.PI * 1.35), darkMat);
-  guard.rotation.set(Math.PI / 2, 0, Math.PI * 0.14); guard.position.set(0, -0.098, -0.035); g.add(guard);
-  box(darkMat, 0.018, 0.055, 0.018, 0, -0.13, -0.015, -0.45);   // liipaisin
-  box(bodyMat, 0.12, 0.095, 0.25, 0, -0.02, 0.34);              // peräadapteri
-  box(darkMat, 0.15, 0.08, 0.20, 0, 0.005, 0.50, 0.10);         // olkatuki
-  box(trimMat, 0.11, 0.018, 0.16, 0, 0.055, 0.44);              // tukin ylälevy
-
-  // Paneelisaumat, ruuvit ja energiakenno.
-  for (const sx of [-1, 1]) {
-    box(darkMat, 0.012, 0.095, 0.25, sx * 0.096, 0.0, -0.02);
-    for (const z of [-0.13, 0.10]) cyl(trimMat, 0.011, 0.011, 0.012, sx * 0.102, 0.055, z, 8);
-  }
-  addOutlines(g, 0.01);   // cell shading: musta ääriviiva
-  // hehkuvat osat (MeshBasic, kirkkaat → bloom): suuliekkirengas + energiakenno
-  const emit = new THREE.MeshBasicMaterial(); emit.color.setRGB(2.6, 0.7, 0.4);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.052, 0.011, 8, 18), emit); ring.position.set(0, 0.018, -0.925); g.add(ring);
-  const cell = new THREE.MeshBasicMaterial(); cell.color.setRGB(0.4, 1.6, 2.3);
-  box(cell, 0.018, 0.058, 0.24, 0.104, 0.0, 0.02);             // sininen energiakenno kyljessä
-  const cable = new THREE.Mesh(new THREE.TubeGeometry(
-    new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-0.072, 0.042, 0.20),
-      new THREE.Vector3(-0.105, 0.075, 0.05),
-      new THREE.Vector3(-0.088, 0.05, -0.22),
-    ]), 12, 0.006, 6), darkMat);
-  g.add(cable);
+  const rifleMat = new THREE.MeshBasicMaterial({
+    map: rifleTex(),
+    transparent: true,
+    alphaTest: 0.03,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+  });
+  rifleMat.color.setRGB(1.08, 1.08, 1.08);
+  const rifle = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.542), rifleMat);
+  rifle.position.set(0.12, -0.0, 0.0);
+  rifle.renderOrder = 20;
+  g.add(rifle);
+  _rifleView = rifle;
   g.traverse(o => { if (o.isMesh) o.userData.viewmodel = true; });   // raycastit ohittavat aseen
   // suuliekki: kirkas kiekko piipun kärjessä, kääntyy katselijaa kohti, syttyy laukauksessa
   const fm = new THREE.MeshBasicMaterial({ map: flashTex(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, opacity: 0 });
   fm.color.setRGB(3.2, 1.3, 0.7);
-  _muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.4), fm);
-  _muzzleFlash.position.set(0, 0.018, -0.98); g.add(_muzzleFlash);
+  _muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.24), fm);
+  _muzzleFlash.position.set(-0.17, 0.26, 0.018);
+  _muzzleFlash.renderOrder = 21;
+  g.add(_muzzleFlash);
+  _muzzleDepthFlash = new THREE.Mesh(new THREE.SphereGeometry(0.075, 18, 10), muzzleDepthMat());
+  _muzzleDepthFlash.position.set(-0.17, 0.26, -0.035);
+  _muzzleDepthFlash.renderOrder = 20;
+  g.add(_muzzleDepthFlash);
   g.position.copy(GUN_POS); g.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z);
   g.visible = false; camera.add(g);
   return g;
@@ -679,6 +714,7 @@ function updateGun(dt){
   _gunT += dt;
   recoil += (0 - recoil) * Math.min(1, dt * 14);   // rekyyli laantuu nopeasti
   const aim = sniperAmt;
+  const viewAlpha = Math.max(0, Math.min(1, 1 - sniperAmt * 1.35));
   gun.position.set(
     GUN_POS.x + (GUN_AIM_POS.x - GUN_POS.x) * aim,
     GUN_POS.y + (GUN_AIM_POS.y - GUN_POS.y) * aim + Math.sin(_gunT * 1.6) * 0.004 * (1 - aim * 0.75),
@@ -689,11 +725,21 @@ function updateGun(dt){
     GUN_ROT.y + (GUN_AIM_ROT.y - GUN_ROT.y) * aim + Math.sin(_gunT * 1.3) * 0.006 * (1 - aim * 0.75),
     GUN_ROT.z + (GUN_AIM_ROT.z - GUN_ROT.z) * aim
   );
+  if (_rifleView) {
+    _rifleView.material.opacity = viewAlpha;
+    _rifleView.visible = viewAlpha > 0.02;
+  }
   if (_muzzleFlash) {
     // välähtää kirkkaana laukauksessa ja kutistuu nopeasti (rekyylin mukana)
-    _muzzleFlash.material.opacity = Math.max(0, recoil * 1.4 - 0.15);
+    _muzzleFlash.material.opacity = Math.max(0, recoil * 1.4 - 0.15) * viewAlpha;
     const sc = 0.5 + recoil * 0.65;
-    _muzzleFlash.scale.set(sc, sc, sc);
+    _muzzleFlash.scale.set(sc * 1.12, sc * 0.88, sc);
+  }
+  if (_muzzleDepthFlash) {
+    _muzzleDepthFlash.material.uniforms.uAlpha.value = Math.max(0, recoil * 0.68 - 0.10) * viewAlpha;
+    _muzzleDepthFlash.material.uniforms.uTime.value = S.simTime;
+    const sc = 0.45 + recoil * 0.75;
+    _muzzleDepthFlash.scale.set(sc * 1.08, sc * 0.90, sc * 2.8);
   }
 }
 function makePlasmaShot(){
@@ -884,6 +930,7 @@ function updatePlasmaShots(dt){
     _ray.set(s.group.position, _segDir);
     _ray.near = 0;
     _ray.far = step + 0.45 * s.group.scale.x;
+    _ray.camera = camera;
     const hits = plasmaTargets.length ? _ray.intersectObjects(plasmaTargets, true) : [];
     let hit = null;
     for (const h of hits) {
@@ -949,6 +996,7 @@ function updatePlasmaShots(dt){
 // ensimmäinen kiinteä osuma edessä (maasto/kivi/mineraali/objekti); palauttaa intersectionin
 function gunRaycast(){
   _ray.set(camera.position, _fwd); _ray.near = 0.3; _ray.far = 140;
+  _ray.camera = camera;
   const objs = scene.children.filter(o => o !== camera);
   const hits = _ray.intersectObjects(objs, true);
   for (const h of hits) {
@@ -1140,6 +1188,7 @@ function raycastHit(){
   camera.getWorldDirection(_fwd);
   _ray.set(camera.position, _fwd);
   _ray.near = 0.2; _ray.far = REACH;
+  _ray.camera = camera;
   // EI kameran lapsia (hakku, ohjaamo, ulkomallit) eikä maastoa → vain kiinteät
   // maailman kohteet. Muuten ilmaan/maahan lyönti tai katselumallin osuma sinkoaisi siruja.
   const objs = scene.children.filter(o => o !== camera);
@@ -1181,7 +1230,7 @@ function updateBursts(dt){
 export function clearMining(){
   deposits = []; scene = null; heightFn = null; active = false; oreGeo = null; oreMats = null;
   bursts = []; burstGeo = null;
-  _lmb = false; mineTarget = null; mineProg = 0;
+  _lmb = false; _triggerPressed = false; _triggerReleased = false; _prevSpace = false; mineTarget = null; mineProg = 0;
   swingAmt = 0; if (tool) { tool.visible = false; tool.position.copy(TOOL_POS); tool.rotation.set(TOOL_ROT.x, TOOL_ROT.y, TOOL_ROT.z); }
   // ase: nollaa tila ja palaa hakkuun seuraavalle pintakäynnille
   toolMode = TOOL_PICK; weaponMode = false; sniperMode = false; sniperAmt = 0; plasmaCharge = 0; plasmaCharging = false; recoil = 0; _prevLaserFire = false; _fireCd = 0;
@@ -1207,7 +1256,14 @@ function renderMineBar(){
 /* louhinta = pidä hiiren vasen (tai Space) pohjassa ja TÄHTÄÄ esiintymään;
    edistymä kasvaa MINE_TIME-ajan, kappale tärisee ja kutistuu, lopulta murtuu
    ja saalis siirtyy varastoon. Pelkkä päälle käveleminen ei riitä. */
-export function setMining(on){ _lmb = on; }
+export function setMining(on){
+  const next = !!on;
+  if (next !== _lmb) {
+    if (next) _triggerPressed = true;
+    else _triggerReleased = true;
+  }
+  _lmb = next;
+}
 // törmäys: työnnä pelaaja ulos esiintymästä (ei voi kävellä mineraalin läpi)
 export function resolveCollision(x, z){
   if (active) for (const d of deposits) {
@@ -1329,13 +1385,19 @@ export function updateMining(dt, px, pz){
   updateSparks(dt);
   updatePlasmaPuffs(dt);
   updatePlasmaShots(dt);
-  const fireInput = active && (_lmb || S.keys.Space);
+  const spaceDown = !!S.keys.Space;
+  const triggerPressed = active && (_triggerPressed || (spaceDown && !_prevSpace));
+  const triggerReleased = active && (_triggerReleased || (!spaceDown && _prevSpace));
+  const fireInput = active && (_lmb || spaceDown);
+  _triggerPressed = false;
+  _triggerReleased = false;
+  _prevSpace = spaceDown;
 
   if (toolMode === TOOL_LASER) {
     // ---- LASER ----
     updateGun(dt);
     _fireCd -= dt;
-    if (fireInput && !_prevLaserFire && _fireCd <= 0) { fireGun(); _fireCd = 0.16; }   // semi-auto: laukaus per painallus
+    if ((triggerPressed || (fireInput && !_prevLaserFire)) && _fireCd <= 0) { fireGun(); _fireCd = 0.16; }   // semi-auto: laukaus per painallus
     _prevLaserFire = fireInput;
     if (!active) return;
     updateBursts(dt);
@@ -1351,7 +1413,8 @@ export function updateMining(dt, px, pz){
   if (toolMode === TOOL_PLASMA) {
     // ---- PLASMA-TYKKI: pidä pohjassa ladataksesi, vapauta ampuaksesi ----
     refreshPlasmaTargets(dt);
-    updatePlasmaGun(dt, fireInput);
+    updatePlasmaGun(dt, fireInput || triggerPressed);
+    if (triggerReleased && plasmaCharging) updatePlasmaGun(0, false);
     if (!active) return;
     updateBursts(dt);
     if (mineTarget) { restoreMesh(mineTarget); mineTarget = null; mineProg = 0; }
