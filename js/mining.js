@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { camera } from './core.js';
 import { S } from './state.js';
 import { toonMat, addOutlines } from './toon.js';
+import { PLASMA_METER_CORNERS } from './plasmaMeterConfig.js';
 
 export const ITEM_NAMES = {
   rauta: 'Rautaoksidi', silikaatti: 'Silikaatit', jaa: 'Vesijää',
@@ -155,13 +156,18 @@ const GUN_POS = new THREE.Vector3(0.34, -0.40, -0.55);
 const GUN_ROT = new THREE.Vector3(0.03, -0.12, 0.0);
 const GUN_AIM_POS = new THREE.Vector3(0.06, -0.35, -0.72);
 const GUN_AIM_ROT = new THREE.Vector3(0.0, -0.02, 0.0);
-const PLASMA_POS = new THREE.Vector3(0.38, -0.38, -0.58);
-const PLASMA_ROT = new THREE.Vector3(0.02, -0.20, 0.02);
+const PLASMA_POS = new THREE.Vector3(0.38, -0.29, -0.58);
+const PLASMA_ROT = new THREE.Vector3(0, 0, 0);
+const PLASMA_CHARGE_ROT = new THREE.Vector3(-0.04, 0, 0);
+const PLASMA_SCALE = 0.84;
 const SURFACE_FOV = 65;
 const SNIPER_FOV = 20;
 const SNIPER_LOOK_MUL = 0.38;
 let sniperAmt = 0, scopeEl = null;
 let plasmaGun = null, plasmaMeter = null, plasmaCore = null;
+let plasmaMeterTool = null, plasmaMeterToolEl = null, plasmaMeterToolOn = false, plasmaMeterToolPick = 1;
+let plasmaMeterToolMsg = '';
+let plasmaMeterCorners = null;
 let plasmaCharge = 0, plasmaCharging = false, plasmaCd = 0;
 let plasmaShots = [];
 let plasmaTex = null;
@@ -171,6 +177,9 @@ let plasmaTargets = [], plasmaTargetRefresh = 0;
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3();
 const _bm = new THREE.Matrix4(), _muz = new THREE.Vector3(), _segDir = new THREE.Vector3(), _plNext = new THREE.Vector3(), _plHit = new THREE.Vector3();
 const _plGroundN = new THREE.Vector3(), _plGroundPlaneN = new THREE.Vector3(0, 0, 1);
+const _meterTmp = new THREE.Vector3(), _meterTmp2 = new THREE.Vector3(), _meterRay = new THREE.Raycaster();
+const _meterPlane = new THREE.Plane(), _meterNdc = new THREE.Vector2();
+const _meterA = new THREE.Vector3(), _meterB = new THREE.Vector3(), _meterC = new THREE.Vector3(), _meterD = new THREE.Vector3();
 
 /* ---- ensimmäisen persoonan louhintatyökalu (kameran lapsi) ----
    Octagonaalinen metallihakku oikeassa alakulmassa; heiluu kaarella kun
@@ -371,6 +380,16 @@ function rifleTex(){
     t.anisotropy = 8;
   });
   return _rifleTex;
+}
+let _plasmaGunTex = null;
+const PLASMA_GUN_TEX_URL = 'assets/plasma.webp?v=20260703-1';
+function plasmaGunTex(){
+  if (_plasmaGunTex) return _plasmaGunTex;
+  _plasmaGunTex = new THREE.TextureLoader().load(PLASMA_GUN_TEX_URL, t => {
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 8;
+  });
+  return _plasmaGunTex;
 }
 function plasmaSpriteTexture(){
   if (plasmaTex) return plasmaTex;
@@ -574,11 +593,11 @@ function buildGun(){
   const fm = new THREE.MeshBasicMaterial({ map: flashTex(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, opacity: 0 });
   fm.color.setRGB(3.2, 1.3, 0.7);
   _muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.24), fm);
-  _muzzleFlash.position.set(-0.17, 0.26, 0.018);
+  _muzzleFlash.position.set(-0.185, 0.215, 0.018);
   _muzzleFlash.renderOrder = 21;
   g.add(_muzzleFlash);
   _muzzleDepthFlash = new THREE.Mesh(new THREE.SphereGeometry(0.075, 18, 10), muzzleDepthMat());
-  _muzzleDepthFlash.position.set(-0.17, 0.26, -0.035);
+  _muzzleDepthFlash.position.set(-0.185, 0.215, -0.035);
   _muzzleDepthFlash.renderOrder = 20;
   g.add(_muzzleDepthFlash);
   g.position.copy(GUN_POS); g.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z);
@@ -586,95 +605,263 @@ function buildGun(){
   return g;
 }
 gun = buildGun();
+function setQuadGeometry(mesh, a, b, c, d){
+  let pos = mesh.geometry.getAttribute('position');
+  if (!pos) {
+    const arr = new Float32Array(12);
+    mesh.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    mesh.geometry.setIndex([0, 1, 2, 0, 2, 3]);
+    pos = mesh.geometry.getAttribute('position');
+  }
+  const ar = pos.array;
+  ar[0] = a.x; ar[1] = a.y; ar[2] = a.z;
+  ar[3] = b.x; ar[4] = b.y; ar[5] = b.z;
+  ar[6] = c.x; ar[7] = c.y; ar[8] = c.z;
+  ar[9] = d.x; ar[10] = d.y; ar[11] = d.z;
+  pos.needsUpdate = true;
+  mesh.geometry.computeBoundingSphere();
+}
+function defaultPlasmaMeterCorners(){
+  const src = Array.isArray(PLASMA_METER_CORNERS) && PLASMA_METER_CORNERS.length === 4
+    ? PLASMA_METER_CORNERS
+    : [
+      { x: -0.122, y: 0.200, z: 0.018 },
+      { x: -0.070, y: 0.191, z: 0.018 },
+      { x: 0.094, y: 0.135, z: 0.018 },
+      { x: 0.041, y: 0.126, z: 0.018 },
+    ];
+  return src.map(p => new THREE.Vector3(Number(p.x), Number(p.y), Number(p.z)));
+}
+function loadPlasmaMeterCorners(){
+  const corners = defaultPlasmaMeterCorners();
+  if (corners.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z))) {
+    return [
+      new THREE.Vector3(-0.122, 0.200, 0.018),
+      new THREE.Vector3(-0.070, 0.191, 0.018),
+      new THREE.Vector3(0.094, 0.135, 0.018),
+      new THREE.Vector3(0.041, 0.126, 0.018),
+    ];
+  }
+  return corners;
+}
+function savePlasmaMeterCorners(){
+  if (!plasmaMeterCorners) return false;
+  plasmaMeterToolMsg = 'saving to project file...';
+  updatePlasmaMeterToolVisual();
+  fetch('/__dev/plasma-meter-corners', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ corners: plasmaMeterCorners.map(p => ({ x: p.x, y: p.y, z: p.z })) }),
+  }).then(res => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }).then(() => {
+    plasmaMeterToolMsg = 'saved to js/plasmaMeterConfig.js';
+    updatePlasmaMeterToolVisual();
+    logPlasmaMeterBounds();
+  }).catch(err => {
+    plasmaMeterToolMsg = `save failed: ${err.message}`;
+    updatePlasmaMeterToolVisual();
+  });
+  return true;
+}
+function resetPlasmaMeterCorners(){
+  plasmaMeterCorners = defaultPlasmaMeterCorners();
+  plasmaMeterToolMsg = 'reset to defaults';
+  syncPlasmaMeterTool();
+  logPlasmaMeterBounds();
+}
+function updatePlasmaMeterFill(charge){
+  if (!plasmaMeter || !plasmaMeterCorners) return;
+  const k = Math.max(0, Math.min(1, charge));
+  const p = plasmaMeterCorners;
+  _meterA.copy(p[0]);
+  _meterB.copy(p[0]).lerp(p[1], k);
+  _meterC.copy(p[3]).lerp(p[2], k);
+  _meterD.copy(p[3]);
+  setQuadGeometry(plasmaMeter, _meterA, _meterB, _meterC, _meterD);
+}
+function applyPlasmaMeterBounds(){
+  if (!plasmaMeter || !plasmaMeterCorners) return;
+  plasmaMeter.userData.corners = plasmaMeterCorners.map(p => p.clone());
+  updatePlasmaMeterFill(Math.min(1, plasmaCharge / PLASMA_CHARGE_T));
+}
+function makePlasmaMeterTool(){
+  const g = new THREE.Group();
+  const mk = (color, label) => {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(0.026, 16, 10),
+      new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false })
+    );
+    m.renderOrder = 80;
+    m.userData.label = label;
+    g.add(m);
+    return m;
+  };
+  g.userData.markers = [
+    mk(0x66fff0, '1'),
+    mk(0x7cff66, '2'),
+    mk(0xffd64a, '3'),
+    mk(0xff66d8, '4'),
+  ];
+  g.userData.guide = new THREE.Mesh(
+    new THREE.BufferGeometry(),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.82, wireframe: true, depthTest: false, depthWrite: false })
+  );
+  g.userData.guide.renderOrder = 79;
+  g.add(g.userData.guide);
+  g.visible = false;
+  g.userData.viewmodel = true;
+  return g;
+}
+function ensurePlasmaMeterToolEl(){
+  if (plasmaMeterToolEl) return plasmaMeterToolEl;
+  plasmaMeterToolEl = document.createElement('div');
+  plasmaMeterToolEl.id = 'plasmaMeterTool';
+  plasmaMeterToolEl.style.cssText = 'position:fixed;left:16px;top:16px;z-index:20;pointer-events:none;'
+    + 'font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#bffcff;'
+    + 'background:rgba(2,10,14,0.72);border:1px solid rgba(116,238,255,0.45);'
+    + 'box-shadow:0 0 16px rgba(65,220,255,0.15);padding:10px 12px;white-space:pre;border-radius:6px;display:none;';
+  document.body.appendChild(plasmaMeterToolEl);
+  return plasmaMeterToolEl;
+}
+function updatePlasmaMeterToolVisual(){
+  if (!plasmaMeterTool || !plasmaMeterCorners) return;
+  plasmaMeterTool.visible = plasmaMeterToolOn && toolMode === TOOL_PLASMA;
+  const p = plasmaMeterCorners;
+  for (let i = 0; i < 4; i++) {
+    const marker = plasmaMeterTool.userData.markers[i];
+    marker.position.copy(p[i]);
+    marker.scale.setScalar(plasmaMeterToolPick === i + 1 ? 1.45 : 1.0);
+  }
+  const guide = plasmaMeterTool.userData.guide;
+  setQuadGeometry(guide, p[0], p[1], p[2], p[3]);
+  if (plasmaMeterToolEl) {
+    plasmaMeterToolEl.style.display = plasmaMeterTool.visible ? 'block' : 'none';
+    plasmaMeterToolEl.textContent =
+      `PLASMA METER QUAD TOOL\nactive point: ${plasmaMeterToolPick}\n`
+      + p.map((v, i) => `${i + 1}: x=${v.x.toFixed(3)} y=${v.y.toFixed(3)} z=${v.z.toFixed(3)}`).join('\n')
+      + `\nfill: edge 1-4 -> edge 2-3`
+      + `\nkeys: 1-4 select, click x/y, arrows x/y, Q/E depth, S save file, R reset, P close`
+      + (plasmaMeterToolMsg ? `\n${plasmaMeterToolMsg}` : '');
+  }
+}
+function selectedPlasmaMeterPoint(){
+  return plasmaMeterCorners ? plasmaMeterCorners[plasmaMeterToolPick - 1] : null;
+}
+function syncPlasmaMeterTool(){
+  applyPlasmaMeterBounds();
+  updatePlasmaMeterToolVisual();
+}
+function logPlasmaMeterBounds(){
+  if (!plasmaMeterCorners) return;
+  console.log('[plasma meter corners] ' + plasmaMeterCorners
+    .map((p, i) => `${i + 1}=(${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)})`)
+    .join(' '));
+}
+export function togglePlasmaMeterTool(){
+  if (!active || toolMode !== TOOL_PLASMA || !plasmaGun) return false;
+  plasmaMeterToolOn = !plasmaMeterToolOn;
+  ensurePlasmaMeterToolEl();
+  if (plasmaMeterToolOn && document.pointerLockElement) document.exitPointerLock();
+  updatePlasmaMeterToolVisual();
+  logPlasmaMeterBounds();
+  return true;
+}
+export function isPlasmaMeterToolActive(){
+  return plasmaMeterToolOn && active && toolMode === TOOL_PLASMA;
+}
+export function handlePlasmaMeterToolKey(e){
+  if (!isPlasmaMeterToolActive()) return false;
+  if (e.code === 'KeyP' || e.code === 'Escape') {
+    plasmaMeterToolOn = false;
+    updatePlasmaMeterToolVisual();
+    return true;
+  }
+  if (/^Digit[1-4]$/.test(e.code)) {
+    plasmaMeterToolPick = parseInt(e.code.slice(5), 10);
+    plasmaMeterToolMsg = '';
+    updatePlasmaMeterToolVisual();
+    return true;
+  }
+  if (e.code === 'KeyS') return savePlasmaMeterCorners();
+  if (e.code === 'KeyR') { resetPlasmaMeterCorners(); return true; }
+  const p = selectedPlasmaMeterPoint();
+  if (!p) return false;
+  const step = e.shiftKey ? 0.002 : 0.010;
+  let handled = true;
+  if (e.code === 'ArrowLeft') p.x -= step;
+  else if (e.code === 'ArrowRight') p.x += step;
+  else if (e.code === 'ArrowUp') p.y += step;
+  else if (e.code === 'ArrowDown') p.y -= step;
+  else if (e.code === 'KeyQ') p.z -= step;
+  else if (e.code === 'KeyE') p.z += step;
+  else handled = false;
+  if (!handled) return false;
+  plasmaMeterToolMsg = '';
+  syncPlasmaMeterTool();
+  logPlasmaMeterBounds();
+  return true;
+}
+export function setPlasmaMeterToolPointFromScreen(clientX, clientY){
+  if (!isPlasmaMeterToolActive()) return false;
+  const p = selectedPlasmaMeterPoint();
+  if (!p) return false;
+  camera.updateMatrixWorld(true);
+  plasmaGun.updateMatrixWorld(true);
+  _meterNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+  _meterRay.setFromCamera(_meterNdc, camera);
+  _meterPlane.setFromNormalAndCoplanarPoint(
+    _meterTmp.set(0, 0, 1).transformDirection(plasmaGun.matrixWorld).normalize(),
+    plasmaGun.localToWorld(_meterTmp2.set(0, 0, 0))
+  );
+  if (!_meterRay.ray.intersectPlane(_meterPlane, _meterTmp2)) return true;
+  _meterTmp.copy(_meterTmp2);
+  plasmaGun.worldToLocal(_meterTmp);
+  p.x = _meterTmp.x;
+  p.y = _meterTmp.y;
+  syncPlasmaMeterTool();
+  logPlasmaMeterBounds();
+  return true;
+}
 function buildPlasmaGun(){
   const g = new THREE.Group();
-  const hullMat = toonMat({ color: 0x596f7e }); loadToolTex(hullMat, 'metal_plate_02', 1.6, 1);
-  const darkMat = toonMat({ color: 0x252d36 }); loadToolTex(darkMat, 'metal_plate', 1, 1);
-  const coilMat = toonMat({ color: 0x91a1ad }); loadToolTex(coilMat, 'metal_plate', 1, 1);
-  const trimMat = toonMat({ color: 0xd0d7df }); loadToolTex(trimMat, 'metal_plate_02', 1, 1);
-  const warmTrimMat = toonMat({ color: 0xd6a94f }); loadToolTex(warmTrimMat, 'metal_plate_02', 1, 1);
-  addToolHeadlamp(hullMat); addToolHeadlamp(darkMat); addToolHeadlamp(coilMat); addToolHeadlamp(trimMat);
-  addToolHeadlamp(warmTrimMat);
-  const glowMat = new THREE.MeshBasicMaterial({ color: 0x49e8ff });
-  const hotMat = new THREE.MeshBasicMaterial({ color: 0xff4df0 });
-  const meterMat = new THREE.MeshBasicMaterial({ color: 0x66fff0 });
-  const box = (mat, w, h, d, x, y, z, rx, ry, rz) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    m.position.set(x, y, z); if (rx || ry || rz) m.rotation.set(rx || 0, ry || 0, rz || 0);
-    g.add(m); return m;
-  };
-  const cyl = (mat, r1, r2, len, x, y, z, sides = 16, rx = Math.PI / 2) => {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, len, sides), mat);
-    m.rotation.x = rx; m.position.set(x, y, z); g.add(m); return m;
-  };
+  const gunMat = new THREE.MeshBasicMaterial({
+    map: plasmaGunTex(),
+    transparent: true,
+    alphaTest: 0.03,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+  });
+  gunMat.color.setRGB(1, 1, 1);
+  const view = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.408), gunMat);
+  view.position.set(0.025, 0.045, 0);
+  view.renderOrder = 20;
+  g.add(view);
 
-  box(hullMat, 0.24, 0.18, 0.38, 0, -0.01, 0.04);
-  box(hullMat, 0.20, 0.13, 0.38, 0, 0.015, -0.27);
-  box(darkMat, 0.26, 0.045, 0.36, 0, -0.12, -0.06);
-  box(darkMat, 0.095, 0.28, 0.12, 0, -0.22, 0.11, -0.24);
-  box(hullMat, 0.18, 0.08, 0.22, 0, -0.035, 0.36);
-  box(trimMat, 0.21, 0.018, 0.30, 0, 0.092, 0.04);
-  box(warmTrimMat, 0.035, 0.016, 0.22, -0.128, 0.018, 0.04, 0, 0, 0.12);
-  box(warmTrimMat, 0.035, 0.016, 0.22,  0.128, 0.018, 0.04, 0, 0, -0.12);
+  const meterMat = new THREE.MeshBasicMaterial({
+    color: 0x66fff0,
+    transparent: true,
+    opacity: 0.92,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+  });
+  plasmaMeterCorners = loadPlasmaMeterCorners();
+  plasmaMeter = new THREE.Mesh(new THREE.BufferGeometry(), meterMat);
+  plasmaMeter.renderOrder = 24;
+  plasmaMeter.visible = false;
+  g.add(plasmaMeter);
+  applyPlasmaMeterBounds();
 
-  // Avoin plasma-kammio ja kolme magneettikelaa: selvästi eri siluetti kuin laserilla.
-  cyl(darkMat, 0.050, 0.056, 0.74, 0, 0.02, -0.55, 18);
-  cyl(glowMat, 0.030, 0.034, 0.52, 0, 0.02, -0.52, 16);
-  for (let i = 0; i < 5; i++) {
-    cyl(coilMat, 0.082, 0.082, 0.035, 0, 0.02, -0.30 - i * 0.10, 18);
-    cyl(warmTrimMat, 0.087, 0.087, 0.010, 0, 0.02, -0.30 - i * 0.10 + 0.024, 18);
-  }
-  for (const sx of [-1, 1]) {
-    cyl(trimMat, 0.022, 0.022, 0.62, sx * 0.105, 0.02, -0.53, 10);
-    for (let i = 0; i < 4; i++) box(darkMat, 0.025, 0.025, 0.04, sx * 0.105, 0.02, -0.35 - i * 0.13);
-    box(hullMat, 0.034, 0.105, 0.25, sx * 0.132, -0.035, -0.26, 0, 0, sx * 0.22);
-    box(trimMat, 0.012, 0.022, 0.32, sx * 0.134, 0.092, -0.32, 0, sx * 0.18, 0);
-  }
-  cyl(trimMat, 0.075, 0.10, 0.13, 0, 0.02, -0.91, 18);
-  cyl(hotMat, 0.052, 0.065, 0.03, 0, 0.02, -0.995, 18);
-  for (let i = 0; i < 6; i++) {
-    const a = i * Math.PI * 2 / 6;
-    const fin = box(trimMat, 0.018, 0.044, 0.13, Math.cos(a) * 0.088, 0.02 + Math.sin(a) * 0.088, -0.91, 0, 0, a);
-    fin.lookAt(0, 0.02, -1.08);
-  }
+  plasmaCore = null;
+  plasmaMeterTool = makePlasmaMeterTool();
+  g.add(plasmaMeterTool);
 
-  // Kyljen kondensaattorit, paineletku ja latausmittari.
-  for (const sx of [-1, 1]) {
-    cyl(darkMat, 0.026, 0.026, 0.22, sx * 0.145, -0.005, -0.02, 12);
-    box(trimMat, 0.025, 0.06, 0.05, sx * 0.145, 0.065, -0.18);
-    for (let i = 0; i < 4; i++) box(darkMat, 0.018, 0.012, 0.09, sx * 0.074, -0.222 + i * 0.035, 0.11, -0.24);
-    for (const z of [-0.08, 0.18]) cyl(warmTrimMat, 0.010, 0.010, 0.010, sx * 0.126, 0.074, z, 8);
-  }
-  box(darkMat, 0.055, 0.030, 0.32, 0, 0.152, -0.10);
-  for (let i = 0; i < 6; i++) box(trimMat, 0.070, 0.010, 0.016, 0, 0.173, -0.24 + i * 0.058);
-  cyl(darkMat, 0.030, 0.030, 0.15, 0, 0.214, -0.12, 12);
-  cyl(glowMat, 0.017, 0.017, 0.155, 0, 0.214, -0.12, 12);
-  const cable = new THREE.Mesh(new THREE.TubeGeometry(
-    new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-0.11, 0.085, 0.23),
-      new THREE.Vector3(-0.16, 0.105, 0.00),
-      new THREE.Vector3(-0.12, 0.075, -0.32),
-      new THREE.Vector3(-0.04, 0.055, -0.48),
-    ]), 16, 0.008, 6), darkMat);
-  g.add(cable);
-  box(darkMat, 0.17, 0.022, 0.13, 0, 0.132, 0.02);
-  plasmaMeter = box(meterMat, 0.142, 0.018, 0.01, -0.071, 0.148, 0.02);
-  plasmaMeter.userData.baseW = 0.142;
-  plasmaMeter.scale.x = 0.05;
-  plasmaCore = cyl(glowMat, 0.038, 0.038, 0.11, 0, 0.02, -0.18, 14);
-  for (const sx of [-1, 1]) {
-    const tube = new THREE.Mesh(new THREE.TubeGeometry(
-      new THREE.CatmullRomCurve3([
-        new THREE.Vector3(sx * 0.062, 0.048, 0.18),
-        new THREE.Vector3(sx * 0.088, 0.074, -0.04),
-        new THREE.Vector3(sx * 0.068, 0.050, -0.30),
-      ]), 12, 0.004, 5), glowMat);
-    g.add(tube);
-  }
-
-  addOutlines(g, 0.012);
   g.traverse(o => { if (o.isMesh) o.userData.viewmodel = true; });
-  g.position.copy(PLASMA_POS); g.rotation.set(PLASMA_ROT.x, PLASMA_ROT.y, PLASMA_ROT.z);
+  g.position.copy(PLASMA_POS); g.rotation.set(PLASMA_ROT.x, PLASMA_ROT.y, PLASMA_ROT.z); g.scale.setScalar(PLASMA_SCALE);
   g.visible = false; camera.add(g);
   return g;
 }
@@ -743,18 +930,18 @@ function updatePlasmaGun(dt, fireInput){
     PLASMA_POS.y + Math.sin(_gunT * 1.3) * 0.003,
     PLASMA_POS.z + c * 0.05
   );
-  plasmaGun.rotation.set(PLASMA_ROT.x - c * 0.04, PLASMA_ROT.y, PLASMA_ROT.z);
+  const chargeRot = plasmaCharging ? c : 0;
+  plasmaGun.rotation.set(
+    PLASMA_ROT.x + PLASMA_CHARGE_ROT.x * chargeRot,
+    PLASMA_ROT.y + PLASMA_CHARGE_ROT.y * chargeRot,
+    PLASMA_ROT.z + PLASMA_CHARGE_ROT.z * chargeRot
+  );
   if (plasmaMeter) {
-    const w = plasmaMeter.userData.baseW || 0.142;
-    plasmaMeter.scale.x = Math.max(0.05, c);
-    plasmaMeter.position.x = -0.070 + w * 0.5 * c;
+    plasmaMeter.visible = c > 0.001;
+    updatePlasmaMeterFill(c);
     plasmaMeter.material.color.setHSL(0.50 + 0.34 * c, 1, 0.42 + 0.18 * pulse);
   }
-  if (plasmaCore) {
-    const sc = 0.65 + c * 0.75 + pulse * c * 0.18;
-    plasmaCore.scale.setScalar(sc);
-    plasmaCore.material.color.setHSL(0.56 + 0.22 * c, 1, 0.45 + 0.20 * c);
-  }
+  updatePlasmaMeterToolVisual();
 }
 function updateGun(dt){
   _gunT += dt;
@@ -1165,7 +1352,10 @@ export function toggleWeapon(){
     sniperMode = false;
     if (scopeEl) scopeEl.style.display = 'none';
   }
-  if (toolMode !== TOOL_PLASMA) { plasmaCharging = false; plasmaCharge = 0; }
+  if (toolMode !== TOOL_PLASMA) {
+    plasmaCharging = false; plasmaCharge = 0; plasmaMeterToolOn = false;
+    updatePlasmaMeterToolVisual();
+  }
   recoil = 0;
   _prevLaserFire = false;
   _fireCd = Math.min(_fireCd, 0.04);
@@ -1342,8 +1532,11 @@ export function clearMining(){
   plasmaTargets = []; plasmaTargetRefresh = 0;
   flashLight = null; _flLife = 0;
   if (scopeEl) scopeEl.style.display = 'none';
+  plasmaMeterToolOn = false;
+  if (plasmaMeterToolEl) plasmaMeterToolEl.style.display = 'none';
+  updatePlasmaMeterToolVisual();
   if (gun) { gun.visible = false; gun.position.copy(GUN_POS); gun.rotation.set(GUN_ROT.x, GUN_ROT.y, GUN_ROT.z); }
-  if (plasmaGun) { plasmaGun.visible = false; plasmaGun.position.copy(PLASMA_POS); plasmaGun.rotation.set(PLASMA_ROT.x, PLASMA_ROT.y, PLASMA_ROT.z); }
+  if (plasmaGun) { plasmaGun.visible = false; plasmaGun.position.copy(PLASMA_POS); plasmaGun.rotation.set(PLASMA_ROT.x, PLASMA_ROT.y, PLASMA_ROT.z); plasmaGun.scale.setScalar(PLASMA_SCALE); }
   renderMineBar();
   renderHud();
 }

@@ -55,12 +55,12 @@ const OUTLINE_THICKNESS = 0.024;     // ääriviivan paksuus maailmametreinä (c
 // dynaamisesti luodin suunnasta (takeDamage). Bone-tipin Y-akseli kääntyy kohti
 // luodin world-suuntaa → osuma-alue nykäisee aina luodin liikesuuntaan.
 const PART_TWITCH = {
-  head:  { boneKey: 'head',  mag: 1.25, push: 0.14, bodyKey: 'spine2', bodyMag: 0.20, bodyDynamicSign: true },
-  torso: { boneKey: 'spine', mag: 1.25, push: 0.16 },
-  larm:  { boneKey: 'larmU', mag: 0.85, push: 0.045, bodyKey: 'spine2', bodyMag: 0.24, bodySign:  1 },
-  rarm:  { boneKey: 'rarmU', mag: 0.85, push: 0.045, bodyKey: 'spine2', bodyMag: 0.24, bodySign: -1 },
-  lleg:  { boneKey: 'luplg', mag: 0.62, push: 0.040, bodyKey: 'spine2', bodyMag: 0.16, bodySign:  1 },
-  rleg:  { boneKey: 'ruplg', mag: 0.62, push: 0.040, bodyKey: 'spine2', bodyMag: 0.16, bodySign: -1 },
+  head:  { boneKey: 'head',  mag: 1.25, push: 0.14, bodyKey: 'spine2', bodyMag: 0.34, bodyDynamicSign: true },
+  torso: { boneKey: 'spine', mag: 1.05, push: 0.075 },
+  larm:  { boneKey: 'larmU', mag: 0.85, push: 0.045, bodyKey: 'spine2', bodyMag: 0.40, bodySign:  1 },
+  rarm:  { boneKey: 'rarmU', mag: 0.85, push: 0.045, bodyKey: 'spine2', bodyMag: 0.40, bodySign: -1 },
+  lleg:  { boneKey: 'luplg', mag: 0.62, push: 0.040, bodyKey: 'spine2', bodyMag: 0.30, bodySign:  1 },
+  rleg:  { boneKey: 'ruplg', mag: 0.62, push: 0.040, bodyKey: 'spine2', bodyMag: 0.30, bodySign: -1 },
 };
 
 // Osuma-alueen luut: kun osuma kirjautuu, etsitään lähin näistä luista
@@ -111,6 +111,36 @@ function tintGibGeo(geo){
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
+}
+
+let _bloodDropTex = null;
+function bloodDropTexture(){
+  if (_bloodDropTex) return _bloodDropTex;
+  const s = 128, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const c = cv.getContext('2d');
+  c.clearRect(0, 0, s, s);
+  c.filter = 'blur(1.4px)';
+  const g = c.createRadialGradient(s * 0.48, s * 0.46, 1, s * 0.5, s * 0.5, s * 0.42);
+  g.addColorStop(0.00, 'rgba(255,255,255,0.95)');
+  g.addColorStop(0.34, 'rgba(255,255,255,0.78)');
+  g.addColorStop(0.68, 'rgba(255,255,255,0.25)');
+  g.addColorStop(1.00, 'rgba(255,255,255,0.00)');
+  c.fillStyle = g;
+  c.beginPath();
+  c.ellipse(s * 0.5, s * 0.5, s * 0.30, s * 0.38, -0.25, 0, Math.PI * 2);
+  c.fill();
+  c.filter = 'blur(0.8px)';
+  c.fillStyle = 'rgba(255,255,255,0.42)';
+  c.beginPath();
+  c.ellipse(s * 0.42, s * 0.36, s * 0.10, s * 0.055, -0.5, 0, Math.PI * 2);
+  c.fill();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 4;
+  _bloodDropTex = tex;
+  return _bloodDropTex;
 }
 
 let _puddleTex = null;
@@ -400,17 +430,29 @@ export class GlbEnemy {
   }
 
   _initBlood(){
-    // verihiukkasten pooli — pienet punaiset pallot. Pienempi geometria + suurempi
-    // pooli → sumumainen veriroiske jossa monta hienovaraista pisaraa.
+    // verihiukkasten pooli — pehmeästi filtteröidyt punaiset sprite-pisarat.
+    // Tekstuuri on alpha-maskina, joten ruudulle päätyy vain verenpunaista.
     this.bloods = [];
-    const geo = new THREE.SphereGeometry(0.018, 4, 3);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x8a0a0a });
+    this._bloodMats = [];
+    const tex = bloodDropTexture();
     for (let i = 0; i < BLOOD_POOL; i++) {
-      const m = new THREE.Mesh(geo, mat);
+      const mat = new THREE.SpriteMaterial({
+        map: tex,
+        color: 0x8f0000,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        depthTest: true,
+        alphaTest: 0.02,
+      });
+      const m = new THREE.Sprite(mat);
       m.visible = false;
       m.castShadow = false;
+      m.receiveShadow = false;
+      m.userData.debris = true;
       this.scene.add(m);
-      this.bloods.push({ m, vel: new THREE.Vector3(), life: 0, max: 0 });
+      this._bloodMats.push(mat);
+      this.bloods.push({ m, vel: new THREE.Vector3(), spin: new THREE.Vector3(), life: 0, max: 0, landed: false, alpha: 0.9 });
     }
     this._bloodHead = 0;
   }
@@ -964,10 +1006,11 @@ export class GlbEnemy {
   takeDamage(amount, hit){
     if (!this.ready || !this.group.visible) return false;
     if (this.state === 'dead' || this.state === 'gone' || this.state === 'loading') return false;
-    this._recoil = Math.min(1.2, this._recoil + 0.95);
-    this._tremor = 0.08;
     // Tunnista osuma-alue ennen vahinkoa → pääosuma kerryttää HEAD_DMG_MULT-kertaa.
     const region = (hit && hit.point) ? this._detectRegion(hit.point) : null;
+    const recoilAdd = region === 'torso' ? 0.46 : 0.95;
+    this._recoil = Math.min(1.2, this._recoil + recoilAdd);
+    this._tremor = region === 'torso' ? 0.045 : 0.08;
     const dmg = (region === 'head') ? amount * HEAD_DMG_MULT : amount;
     this.hp -= dmg;
     if (hit && hit.point) this._spawnBlood(hit.point);
@@ -1121,16 +1164,30 @@ export class GlbEnemy {
       const i = this._bloodHead; this._bloodHead = (this._bloodHead + 1) % this.bloods.length;
       const b = this.bloods[i];
       b.m.position.copy(point);
+      b.m.position.x += (Math.random() - 0.5) * 0.05;
+      b.m.position.y += (Math.random() - 0.5) * 0.04;
+      b.m.position.z += (Math.random() - 0.5) * 0.05;
+      const red = 0x680000 + ((0x30 + (Math.random() * 0x58 | 0)) << 16);
+      b.m.material.color.setHex(red);
+      b.alpha = 0.72 + Math.random() * 0.22;
+      b.m.material.opacity = b.alpha;
+      b.m.material.rotation = Math.random() * 6.28;
       b.m.visible = true;
       b.vel.set(
         (Math.random() - 0.5) * 5,
         1.2 + Math.random() * 2.4,
         (Math.random() - 0.5) * 5
       );
+      b.spin.set(0, 0, (Math.random() - 0.5) * 18);
       b.life = b.max = 0.5 + Math.random() * 0.5;
+      b.landed = false;
       // Suurin osa todella pieniä; ~15 % isompia → sumumainen, ei homogeeninen
-      const sc = (Math.random() < 0.15) ? (1.0 + Math.random() * 0.6) : (0.55 + Math.random() * 0.5);
-      b.m.scale.setScalar(sc);
+      const sc = (Math.random() < 0.15) ? (0.075 + Math.random() * 0.035) : (0.035 + Math.random() * 0.035);
+      b.m.scale.set(
+        sc * (0.75 + Math.random() * 0.55),
+        sc * (0.75 + Math.random() * 0.75),
+        1
+      );
     }
   }
 
@@ -1141,8 +1198,20 @@ export class GlbEnemy {
       if (b.life <= 0) { b.m.visible = false; continue; }
       b.vel.y -= 18 * dt;
       b.m.position.addScaledVector(b.vel, dt);
+      if (!b.landed) {
+        b.m.material.rotation += b.spin.z * dt;
+      }
+      b.m.material.opacity = Math.min(b.alpha, b.alpha * (b.life / Math.max(0.001, b.max)) * 1.35);
       const gy = this.heightFn ? this.heightFn(b.m.position.x, b.m.position.z) : 0;
-      if (b.m.position.y < gy + 0.02) { b.m.position.y = gy + 0.02; b.vel.set(0, 0, 0); }
+      if (b.m.position.y < gy + 0.02) {
+        b.m.position.y = gy + 0.02;
+        b.vel.set(0, 0, 0);
+        if (!b.landed) {
+          b.landed = true;
+          b.m.scale.y *= 0.45;
+          b.m.material.rotation += (Math.random() - 0.5) * 0.5;
+        }
+      }
     }
   }
 
@@ -1423,7 +1492,7 @@ export class GlbEnemy {
     this._attackStarted = false;
     this._blastVX = 0; this._blastVZ = 0; this._blastY = 0; this._blastVY = 0;
     this._blastT = 0; this._blastDur = 0; this._blastK = 0; this._blastDead = false;
-    for (const b of this.bloods) { b.m.visible = false; b.life = 0; }
+    for (const b of this.bloods) { b.m.visible = false; b.life = 0; b.landed = false; }
     for (const g of this.gibs) { g.m.visible = false; g.life = 0; }
     this._clearRigGibs();
     for (const p of this.bloodPuddles) p.visible = false;
@@ -1439,6 +1508,14 @@ export class GlbEnemy {
     if (this.hitVol) this.scene.remove(this.hitVol);
     if (this.hpBar) this.scene.remove(this.hpBar);
     for (const b of this.bloods) this.scene.remove(b.m);
+    if (this._bloodGeos) {
+      for (const geo of this._bloodGeos) if (geo) geo.dispose();
+      this._bloodGeos = null;
+    }
+    if (this._bloodMats) {
+      for (const mat of this._bloodMats) if (mat) mat.dispose();
+      this._bloodMats = null;
+    }
     for (const g of this.gibs) {
       this.scene.remove(g.m);
       if (g.m.geometry) g.m.geometry.dispose();

@@ -3,7 +3,10 @@ import { renderer } from './core.js';
 import { bodies, orbitLines } from './bodies.js';
 import { quickTravel, tryBeamDown, exitSurface, abortDescent, aimingAtShuttle } from './surface.js';
 import { toggleShipView, nearParkedShuttle } from './cockpit.js';
-import { toggleCraft, craftRecipe, isCraftOpen, setMining, toggleWeapon, toggleSniperMode, lookSensitivityMul } from './mining.js';
+import {
+  toggleCraft, craftRecipe, isCraftOpen, setMining, toggleWeapon, toggleSniperMode, lookSensitivityMul,
+  togglePlasmaMeterTool, handlePlasmaMeterToolKey, setPlasmaMeterToolPointFromScreen, isPlasmaMeterToolActive,
+} from './mining.js';
 import { useItem } from './resources.js';
 import { S, clampThrottle } from './state.js';
 
@@ -33,7 +36,7 @@ overlay.addEventListener('click', () => {
 });
 
 renderer.domElement.addEventListener('click', () => {
-  if (overlay.style.display === 'none') tryPointerLock();
+  if (overlay.style.display === 'none' && !isPlasmaMeterToolActive()) tryPointerLock();
 });
 
 // ohjeruutu (H) — klikkaus sulkee
@@ -52,6 +55,12 @@ function isUiPointerTarget(e){
 addEventListener('mousedown', (e) => {
   if (isUiPointerTarget(e)) return;
   if (e.button === 0) {
+    if (S.mode === 'surface' && isPlasmaMeterToolActive()) {
+      if (setPlasmaMeterToolPointFromScreen(e.clientX, e.clientY)) {
+        e.preventDefault();
+        return;
+      }
+    }
     dragging = true; lastMX = e.clientX; lastMY = e.clientY;
     if (S.mode === 'surface') setMining(true);   // pinnalla vasen = louhi (tähtää esiintymään)
   } else if (e.button === 2 && S.mode === 'surface') {
@@ -174,6 +183,10 @@ canvas.addEventListener('touchcancel', endTouch);
 addEventListener('keydown', (e) => {
   S.keys[e.code] = true;
   if (S.mode === 'surface' && e.code === 'Space') e.preventDefault();
+  if (S.mode === 'surface' && e.code === 'KeyP') {
+    if (togglePlasmaMeterTool()) { S.keys[e.code] = false; e.preventDefault(); return; }
+  }
+  if (handlePlasmaMeterToolKey(e)) { S.keys[e.code] = false; e.preventDefault(); return; }
   // jalostus: C avaa/sulkee paneelin, numerot jalostavat kun paneeli auki
   if (e.code === 'KeyC') { toggleCraft(); return; }
   if (isCraftOpen() && /^Digit[1-9]$/.test(e.code)) { craftRecipe(parseInt(e.code.slice(5), 10) - 1); return; }
